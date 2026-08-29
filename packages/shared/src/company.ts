@@ -5,7 +5,10 @@ const isoDateTimeSchema = z.string().datetime({ offset: true });
 
 export const httpsUrlSchema = z
   .url()
-  .refine((value) => new URL(value).protocol === 'https:', 'URL must use HTTPS');
+  .refine(
+    (value) => URL.canParse(value) && new URL(value).protocol === 'https:',
+    'URL must use HTTPS',
+  );
 
 export const companyStatusSchema = z.enum(COMPANY_STATUSES);
 export type CompanyStatus = z.infer<typeof companyStatusSchema>;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ZodError } from 'zod';
 import {
   COMPANY_STATUSES,
   VERIFICATION_LEVELS,
@@ -49,5 +50,16 @@ describe('company contracts', () => {
         status: 'draft',
       }),
     ).toThrow();
+  });
+
+  it('reports malformed URLs as validation errors instead of throwing URL parser errors', () => {
+    expect(() =>
+      companySchema.parse({
+        id: COMPANY_ID,
+        name: 'Malformed',
+        status: 'draft',
+        websiteUrl: 'not-a-url',
+      }),
+    ).toThrow(ZodError);
   });
 });

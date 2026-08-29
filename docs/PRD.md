@@ -34,11 +34,12 @@ All journeys below are **PLANNED**.
 
 ### Company onboarding and verification
 
-1. A person creates and verifies a user identity.
-2. They create or join a company through membership-based authorization.
-3. A company owner starts domain verification using a server-issued token.
-4. The backend independently checks the configured proof and records the result.
-5. Only a verified, eligible company may initiate a paid takeover.
+1. A visitor selects a territory and enters or selects a company name, public website, optional logo, and contact email.
+2. The visitor proves control of the contact channel through a single-use email challenge; the email domain does not need to match the website.
+3. For a new company, the server preserves a private, expiring company draft and takeover intent without establishing participation, ownership, or public company status.
+4. For an existing managed company, a different verified contact creates a pending access request and remains blocked from checkout until an existing manager approves it or manual recovery succeeds.
+5. A valid company-scoped management capability authorizes sensitive company actions. Payment alone never grants that capability.
+6. Only a later backend-confirmed successful payment may activate the draft company and establish territory ownership through the capture transaction.
 
 ### Discover and inspect territory
 
@@ -48,12 +49,14 @@ All journeys below are **PLANNED**.
 
 ### Capture territory
 
-1. An authorized company member chooses an eligible company.
+1. A visitor prepares a new-company claim or uses a valid management capability for an existing company.
 2. The server calculates the legal minimum from current committed state.
 3. The user reviews the exact amount, currency, and provider checkout boundary.
-4. Payment is initiated through a provider abstraction.
-5. Only a verified provider confirmation can trigger an atomic ownership transfer.
-6. The resulting capture is stored, audited, and published as activity.
+4. An existing-company access request must be approved before checkout can begin.
+5. The server revalidates territory version, owner, winning amount, minimum takeover amount, and currency; stale quotes require explicit review and are never auto-charged.
+6. Payment is initiated through the provider-neutral abstraction and V1 Dodo adapter.
+7. Only a verified server-side provider confirmation can trigger an atomic ownership transfer.
+8. The resulting capture is stored, audited, and published as activity.
 
 ### Defend and build an empire
 
@@ -64,17 +67,22 @@ All journeys below are **PLANNED**.
 
 ## Functional Requirements
 
-### Identity, companies, and permissions — PLANNED
+### Company and claim identity — PLANNED
 
-- Signup, login, logout, email verification, password reset, secure sessions, and protected routes.
-- Global roles: user, company owner, moderator, and admin.
-- Users may belong to multiple companies; company authority derives from stored membership.
+- V1 has no `User` model, passwords, signup/login, password reset, global authenticated dashboard, or global end-user session.
+- Company identity is separate from management authority. Authority derives from a verified contact, active company-specific grant, and short-lived company-scoped management session.
+- Email links are opaque, single-use, expiring capabilities exchanged for Secure, HttpOnly sessions; raw tokens are not persisted or logged.
+- A contact may manage multiple companies through separate grants and separately scoped sessions. Company A authority never authorizes Company B.
+- A different verified contact requesting an existing managed company creates a pending `CompanyAccessRequest`, remains blocked from checkout and mutations, and requires existing-manager approval or manual recovery.
 - Company profiles contain identity, website, descriptions, logo, social links, categories, verification state, timestamps, and server-derived statistics.
+- `TakeoverIntent` preserves preparation and a quote snapshot but never locks price or grants management/ownership.
 
 ### Company verification — PLANNED
 
-- Provider-style verification with DNS TXT as the preferred V1 candidate.
-- Stored token, method, status, attempted time, verified time, and failure reason.
+- `contact_verified` is sufficient for V1 participation and proves only control of the verified email management channel.
+- Personal email providers are valid; matching-domain email, DNS control, incorporation, and enterprise identity are not required.
+- `domain_verified` and `manually_verified` are optional future levels.
+- Stored verification evidence includes purpose/status, attempted time, verified time, revocation where relevant, and safe failure reason.
 - No client assertion or UI action can make a company verified.
 
 ### Territories and ownership — PLANNED
@@ -86,11 +94,12 @@ All journeys below are **PLANNED**.
 
 ### Bidding and payments — PLANNED
 
-- The backend calculates the legal amount and validates authorization, verification, territory state, currency, and idempotency.
+- The backend calculates the legal amount and validates company-scoped authority, verification, territory state/version, currency, and idempotency.
 - Client totals are advisory display values only.
-- Provider-specific operations sit behind a payment interface.
+- Dodo Payments is the initial V1 provider behind a provider-neutral payment interface; Dodo-specific types cannot enter bidding or ownership services.
 - Webhooks require signature verification, replay protection, reference/amount/currency checks, and explicit processing state.
 - Failed or incomplete payments never transfer ownership.
+- Browser success/return URLs never transfer ownership. A confirmed payment that cannot legally capture enters an explicit reconciliation/refund state instead of silently changing a charge or ownership.
 
 ### Live activity — PLANNED
 
@@ -122,7 +131,7 @@ All journeys below are **PLANNED**.
 
 ### Admin, moderation, and abuse prevention — PLANNED
 
-- Territory controls, company/verification review, bid/payment/webhook investigation, account restrictions, suspicious-activity review, and controlled state repair.
+- Territory controls, company/contact/grant review, bid/payment/webhook investigation, company or capability restrictions, suspicious-activity review, and controlled state repair.
 - Every admin mutation is authorized and audited.
 - Rate limits and risk controls protect identity, verification, bidding, payment, and administrative endpoints.
 
@@ -134,9 +143,9 @@ All journeys below are **PLANNED**.
 
 ## V1 Scope
 
-- Identity, membership-based companies, and one real company-verification method.
+- Passwordless company/contact identity, contact-email verification, company-scoped management capabilities, access approval/rejection, and manual-recovery architecture.
 - Public territory list/detail and administrative territory management.
-- Server-calculated takeover price, provider-abstracted Stripe implementation when configured, verified webhooks, and atomic ownership history.
+- Server-calculated takeover price, provider-neutral Dodo Payments implementation when configured and validated, verified webhooks, and atomic ownership history.
 - Live capture activity through validated SSE infrastructure.
 - Company statistics, empire scoring, current leaderboard, configurable seasons, archives, Hall of Fame, essential moderation, and audit logs.
 
@@ -144,7 +153,7 @@ V1 battle scope is **UNVALIDATED / NEEDS REVIEW** because trustworthy scoring in
 
 ## Future Scope
 
-- Razorpay implementation, additional verification methods, verified battle scoring, territory adjacency defined by product data, referrals, richer moderation automation, and new territory visualization modes.
+- Traditional human accounts only if later justified without replacing company identity; optional domain/manual verification; additional payment providers; verified battle scoring; territory adjacency defined by product data; referrals; richer moderation automation; and new territory visualization modes.
 
 ## Non-goals
 
@@ -154,6 +163,8 @@ V1 battle scope is **UNVALIDATED / NEEDS REVIEW** because trustworthy scoring in
 - Client-authoritative ownership, pricing, verification, scores, or payment state.
 - Invented engagement/conversion metrics.
 - Production checkout simulation.
+- V1 usernames, passwords, signup/login pages, password recovery, persistent global user accounts, or a generic authenticated dashboard.
+- Treating a payment email, company website, company ID, or browser return URL as management authority.
 
 ## Important Edge Cases
 
@@ -163,6 +174,9 @@ V1 battle scope is **UNVALIDATED / NEEDS REVIEW** because trustworthy scoring in
 - A provider reports the wrong amount, currency, or internal reference.
 - A former owner and a new owner observe different cached versions.
 - A company loses verification, is suspended, or loses its last authorized owner.
+- A different verified contact requests an existing managed company, managers do not respond, or notifications are abused for spam.
+- A new-company draft collides with a company created before its payment confirms.
+- An access request is approved after its takeover quote becomes stale.
 - A territory is disabled while payment is pending.
 - Season rollover retries after a partial external failure.
 - Refunds, disputes, and controlled reversals occur after capture.
@@ -178,7 +192,7 @@ Launch is **PLANNED** and requires:
 - First backend milestone acceptance criteria pass with production-like integration tests.
 - No unresolved critical/high security or money-flow defects.
 - Real payment sandbox tests cover success, failure, mismatch, replay, and concurrency.
-- Verification cannot be faked and authorization has negative-path coverage.
+- Verification cannot be faked; company-scoped capability isolation, token replay, expiry/revocation, and access-request denial have negative-path coverage.
 - Monitoring, alerting, backups, restoration exercise, migration checks, rate limiting, runbooks, and kill controls are operational.
 - Legal, refund, moderation, privacy, and provider requirements are reviewed.
 - Frontend never reports capture until the backend confirms committed ownership.

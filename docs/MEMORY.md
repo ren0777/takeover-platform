@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-**Phase 0 — Foundation: IMPLEMENTED NOW / ACCEPTANCE VERIFIED.** Do not start Phase 1 without explicit approval. Live PostgreSQL migration application and runtime queries remain **UNVALIDATED / NEEDS REVIEW**.
+**Phase 0 — Foundation: IMPLEMENTED NOW / ACCEPTANCE VERIFIED. Phase 1 — Company + Claim Identity: DESIGN APPROVED, IMPLEMENTATION NOT STARTED.** Live PostgreSQL migration application and runtime queries remain **UNVALIDATED / NEEDS REVIEW**. Do not implement Phase 1 until its specification is reviewed and an implementation plan is approved.
 
 ## What Works
 
@@ -22,7 +22,7 @@
 
 ## Broken / Known Issues
 
-- No product API, authentication, territory, bidding, payment, ownership, activity, season, battle, or admin functionality exists.
+- No product API, company/contact identity, email delivery, management capability, territory, bidding, payment, ownership, activity, season, battle, or admin functionality exists.
 - No PostgreSQL instance is provisioned; `prisma migrate deploy` and runtime queries are unvalidated.
 
 ## Important Architectural Decisions
@@ -36,6 +36,13 @@
 - Money uses safe integer minor units and uppercase three-letter currency codes.
 - Stable Phase 0 versions: Next.js `15.5.24`, React/React DOM `19.2.8`, TypeScript `5.9.3`, Tailwind CSS `4.3.3`, Fastify `5.12.1`, Zod `4.5.2`, and Prisma CLI/client/PostgreSQL adapter `7.10.0` exactly matched.
 - Prisma 7 uses `prisma.config.ts`, explicit generated-client output, and the PostgreSQL driver adapter. Prisma 8 release candidates and TypeScript 7 are excluded.
+- V1 has no `User` model, passwords, signup/login, password reset, global end-user session, or generic authenticated dashboard.
+- Approved identity flow: opaque single-use email link with at least 256 bits of secret entropy -> exchange -> short-lived Secure/HttpOnly company-scoped management session. Raw secrets are never persisted/logged; grants and sessions are revocable.
+- Company identity, verified contact, management authority, payment, and ownership are separate facts. `contact_verified` is sufficient; matching-domain email, DNS access, incorporation, and company-domain email are not required.
+- New companies begin as private, expiring, non-participating drafts. Email verification may authorize that draft; only a later confirmed capture can activate it and establish ownership.
+- A different verified contact for an existing managed company creates a pending `CompanyAccessRequest`; checkout and mutations remain blocked until an existing manager approves or manual recovery succeeds. Payment never grants access.
+- `TakeoverIntent` snapshots are explanatory only and never lock price. Checkout must later revalidate owner/version/current amount/legal minimum/currency and require explicit review when stale.
+- Dodo Payments is the planned Phase 3 V1 provider behind `PaymentProvider`/`DodoPaymentProvider`. No Dodo SDK exists, and its current signature/event/retry/refund behavior remains **UNVALIDATED / NEEDS REVIEW**.
 
 ## API Contracts
 
@@ -88,7 +95,10 @@ docs/
 
 ## Pending Backend Requirements
 
-- Design Phase 1 identity separately after explicit approval; do not start it automatically.
+- Phase 1 design is approved at `docs/superpowers/specs/2026-08-29-phase-1-company-claim-identity-design.md`; implementation has not started and requires a reviewed implementation plan.
+- Resolve Phase 1 email provider/test transport, token/session/access-request TTLs, company collision rules, production cookie/domain topology, manual-reviewer authorization, and exact persistence timing of the `TakeoverIntent` seam.
+- Phase 1 may implement company drafts/contacts, email challenges, grants, scoped sessions, access requests, approval/rejection, recovery request architecture, rate limits, and audit records only.
+- Territory/ownership remain Phase 2. Pricing, Dodo checkout/webhooks/payment records, and atomic capture remain Phase 3.
 - Product APIs, payment providers, ownership, real-time events, and verification remain planned.
 
 ## Current Blockers
@@ -128,27 +138,13 @@ Reason: the capture flow stops at a clearly labeled payment-not-connected bounda
 **Requested fields — territory history including `previousOwner.logoUrl`.**
 Reason: the territory detail page shows ownership history with logos; without the logo URL the history section degrades to text-only.
 
-**BLOCKING product-direction change — V1 removes password authentication. Read before starting Phase 1.**
-Approved by the product owner on 2026-08-29. TakeOver V1 does not require traditional accounts. The frontend will not build login, signup, forgot-password, or reset-password screens, and no frontend work depends on them.
+**Approved Phase 1 direction — passwordless company capabilities.**
 
-The replacement flow is: `TAKE OVER` → company details → bid → payment → backend-confirmed ownership → secure email management link when needed. Company identity is established during capture rather than before it, and ongoing company management is passwordless and email-link based.
+The canonical flow is: `TAKE OVER` → company/contact details → verify email → prepare intent → obtain existing-company approval when required → review current quote → Phase 3 Dodo checkout → verified webhook → backend-confirmed ownership. V1 has no login/signup/password UI.
 
-This conflicts with currently documented backend plans, which were written before the change and are **not** yet updated:
+Frontend states may cover verification required/sent/expired/invalid, access pending/approved/rejected/expired/cancelled, manual recovery pending, and stale-price review. Until backend endpoints exist, fixtures must not claim a link was delivered, a session/grant exists, payment succeeded, or ownership changed.
 
-- `PHASES.md` Phase 1 — Identity lists "signup/login/logout", "password reset", and "secure sessions".
-- `PRD.md` "Identity, companies, and permissions" and `ARCHITECTURE.md` "Authentication and Authorization" describe the same password-based model.
-
-Codex owns those sections; Claude has not rewritten them. They need revision before Phase 1 begins, or Phase 1 will implement an authentication model the product no longer wants.
-
-Backend capabilities the passwordless flow requires:
-
-- Issue a signed, single-use, expiring management link to a company's contact email, with a documented expiry window and a defined behavior for reuse after consumption.
-- Establish a session from that link, scoped to one company, with revocation and re-issue paths.
-- Bind an email address to a company at capture time, and define what happens when the same email later captures a second territory (same company vs. new company).
-- Define whether an unverified, newly-created company may complete a capture, or whether verification gates it. The frontend must not guess this.
-- Rate-limit link issuance and define the response shape when throttled.
-
-Until these exist, the frontend renders the management-link request UI and its sent/expired/invalid states against fixtures only, and never claims a link was actually delivered or a session actually established.
+Required Phase 1 contracts/endpoints are proposed in the approved specification. Management context must always name the one authorized company; there is no global "logged-in user" response.
 
 **Requested contracts — shared domain types do not exist yet.**
 `@takeover/shared` currently exports only `ApiSuccess`, `ApiError`, `apiSuccessSchema`, `apiErrorSchema`, `ERROR_CODES`, `ErrorCode`, `Money`, `moneySchema`, `createMoney`, `isMoney`, `CURRENCY_CODE_PATTERN`, `DEFAULT_CURRENCY`, and `HEALTH_STATUS`. There are no `Territory`, `Company`, `Season`, `Battle`, `LeaderboardEntry`, or `ActivityEvent` contracts.
@@ -163,4 +159,5 @@ Until they land, `apps/web` defines clearly-labeled **provisional presentation v
 - 2026-08-29: Detailed implementation plan committed; execution started.
 - 2026-08-29: A concurrent alternate plan edit was detected and preserved separately. Next.js 16 was rejected and Next.js 15 retained; Prisma 7 was retained with CLI/client/adapter versions matched exactly. Useful exact-version, TDD, and API-smoke improvements were reconciled into the canonical plan because the approved goal is a stable foundation, not adoption of newer majors by default.
 - 2026-08-29: Phase 0 implementation and acceptance verification completed locally/offline; live PostgreSQL application remains unvalidated.
-- 2026-08-29: Product direction changed — V1 drops password authentication in favour of a passwordless, email-link company model. Frontend auth screens are cancelled. Backend Phase 1 identity documentation still describes the superseded password model and needs Codex revision.
+- 2026-08-29: Product direction changed — V1 drops password authentication in favour of passwordless, company-scoped email capabilities. Frontend auth screens are cancelled.
+- 2026-08-29: Phase 1 company-claim identity design approved and canonical docs reconciled. Existing-company requests remain pending until approval; Dodo Payments replaces Stripe-first planning for Phase 3. No Phase 1 code or provider integration was started.

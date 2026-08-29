@@ -33,27 +33,29 @@
 
 **Risks:** ecosystem incompatibility across pinned tools; claiming database readiness without a live database; documentation drifting during later changes; optional standalone packaging requires re-evaluation in an environment that permits pnpm symlink creation.
 
-## Phase 1 — Identity
+## Phase 1 — Company + Claim Identity
 
-**Objective:** Implement trustworthy users, authentication, company membership, roles, and one real verification method.
+**Objective:** Implement low-friction company/contact identity and revocable company-scoped management capabilities without introducing traditional V1 user accounts.
 
-**Dependencies:** Verified Phase 0; approved auth/session and email architecture; PostgreSQL integration-test environment.
+**Dependencies:** Verified Phase 0; approved Phase 1 design; PostgreSQL integration-test environment; selected email delivery/test approach; reviewed TTL, cookie/domain, collision, and recovery policies.
 
-**Status:** **PLANNED**
+**Status:** **PLANNED — DESIGN APPROVED; IMPLEMENTATION NOT STARTED**
 
-**Tasks:** users; signup/login/logout; email verification; password reset; secure sessions; authorization policies; companies; memberships; roles; company verification; audit events.
+**Tasks:** company identity and drafts; contact-email verification; purpose-bound opaque challenges; management grants; short-lived company-scoped HttpOnly sessions; access requests; approve/reject/cancel/expire transitions; notification throttles; manual-recovery request architecture; authorization policies; rate limits; audit trail; `TakeoverIntent` contract/state seam only.
 
-**Acceptance criteria:** users authenticate securely; company authority derives from active membership; role denial works; one verification method succeeds/fails from independent checks; secrets remain server-side; recovery/session revocation works.
+**Explicit exclusions:** no `User` model, passwords, signup/login, password reset, global end-user roles/session/dashboard, territory/ownership implementation, checkout, payment provider, webhook, or capture implementation.
 
-**Tests:** auth integration, cookie/CSRF behavior, verification success/failure/expiry, unauthorized company action, privilege escalation, and membership changes.
+**Acceptance criteria:** a contact verifies email through a single-use expiring challenge; raw tokens are not persisted/logged; links exchange into short-lived company-scoped sessions; Company A authority fails for Company B; a different contact cannot manage or pay for an existing managed company until approved; approval creates only the intended grant; rejection grants nothing and cancels/expires the prepared intent; manual recovery cannot transfer authority automatically; sensitive actions are rate-limited and audited; quote snapshots are explicitly non-binding; Phase 0 workspace boundaries remain intact.
 
-**Risks:** account takeover, enumeration, weak email delivery, stale membership sessions, SSRF/DNS hazards, and provider lock-in.
+**Tests:** challenge purpose/success/failure/expiry/replay/revocation; secure cookie and CSRF/Origin behavior; unauthorized and cross-company actions; grant/session revocation; pending-request checkout denial; concurrent approve/reject; notification/request rate limits; enumeration-safe issuance; audit atomicity; quote-staleness state transitions; PostgreSQL integration behavior.
+
+**Risks:** email compromise or delivery failure; bearer-link leakage/scanners; company squatting/collisions; access-request spam; stale sessions; cross-company privilege escalation; unavailable managers; unsafe manual recovery; cookie topology errors; and accidentally building a global user abstraction through contacts.
 
 ## Phase 2 — Territories
 
 **Objective:** Create authoritative territory discovery and ownership-history foundations.
 
-**Dependencies:** Phase 1 identity/authorization; approved territory taxonomy and lifecycle rules.
+**Dependencies:** Phase 1 company-scoped authorization; approved territory taxonomy and lifecycle rules.
 
 **Status:** **PLANNED**
 
@@ -73,13 +75,13 @@
 
 **Status:** **PLANNED — HIGH RISK**
 
-**Tasks:** legal-minimum pricing; bid validation; payment initiation abstraction; first real provider; signature-verified webhooks; atomic transfer; duplicate request/event protection; concurrency; history; failure; refund/cancellation architecture.
+**Tasks:** legal-minimum pricing; takeover-intent revalidation; bid validation; provider-neutral payment abstraction; `DodoPaymentProvider`; checkout; signature-verified Dodo webhooks; provider-neutral payment records; atomic transfer; duplicate request/event protection; concurrency; history; explicit reconciliation/refund/cancellation architecture.
 
-**Acceptance criteria:** server computes the amount; only authorized verified companies bid; confirmed matching payment transfers ownership once; stale/concurrent/duplicate/mismatch cases preserve invariants; every attempt is auditable.
+**Acceptance criteria:** server computes the amount; only a `contact_verified` company with valid company-scoped authority can start checkout; existing-company access is already approved; stale quotes require explicit review and are never auto-charged; only a verified matching server-side Dodo payment event transfers ownership once; browser return URLs cannot capture; stale/concurrent/duplicate/mismatch cases preserve invariants; unfulfillable confirmed payments enter reconciliation/refund state; every attempt is auditable.
 
 **Tests:** below-minimum, valid, stale, two simultaneous bidders, duplicate request, duplicate webhook, payment failure/success, invalid signature, wrong amount/currency/reference, ownership history, previous owner, rollback, and provider retry.
 
-**Risks:** financial loss, double ownership, webhook replay, stale UI, provider ambiguity, refunds/disputes, and partially committed side effects.
+**Risks:** financial loss, double ownership, webhook replay, stale UI, provider ambiguity, Dodo integration drift, refunds/disputes, and partially committed side effects. Dodo signature/event/retry/refund behavior is **UNVALIDATED / NEEDS REVIEW** until checked against current official documentation.
 
 ## Phase 4 — Competition
 
@@ -149,7 +151,7 @@
 
 **Objective:** Give operators controlled, audited tools to review and protect the marketplace.
 
-**Dependencies:** identity roles, audit records, domain state machines, and written moderation/repair policy.
+**Dependencies:** a separately approved operator identity/authorization model, audit records, domain state machines, and written moderation/repair policy. Company management sessions never imply administrator authority.
 
 **Status:** **PLANNED**
 
@@ -157,7 +159,7 @@
 
 **Acceptance criteria:** least privilege; every mutation audited; financial history is preserved; repair workflows are explicit/reviewable; suspicious actions are observable; denial tests pass.
 
-**Tests:** unauthorized admin, role matrix, mutation audit atomicity, suspension effects, repair invariants, rate limits, and sensitive-data filtering.
+**Tests:** unauthorized admin, operator-permission matrix, mutation audit atomicity, suspension effects, repair invariants, rate limits, and sensitive-data filtering.
 
 **Risks:** excessive privilege, irreversible operator mistakes, audit leakage, inconsistent repair, and false-positive abuse controls.
 

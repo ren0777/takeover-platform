@@ -8,7 +8,7 @@
 2. PostgreSQL is the authoritative source of durable product state.
 3. Store money as integer minor currency units; never use floating-point arithmetic for money.
 4. Validate untrusted input on the server.
-5. Authorize every protected action from stored identity and membership state.
+5. Authorize every protected company action from stored contact verification, an active company-specific management grant, and a valid session scoped to that same company.
 6. Enforce critical invariants with database constraints as well as application checks.
 7. Financial and ownership changes are transactional.
 8. Payment webhooks are signature-verified, recorded, replay-safe, and idempotent.
@@ -27,6 +27,12 @@
 21. Preserve compatible API contracts when reasonable and document breaking changes.
 22. Inspect another agent's code and `docs/MEMORY.md` before changing shared contracts.
 23. Avoid unrelated rewrites; optimize for correctness before cleverness.
+24. V1 has no `User` model, password credentials, signup/login, password reset, global end-user session, or generic authenticated dashboard.
+25. Keep public company identity separate from management authority; verification, payment, and ownership are distinct facts.
+26. A payment, email address, company ID, website, or browser return URL never proves company-management authority.
+27. Email-domain matching, DNS access, incorporation, and company-domain email are not V1 participation requirements; a verified contact channel is sufficient.
+28. Opaque security links are purpose-bound, single-use, expiring, revocable, hashed/keyed at rest, and exchanged for short-lived company-scoped sessions.
+29. Prepared takeover quote snapshots never lock price. Revalidate authoritative territory state before checkout and require explicit review of changes.
 
 ## Repository Boundaries
 
@@ -91,8 +97,8 @@ Error:
 ## Logging Conventions
 
 - Emit structured JSON in deployed services through Fastify/Pino.
-- Prefer stable fields such as `event`, `requestId`, `userId`, `companyId`, `territoryId`, `bidId`, `paymentId`, and `webhookEventId`.
-- Redact authorization, cookies, passwords, tokens, provider signatures, and credential-bearing URLs.
+- Prefer stable fields such as `event`, `requestId`, `contactId`, `managementGrantId`, `companyId`, `territoryId`, `bidId`, `paymentId`, and `webhookEventId`.
+- Redact authorization, cookies, token material, provider signatures, and credential-bearing URLs.
 - Log once at the layer that can add actionable context; avoid duplicate stack spam.
 - Audit logs are durable domain records and are not interchangeable with operational application logs.
 
@@ -101,9 +107,16 @@ Error:
 - Zod is appropriate for transport/domain boundary validation; database constraints remain necessary.
 - Validate and normalize URLs. Protect any server-side URL fetch against SSRF, redirects, private networks, DNS rebinding, size, and time limits.
 - Use secure, HTTP-only, same-site cookies and CSRF protection when cookie-based mutation endpoints exist.
+- A company-scoped session for Company A must fail authorization for Company B, regardless of contact identity or client-supplied IDs.
+- Security link secrets require at least 256 bits of cryptographically secure randomness. Persist only a selector and keyed digest; never persist or log the raw secret.
+- Link landing `GET` requests do not approve, reject, edit, pay, or transfer state. Exchange and explicit CSRF-protected mutations are separate operations.
+- Rate-limit challenge issuance/exchange, management-link requests, access requests, decisions, recovery requests, and notifications. Use durable state for security-critical multi-instance throttles.
+- Make public token/link issuance responses enumeration-resistant where practical.
 - Apply endpoint-specific request-size and rate limits before public launch.
 - Provider webhook code verifies the raw signed payload before parsing trusted fields.
 - Provider metadata is a locator, never proof of amount, currency, ownership, or authorization.
+- Dodo Payments is the initial V1 adapter in Phase 3. Dodo-specific SDK/API types remain inside `DodoPaymentProvider`; domain services consume provider-neutral types.
+- Browser payment returns never trigger capture. Only verified, idempotently processed server-side webhook state may enter the capture transaction.
 - Secrets come from validated server environment variables or managed secret stores.
 
 ## Testing Conventions
@@ -113,6 +126,7 @@ Error:
 - HTTP contracts use Fastify injection tests.
 - Persistence, transaction, concurrency, webhook, and migration behavior use PostgreSQL integration tests.
 - Test success, expected rejection, authorization denial, idempotency, replay, and race behavior.
+- Identity tests must cover token purpose/expiry/consumption/revocation, cross-company denial, concurrent access-request decisions, enumeration resistance, and grant-wide session invalidation.
 - Avoid tests that merely assert mocks were called when observable behavior can be tested.
 - A passing unit suite cannot substitute for required provider or database integration evidence.
 

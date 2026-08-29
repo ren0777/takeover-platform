@@ -50,39 +50,48 @@ Future modules live under `apps/api/src/modules/<feature>` only when implemented
 - **IMPLEMENTED NOW:** Prisma `7.10.0` CLI, client, and PostgreSQL adapter are pinned exactly; `prisma.config.ts` owns CLI configuration; the generated client has explicit output; `PrismaPg` supplies the driver adapter; one infrastructure-only `SystemMetadata` model/migration and a tested lazy client lifecycle exist.
 - **IMPLEMENTED NOW:** The initial SQL migration matches the offline `prisma migrate diff` shape. UUID generation remains Prisma-client-side, so the migration introduces no `pgcrypto` dependency or database default.
 - **UNVALIDATED / NEEDS REVIEW:** The migration has not been applied to a live PostgreSQL instance and no runtime query has been executed.
-- **PLANNED:** Product models include User, Company, CompanyMember, CompanyVerification, TerritoryCategory, Territory, TerritoryOwnership, Bid, Payment, PaymentEvent, WebhookEvent, Season, SeasonCompanyStats, SeasonTerritoryStats, LeaderboardSnapshot, Battle, BattleParticipant, BattleEvent, ActivityEvent, AuditLog, and AdminAction.
+- **PLANNED:** Phase 1 product models are Company, CompanyContact, CompanyVerification, EmailVerificationChallenge, CompanyManagementGrant, CompanyManagementSession, CompanyAccessRequest, TakeoverIntent, and AuditLog. There is no V1 `User` or `CompanyMember` model. Later phases add TerritoryCategory, Territory, TerritoryOwnership, Bid, Payment, PaymentEvent, WebhookEvent, Season, SeasonCompanyStats, SeasonTerritoryStats, LeaderboardSnapshot, Battle, BattleParticipant, BattleEvent, ActivityEvent, and AdminAction only when implemented.
 - **UNVALIDATED / NEEDS REVIEW:** Exact columns, enum strategy, deletion policy, contention definition, season reset policy, battle scoring, and payment-refund state repair.
 
 Future critical invariants include one active territory owner, unique provider event IDs, unique idempotency keys in scope, safe money checks, immutable financial references, and explicit lifecycle states. PostgreSQL transactions and locks/versions will protect capture workflows.
 
-## Authentication and Authorization — PLANNED
+## Company Claim Identity and Authorization — PLANNED
 
-No auth provider is selected or installed.
+V1 intentionally has no traditional account system: no `User`, passwords, signup/login, password reset, global end-user roles, or global authenticated dashboard. Company identity is separate from management authority.
+
+The approved capability flow is an opaque email link exchanged for a short-lived Secure, HttpOnly, company-scoped management session. Link secrets have at least 256 bits of cryptographically secure randomness; only selectors and keyed digests are stored. Links are purpose-bound, single-use, expiring, and revocable. Sessions and grants authorize exactly one company.
 
 ```mermaid
 sequenceDiagram
-  actor Person
+  actor Contact
   participant Web
   participant API
-  participant Auth as Auth abstraction
+  participant Email as Future email adapter
   participant DB as PostgreSQL
-  Person->>Web: Sign up or sign in
-  Web->>API: Submit credentials/provider proof
-  API->>Auth: Verify identity material
-  Auth-->>API: Verified identity result
-  API->>DB: Create/load user and secure session
-  DB-->>API: User, memberships, roles
-  API-->>Web: Secure session + safe user contract
-  Web->>API: Protected company action
-  API->>DB: Resolve session and membership
+  Contact->>Web: Enter company and contact email
+  Web->>API: Begin company claim
+  API->>DB: Store contact/intent + hashed challenge
+  API->>Email: Send opaque single-use link
+  Contact->>API: Exchange link
+  API->>DB: Consume challenge atomically
+  DB-->>API: Verified contact and target company scope
+  API-->>Web: Secure HttpOnly company-scoped session when a grant exists
+  Web->>API: Sensitive company mutation
+  API->>DB: Resolve session + active grant for same company
   API-->>Web: Authorized result or stable denial
 ```
 
-Authorization uses server-resolved identity, global roles, company memberships, resource state, and action-specific policy. Client-supplied company IDs never prove authority.
+A verified contact has no company authority without an active `CompanyManagementGrant`. A grant is exercised through a valid session scoped to the same company. A session for Company A never authorizes Company B. Company IDs, websites, email strings, payment details, and browser return URLs are not credentials.
 
-## Companies and Verification — PLANNED
+## Companies, Contacts, and Verification — PLANNED
 
-Company membership supports users managing multiple companies. DNS TXT is the preferred V1 verification candidate, behind a verification interface. Attempts store server-issued tokens, status, timestamps, and safe failure reasons. Network lookup safety, retry policy, and re-verification cadence require design review.
+`Company` stores identity and a lifecycle. A new company begins as a private, expiring, non-participating draft and becomes public/active only through the future confirmed capture transaction. `CompanyContact` stores a normalized verified contact channel and is deliberately not a human account. `CompanyManagementGrant` binds a contact to one company, including a draft; `CompanyManagementSession` exercises that grant. The same contact may hold separate grants and sessions for multiple companies without gaining global authority.
+
+`contact_verified` is sufficient for V1 and proves only possession of the contact email. Personal email providers are valid, and the email domain need not match the public website. DNS control, incorporation, and enterprise identity are not required. `domain_verified` and `manually_verified` remain optional future levels.
+
+When a different verified contact selects an existing company with an active manager, the API creates a pending `CompanyAccessRequest`, blocks checkout and mutations, and notifies current managers. Approval atomically creates a target-company grant; rejection cancels or expires the prepared takeover intent. If managers are unreachable, a manual-review request is the only fallback—payment cannot bypass management authorization.
+
+The detailed approved design is `docs/superpowers/specs/2026-08-29-phase-1-company-claim-identity-design.md`. Email delivery provider, TTL values, production cookie topology, company-collision policy, and manual-reviewer authorization remain **UNVALIDATED / NEEDS REVIEW**.
 
 ## Territories and Ownership — PLANNED
 
@@ -92,44 +101,49 @@ Territory summary fields optimize reads but ownership history is authoritative. 
 
 ```mermaid
 sequenceDiagram
-  actor User
+  actor Contact
   participant API
   participant Authz as Authorization policy
   participant Pricing as Takeover pricing service
   participant DB as PostgreSQL
   participant Pay as PaymentProvider
-  User->>API: POST bid with company, territory, idempotency key
-  API->>Authz: Resolve membership and verification
+  Contact->>API: Submit intent with company, territory, idempotency key
+  API->>Authz: Resolve verified contact + same-company grant/session
   Authz-->>API: Allowed or denied
   API->>DB: Load authoritative territory/version
   DB-->>API: Owner, amount, increment policy
   API->>Pricing: Compute legal minimum
   Pricing-->>API: Exact integer minor amount
+  API->>DB: Compare intent snapshot with current owner/version/amount/currency
+  alt quote stale
+    API-->>Contact: review_required + current values
+  else quote accepted and access approved
   API->>DB: Create pending bid/payment reference
   API->>Pay: Create provider payment
   Pay-->>API: Provider action or failure
-  API-->>User: Review/payment action; never ownership success
+    API-->>Contact: Review/payment action; never ownership success
+  end
 ```
 
-Stale clients receive current owner/current price and the new legal minimum and must review again. Revised amounts are never auto-charged.
+`TakeoverIntent` quote snapshots are explanatory and never lock price. Stale clients receive the new owner, current price, new legal minimum, currency, and version and must explicitly review again. Revised amounts are never auto-charged. Existing-company access approval does not approve a changed quote.
 
 ## Payment Architecture — PLANNED
 
-No payment SDK or provider implementation exists. A future `PaymentProvider` interface will expose payment creation, retrieval, webhook verification, refunds, and provider status without leaking provider types into domain services.
+No payment SDK or provider implementation exists. Phase 3 will introduce a provider-neutral `PaymentProvider` interface for checkout creation, payment retrieval, raw-webhook verification, refunds, and provider status. Dodo Payments is the planned first V1 adapter. Dodo SDK/API types must remain inside `DodoPaymentProvider` and cannot leak into bidding, ownership, or shared domain contracts.
 
 ```mermaid
 flowchart LR
   Bid[Validated pending bid] --> Service[Payment application service]
   Service --> Interface[PaymentProvider interface]
-  Interface --> Stripe[Future Stripe adapter]
-  Interface -. future .-> Razorpay[Future Razorpay adapter]
-  Stripe --> Checkout[Provider-hosted action]
-  Checkout --> User[User completes provider flow]
+  Interface --> Dodo[Planned Dodo adapter]
+  Interface -. future .-> Other[Future provider adapters]
+  Dodo --> Checkout[Provider-hosted action]
+  Checkout --> Visitor[Visitor completes provider flow]
   Checkout --> Webhook[Signed provider webhook]
   Webhook --> Verify[Webhook verification pipeline]
 ```
 
-Provider checkout completion never directly changes frontend ownership state.
+Provider checkout completion and browser success/return URLs never directly change frontend ownership state. A confirmed payment that cannot legally produce a capture enters an explicit reconciliation/refund state; it never silently changes the bid, charge, or ownership. Dodo signatures, webhook events, retries, SDK behavior, and refund semantics are **UNVALIDATED / NEEDS REVIEW** until Phase 3 checks current official Dodo documentation.
 
 ## Webhook Handling — PLANNED
 
@@ -177,6 +191,8 @@ flowchart TD
 
 External publication happens after commit through a reliable mechanism selected later. A database outbox is a candidate, not an implemented feature.
 
+For a first capture by a new company, the future transaction revalidates and activates its private draft while establishing ownership. The verified contact relationship and draft-scoped management grant already exist independently and are revalidated. For an existing managed company, authority must already exist before checkout. A payment can never create an unauthorized grant for an existing company.
+
 ## Real-time Events — PLANNED
 
 SSE is preferred for V1 but must be validated against deployment limits. Redis is not part of Phase 0.
@@ -221,11 +237,12 @@ A future explicit state machine records challenger, defender, selected territori
 
 ## Audit and Admin — PLANNED
 
-Audit records capture actor, action, target, safe before/after context, request ID, reason, and timestamp. Admin mutations require global authorization and create audit records transactionally. Controlled reversals never edit financial history invisibly.
+Audit records capture actor type, company-scoped grant/session where applicable, action, target, safe before/after context, request ID, reason, and timestamp. Phase 1 security actions—including challenge exchange, grant/session revocation, access-request decisions, and recovery requests—are audited. A later operator identity and authorization model must be designed separately; V1 company sessions do not confer administrator authority. Controlled reversals never edit financial history invisibly.
 
 ## Rate Limiting and Security
 
-- **PLANNED:** Endpoint-specific rate limiting, secure session cookies, CSRF strategy, request-size limits, URL/SSRF protections, provider signature validation, replay protection, and abuse signals.
+- **PLANNED:** Endpoint-specific rate limiting; selector-plus-secret tokens with at least 256 bits of secret entropy and keyed digests at rest; purpose/scope/expiry/consumption/revocation checks; company-scoped Secure/HttpOnly cookies; CSRF and Origin strategy; enumeration resistance; request-size limits; URL/SSRF protections; provider signature validation; replay protection; and abuse signals.
+- **PLANNED:** Critical link issuance, access-request, and notification throttles use durable PostgreSQL state so correctness does not depend on one process. Redis is not required by the approved Phase 1 design.
 - **IMPLEMENTED NOW:** environment validation, safe errors, structured logging, request IDs, and conventional secret redaction.
 - ORM use does not replace authorization or database constraints.
 
@@ -257,9 +274,10 @@ Use managed PostgreSQL point-in-time recovery, encrypted backups, documented ret
 | `LOG_LEVEL`    | API              | Pino level                |
 | `DATABASE_URL` | Prisma/API later | PostgreSQL connection URL |
 
-Provider/auth/email secrets are not defined in Phase 0.
+Provider, email, token-pepper, and session secrets are not defined in Phase 0. Phase 1 variables will be selected in its implementation plan and documented before use; Dodo variables belong to Phase 3.
 
 ## External Integrations
 
 - **IMPLEMENTED NOW:** No external service connection. The PostgreSQL driver and Prisma adapter are installed but no live database was contacted.
-- **PLANNED:** PostgreSQL runtime, one identity/email approach, DNS verification lookup, Stripe payment adapter, optional later Razorpay adapter, monitoring/error reporting, and SSE-compatible deployment.
+- **PLANNED:** PostgreSQL runtime; a future email delivery adapter for passwordless contact verification and management links; Dodo Payments as the Phase 3 V1 payment adapter; optional future domain/manual verification and additional payment adapters; monitoring/error reporting; and SSE-compatible deployment.
+- **UNVALIDATED / NEEDS REVIEW:** Email provider/delivery behavior and Dodo's current API, webhook signatures, retries, SDK, event mapping, and refund semantics.

@@ -19,7 +19,9 @@ Avoid generic corporate SaaS, excessive glassmorphism, huge empty heroes, generi
 
 ## Core Interaction Model
 
-The territory board is the primary discovery surface. A visitor sees ownership, price pressure, and recent change; opens detail; chooses an authorized company; reviews a server-calculated amount; crosses a clearly labeled payment boundary; and waits for authoritative confirmation. Empire and ranking views lead back to territories and rivalry, not generic company browsing.
+The territory board is the primary discovery surface. A visitor sees ownership, price pressure, and recent change; opens detail; enters or selects a company; verifies a contact email when needed; reviews a server-calculated amount; crosses a clearly labeled payment boundary; and waits for authoritative confirmation. Existing-company access may pause in manager approval before checkout. Empire and ranking views lead back to territories and rivalry, not generic company browsing.
+
+V1 has no signup/login page, password recovery, persistent global account surface, or generic authenticated dashboard. Passwordless management is presented as a company-specific continuation: request link, check email, exchange link, then manage only the named company.
 
 ## State Vocabulary
 
@@ -34,7 +36,11 @@ The territory board is the primary discovery surface. A visitor sees ownership, 
 
 - Eligible and ready for review.
 - Company selection required.
-- Company unauthorized or unverified.
+- Contact email verification required/sent/expired/invalid/verified; verification proves the contact channel, not website-domain control.
+- Existing-company access pending, approved, rejected, expired, or cancelled.
+- Pending access blocks checkout and company editing while preserving non-binding takeover preparation.
+- Manual recovery requested/reviewing when no existing manager is reachable; it never promises automatic access.
+- Company unauthorized or contact unverified.
 - Price stale: show the new owner/current price and new minimum; require review again and never auto-charge.
 - Payment not connected/unavailable.
 - Payment pending provider confirmation.
@@ -57,6 +63,8 @@ The territory board is the primary discovery surface. A visitor sees ownership, 
 ### Success states — PLANNED
 
 Only authoritative API results may trigger capture celebrations, owner changes, ranking movement, or share cards. Success includes the captured territory, previous owner when allowed, amount, reign start, and a stable link.
+
+Email verification success and access-request approval are not capture success. Payment-provider success is also distinct from committed ownership.
 
 ## Responsive Requirements
 

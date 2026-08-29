@@ -1,0 +1,8 @@
+{
+  "extends": "@takeover/config/typescript/node",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

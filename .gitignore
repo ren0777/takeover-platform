@@ -1,0 +1,17 @@
+node_modules/
+.pnpm-store/
+.next/
+dist/
+coverage/
+*.tsbuildinfo
+*.log
+.env
+.env.*
+!.env.example
+.vercel/
+.worktrees/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+packages/database/src/generated/

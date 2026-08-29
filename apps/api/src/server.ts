@@ -7,7 +7,7 @@ async function startServer(): Promise<void> {
   const app = buildApp({ logLevel: config.logLevel, nodeEnv: config.nodeEnv });
   let shuttingDown = false;
 
-  const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
+  const shutdown = async (signal: NodeJS.Signals | 'IPC'): Promise<void> => {
     if (shuttingDown) {
       app.log.error({ event: 'server.shutdown.forced', signal }, 'Forcing shutdown');
       process.exit(1);
@@ -30,6 +30,18 @@ async function startServer(): Promise<void> {
 
   process.once('SIGINT', () => void shutdown('SIGINT'));
   process.once('SIGTERM', () => void shutdown('SIGTERM'));
+  if (process.send !== undefined) {
+    process.once('message', (message) => {
+      if (
+        typeof message === 'object' &&
+        message !== null &&
+        'type' in message &&
+        message.type === 'shutdown'
+      ) {
+        void shutdown('IPC');
+      }
+    });
+  }
 
   await app.listen({ host: config.host, port: config.port });
   app.log.info(

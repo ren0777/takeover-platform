@@ -17,7 +17,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:generate": "pnpm --filter @takeover/database db:generate",
-    "db:validate": "pnpm --filter @takeover/database db:validate"
+    "db:validate": "pnpm --filter @takeover/database db:validate",
+    "smoke:api": "node scripts/smoke-api.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

@@ -5,12 +5,19 @@
   "type": "module",
   "main": "./dist/server.js",
   "scripts": {
+    "build:workspace-deps": "pnpm --filter @takeover/shared --filter @takeover/database build",
+    "predev": "pnpm run build:workspace-deps",
     "dev": "tsx watch src/server.ts",
+    "prebuild": "pnpm run build:workspace-deps",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
+    "pretypecheck": "pnpm run build:workspace-deps",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "pretest": "pnpm run build:workspace-deps",
+    "test": "vitest run",
+    "pretest:integration": "pnpm run build:workspace-deps",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
     "@fastify/cookie": "11.1.2",

@@ -35,6 +35,22 @@ importers:
 
   packages/config: {}
 
+  packages/shared:
+    dependencies:
+      zod:
+        specifier: 4.5.2
+        version: 4.5.2
+    devDependencies:
+      '@takeover/config':
+        specifier: workspace:*
+        version: link:../config
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: 3.2.7
+        version: 3.2.7(@types/node@24.13.3)
+
 packages:
 
   '@esbuild/aix-ppc64@0.28.2':
@@ -1033,6 +1049,9 @@ packages:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
     engines: {node: '>=10'}
 
+  zod@4.5.2:
+    resolution: {integrity: sha512-XkYXCol10+ba/6F/cueWV+TezUeOqXW0hdeJt5CdXjTYeAgAQg5N03RQdJ80mhfFE72+pblvYMW4wy2Qp4Qbrg==}
+
 snapshots:
 
   '@esbuild/aix-ppc64@0.28.2':
@@ -1923,3 +1942,5 @@ snapshots:
   word-wrap@1.2.5: {}
 
   yocto-queue@0.1.0: {}
+
+  zod@4.5.2: {}

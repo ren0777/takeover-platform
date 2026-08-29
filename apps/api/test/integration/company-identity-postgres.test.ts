@@ -32,6 +32,142 @@ async function createCompany(status: 'DRAFT' | 'ACTIVE', normalizedWebsite: stri
 beforeEach(resetIdentityTables);
 
 describe('Phase 1 PostgreSQL invariants', () => {
+  it('creates a new-company claim atomically without storing a raw token', async () => {
+    const repository = new PrismaCompanyIdentityRepository(prisma);
+    const tokenDigest = new Uint8Array(32).fill(9);
+    const result = await repository.beginCompanyClaim({
+      challenge: {
+        expiresAt: new Date('2026-08-30T13:15:00.000Z'),
+        selector: 'selector-new-company',
+        tokenDigest,
+      },
+      company: {
+        expiresAt: new Date('2026-08-31T13:00:00.000Z'),
+        name: 'Acme',
+        normalizedName: 'acme',
+        normalizedWebsite: 'https://acme.example/',
+        websiteUrl: 'https://acme.example/',
+      },
+      contact: { email: 'founder@gmail.com', normalizedEmail: 'founder@gmail.com' },
+      intent: {
+        expiresAt: new Date('2026-08-31T13:00:00.000Z'),
+        territoryExternalRef: 'ai-coding',
+      },
+      now: new Date('2026-08-30T13:00:00.000Z'),
+      requestId: randomUUID(),
+    });
+
+    expect(result.kind).toBe('new_company');
+    expect(result.company.status).toBe('DRAFT');
+    expect(result.challenge.tokenDigest).toEqual(tokenDigest);
+    expect(JSON.stringify(result)).not.toContain('raw-verification-token');
+    await expect(prisma.auditLog.count()).resolves.toBe(1);
+  });
+
+  it('consumes new-company verification once and atomically creates scoped authority', async () => {
+    const repository = new PrismaCompanyIdentityRepository(prisma);
+    const tokenDigest = new Uint8Array(32).fill(4);
+    const claim = await repository.beginCompanyClaim({
+      challenge: {
+        expiresAt: new Date('2026-08-30T13:15:00.000Z'),
+        selector: 'selector-draft-exchange',
+        tokenDigest,
+      },
+      company: {
+        expiresAt: new Date('2026-08-31T13:00:00.000Z'),
+        name: 'Acme',
+        normalizedName: 'acme',
+        normalizedWebsite: 'https://acme.example/',
+        websiteUrl: 'https://acme.example/',
+      },
+      contact: { email: 'founder@gmail.com', normalizedEmail: 'founder@gmail.com' },
+      intent: {
+        expiresAt: new Date('2026-08-31T13:00:00.000Z'),
+        territoryExternalRef: 'ai-coding',
+      },
+      now: new Date('2026-08-30T13:00:00.000Z'),
+    });
+    await repository.markChallengeDelivery(claim.challenge.id, 'SENT');
+
+    const exchange = await repository.consumeContactVerification({
+      accessRequestExpiresAt: new Date('2026-09-06T13:05:00.000Z'),
+      candidateDigest: tokenDigest,
+      csrfDigest: new Uint8Array(32).fill(6),
+      maxFailedAttempts: 10,
+      now: new Date('2026-08-30T13:05:00.000Z'),
+      selector: 'selector-draft-exchange',
+      sessionExpiresAt: new Date('2026-08-30T21:05:00.000Z'),
+      sessionTokenDigest: new Uint8Array(32).fill(5),
+    });
+
+    expect(exchange.kind).toBe('management_session');
+    expect(await prisma.companyManagementGrant.count()).toBe(1);
+    expect(await prisma.companyManagementSession.count()).toBe(1);
+    expect(await prisma.companyVerification.count({ where: { status: 'VERIFIED' } })).toBe(1);
+    await expect(
+      prisma.takeoverIntent.findUniqueOrThrow({ where: { id: claim.intent.id } }),
+    ).resolves.toMatchObject({ status: 'IDENTITY_READY' });
+
+    await expect(
+      repository.consumeContactVerification({
+        accessRequestExpiresAt: new Date('2026-09-06T13:06:00.000Z'),
+        candidateDigest: tokenDigest,
+        csrfDigest: new Uint8Array(32).fill(8),
+        maxFailedAttempts: 10,
+        now: new Date('2026-08-30T13:06:00.000Z'),
+        selector: 'selector-draft-exchange',
+        sessionExpiresAt: new Date('2026-08-30T21:06:00.000Z'),
+        sessionTokenDigest: new Uint8Array(32).fill(7),
+      }),
+    ).resolves.toEqual({ kind: 'invalid' });
+    expect(await prisma.companyManagementSession.count()).toBe(1);
+  });
+
+  it('routes a verified contact for an authoritative company into pending access', async () => {
+    const company = await createCompany('ACTIVE', 'https://acme.example/');
+    const repository = new PrismaCompanyIdentityRepository(prisma);
+    const tokenDigest = new Uint8Array(32).fill(3);
+    const claim = await repository.beginCompanyClaim({
+      challenge: {
+        expiresAt: new Date('2026-08-30T13:15:00.000Z'),
+        selector: 'selector-existing-company',
+        tokenDigest,
+      },
+      company: {
+        expiresAt: new Date('2026-08-31T13:00:00.000Z'),
+        name: 'Attacker Supplied Name',
+        normalizedName: 'attacker supplied name',
+        normalizedWebsite: company.normalizedWebsite,
+        websiteUrl: company.websiteUrl,
+      },
+      contact: { email: 'other@gmail.com', normalizedEmail: 'other@gmail.com' },
+      intent: {
+        expiresAt: new Date('2026-08-31T13:00:00.000Z'),
+        territoryExternalRef: 'ai-coding',
+      },
+      now: new Date('2026-08-30T13:00:00.000Z'),
+    });
+    await repository.markChallengeDelivery(claim.challenge.id, 'SENT');
+
+    const exchange = await repository.consumeContactVerification({
+      accessRequestExpiresAt: new Date('2026-09-06T13:05:00.000Z'),
+      candidateDigest: tokenDigest,
+      csrfDigest: new Uint8Array(32).fill(2),
+      maxFailedAttempts: 10,
+      now: new Date('2026-08-30T13:05:00.000Z'),
+      selector: 'selector-existing-company',
+      sessionExpiresAt: new Date('2026-08-30T21:05:00.000Z'),
+      sessionTokenDigest: new Uint8Array(32).fill(1),
+    });
+
+    expect(claim.kind).toBe('existing_company');
+    expect(claim.company.name).toBe('Acme');
+    expect(exchange.kind).toBe('access_request');
+    expect(await prisma.companyAccessRequest.count({ where: { status: 'PENDING' } })).toBe(1);
+    expect(await prisma.companyManagementGrant.count()).toBe(0);
+    expect(await prisma.companyManagementSession.count()).toBe(0);
+  });
+
   it('allows private drafts but only one authoritative normalized website', async () => {
     await createCompany('DRAFT', 'https://acme.example/');
     await createCompany('DRAFT', 'https://acme.example/');

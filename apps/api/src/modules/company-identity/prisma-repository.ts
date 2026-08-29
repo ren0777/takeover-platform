@@ -1,12 +1,19 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { getDatabaseClient, Prisma, type PrismaClient } from '@takeover/database';
 import type { ManagementAuthority } from './authorization.js';
 import type {
   CompanyIdentityRepository,
+  BeginClaimRecord,
+  BeginClaimRecordResult,
+  ChallengeRecord,
+  CompanyRecord,
+  ConsumeChallengeInput,
   CreateSessionInput,
+  IntentRecord,
   RateLimitInput,
   RevokeSessionInput,
   SessionRecord,
+  VerificationExchangeResult,
 } from './repository.js';
 
 type IdentityPrismaClient = PrismaClient | Prisma.TransactionClient;
@@ -17,8 +24,284 @@ export function mapMinorAmountToSafeInteger(amount: bigint): number {
   return value;
 }
 
+function mapCompany(company: {
+  activatedAt: Date | null;
+  createdAt: Date;
+  expiresAt: Date | null;
+  id: string;
+  logoUrl: string | null;
+  name: string;
+  normalizedWebsite: string;
+  slug: string | null;
+  status: CompanyRecord['status'];
+  updatedAt: Date;
+  websiteUrl: string;
+}): CompanyRecord {
+  return company;
+}
+
+function mapIntent(intent: {
+  companyId: string;
+  contactId: string;
+  expiresAt: Date;
+  id: string;
+  status: IntentRecord['status'];
+  territoryExternalRef: string;
+}): IntentRecord {
+  return intent;
+}
+
 export class PrismaCompanyIdentityRepository implements CompanyIdentityRepository {
   constructor(private readonly prisma: PrismaClient = getDatabaseClient()) {}
+
+  async beginCompanyClaim(input: BeginClaimRecord): Promise<BeginClaimRecordResult> {
+    return this.prisma.$transaction(async (transaction) => {
+      const authoritativeCompany = await transaction.company.findFirst({
+        where: {
+          normalizedWebsite: input.company.normalizedWebsite,
+          status: { not: 'DRAFT' },
+        },
+      });
+      const company =
+        authoritativeCompany ??
+        (await transaction.company.create({
+          data: {
+            expiresAt: input.company.expiresAt,
+            ...(input.company.logoUrl === undefined ? {} : { logoUrl: input.company.logoUrl }),
+            name: input.company.name,
+            normalizedName: input.company.normalizedName,
+            normalizedWebsite: input.company.normalizedWebsite,
+            websiteUrl: input.company.websiteUrl,
+          },
+        }));
+      const contact = await transaction.companyContact.upsert({
+        where: { normalizedEmail: input.contact.normalizedEmail },
+        create: input.contact,
+        update: { email: input.contact.email },
+      });
+      const intent = await transaction.takeoverIntent.create({
+        data: {
+          companyId: company.id,
+          contactId: contact.id,
+          expiresAt: input.intent.expiresAt,
+          territoryExternalRef: input.intent.territoryExternalRef,
+        },
+      });
+      const challenge = await transaction.emailVerificationChallenge.create({
+        data: {
+          companyId: company.id,
+          contactId: contact.id,
+          expiresAt: input.challenge.expiresAt,
+          selector: input.challenge.selector,
+          tokenDigest: Buffer.from(input.challenge.tokenDigest),
+          purpose: 'CONTACT_VERIFICATION',
+        },
+      });
+      await this.writeAudit(transaction, {
+        action: 'company_claim.started',
+        actorId: contact.id,
+        actorType: 'CONTACT',
+        companyId: company.id,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        targetId: intent.id,
+        targetType: 'takeover_intent',
+      });
+      const mappedChallenge: ChallengeRecord = {
+        companyId: challenge.companyId,
+        contactId: challenge.contactId,
+        expiresAt: challenge.expiresAt,
+        id: challenge.id,
+        selector: challenge.selector,
+        tokenDigest: new Uint8Array(challenge.tokenDigest),
+      };
+      return {
+        challenge: mappedChallenge,
+        company: mapCompany(company),
+        contact: {
+          email: contact.email,
+          emailVerifiedAt: contact.emailVerifiedAt,
+          id: contact.id,
+          normalizedEmail: contact.normalizedEmail,
+        },
+        intent: mapIntent(intent),
+        kind: authoritativeCompany === null ? 'new_company' : 'existing_company',
+      };
+    });
+  }
+
+  async markChallengeDelivery(challengeId: string, status: 'SENT' | 'FAILED'): Promise<void> {
+    await this.prisma.emailVerificationChallenge.update({
+      where: { id: challengeId },
+      data: { deliveryStatus: status },
+    });
+  }
+
+  async consumeContactVerification(
+    input: ConsumeChallengeInput,
+  ): Promise<VerificationExchangeResult> {
+    return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "email_verification_challenges"
+        WHERE "selector" = ${input.selector}
+        FOR UPDATE
+      `);
+      const challenge = await transaction.emailVerificationChallenge.findUnique({
+        where: { selector: input.selector },
+        include: { company: true },
+      });
+      const digestMatches =
+        challenge !== null &&
+        challenge.tokenDigest.byteLength === input.candidateDigest.byteLength &&
+        timingSafeEqual(challenge.tokenDigest, input.candidateDigest);
+      const valid =
+        challenge !== null &&
+        digestMatches &&
+        challenge.purpose === 'CONTACT_VERIFICATION' &&
+        challenge.deliveryStatus === 'SENT' &&
+        challenge.consumedAt === null &&
+        challenge.revokedAt === null &&
+        challenge.failedAttempts < input.maxFailedAttempts &&
+        challenge.expiresAt > input.now;
+      if (!valid || challenge === null) {
+        if (
+          challenge !== null &&
+          challenge.consumedAt === null &&
+          challenge.failedAttempts < input.maxFailedAttempts
+        ) {
+          await transaction.emailVerificationChallenge.update({
+            where: { id: challenge.id },
+            data: { failedAttempts: { increment: 1 } },
+          });
+        }
+        return { kind: 'invalid' };
+      }
+
+      const consumed = await transaction.emailVerificationChallenge.updateMany({
+        where: { id: challenge.id, consumedAt: null, revokedAt: null },
+        data: { consumedAt: input.now },
+      });
+      if (consumed.count !== 1) return { kind: 'invalid' };
+      await transaction.companyContact.update({
+        where: { id: challenge.contactId },
+        data: { emailVerifiedAt: input.now },
+      });
+      const existingVerification = await transaction.companyVerification.findFirst({
+        where: {
+          companyId: challenge.companyId,
+          contactId: challenge.contactId,
+          level: 'CONTACT_VERIFIED',
+          status: 'VERIFIED',
+        },
+      });
+      if (existingVerification === null) {
+        await transaction.companyVerification.create({
+          data: {
+            companyId: challenge.companyId,
+            contactId: challenge.contactId,
+            level: 'CONTACT_VERIFIED',
+            source: 'email_challenge',
+            status: 'VERIFIED',
+            verifiedAt: input.now,
+          },
+        });
+      }
+      const intent = await transaction.takeoverIntent.findFirstOrThrow({
+        where: {
+          companyId: challenge.companyId,
+          contactId: challenge.contactId,
+          status: 'AWAITING_EMAIL_VERIFICATION',
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (challenge.company.status === 'DRAFT') {
+        const grant = await transaction.companyManagementGrant.upsert({
+          where: {
+            companyId_contactId: {
+              companyId: challenge.companyId,
+              contactId: challenge.contactId,
+            },
+          },
+          create: {
+            companyId: challenge.companyId,
+            contactId: challenge.contactId,
+            grantedAt: input.now,
+            source: 'INITIAL_CONTACT',
+          },
+          update: { grantedAt: input.now, revokedAt: null, status: 'ACTIVE' },
+        });
+        const session = await transaction.companyManagementSession.create({
+          data: {
+            companyId: challenge.companyId,
+            csrfDigest: Buffer.from(input.csrfDigest),
+            expiresAt: input.sessionExpiresAt,
+            grantId: grant.id,
+            tokenDigest: Buffer.from(input.sessionTokenDigest),
+          },
+        });
+        const updatedIntent = await transaction.takeoverIntent.update({
+          where: { id: intent.id },
+          data: { status: 'IDENTITY_READY' },
+        });
+        await this.writeAudit(transaction, {
+          action: 'company_contact.verified',
+          actorId: challenge.contactId,
+          actorType: 'CONTACT',
+          companyId: challenge.companyId,
+          ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+          targetId: session.id,
+          targetType: 'company_management_session',
+        });
+        return {
+          company: mapCompany(challenge.company),
+          intent: mapIntent(updatedIntent),
+          kind: 'management_session',
+          session: {
+            companyId: session.companyId,
+            csrfDigest: new Uint8Array(session.csrfDigest),
+            expiresAt: session.expiresAt,
+            grantId: session.grantId,
+            sessionId: session.id,
+            tokenDigest: new Uint8Array(session.tokenDigest),
+          },
+          verificationLevels: ['CONTACT_VERIFIED'],
+        };
+      }
+
+      const accessRequest = await transaction.companyAccessRequest.create({
+        data: {
+          companyId: challenge.companyId,
+          contactId: challenge.contactId,
+          expiresAt: input.accessRequestExpiresAt,
+          takeoverIntentId: intent.id,
+        },
+      });
+      const updatedIntent = await transaction.takeoverIntent.update({
+        where: { id: intent.id },
+        data: { status: 'AWAITING_COMPANY_ACCESS' },
+      });
+      await this.writeAudit(transaction, {
+        action: 'company_access_request.created',
+        actorId: challenge.contactId,
+        actorType: 'CONTACT',
+        companyId: challenge.companyId,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        targetId: accessRequest.id,
+        targetType: 'company_access_request',
+      });
+      return {
+        accessRequest: {
+          expiresAt: accessRequest.expiresAt,
+          id: accessRequest.id,
+          requestedAt: accessRequest.requestedAt,
+          status: 'PENDING',
+        },
+        company: mapCompany(challenge.company),
+        intent: mapIntent(updatedIntent),
+        kind: 'access_request',
+      };
+    });
+  }
 
   async consumeRateLimit(
     input: RateLimitInput,

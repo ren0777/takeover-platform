@@ -39,7 +39,7 @@
 
 **Dependencies:** Verified Phase 0; approved Phase 1 design and locked V1 defaults; PostgreSQL integration-test environment. Production email delivery and manual approval execution remain unavailable until separately selected/designed.
 
-**Status:** **PLANNED — DESIGN APPROVED; IMPLEMENTATION NOT STARTED**
+**Status:** **IN PROGRESS — TASK 1 SHARED CONTRACTS VERIFIED; BACKEND IMPLEMENTATION CONTINUES**
 
 **Tasks:** company identity and drafts; contact-email verification; purpose-bound opaque challenges; management grants; short-lived company-scoped HttpOnly sessions; access requests; approve/reject/cancel/expire transitions; notification throttles; manual-recovery request architecture; authorization policies; rate limits; audit trail; `TakeoverIntent` contract/state seam only.
 

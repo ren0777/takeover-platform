@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-**Phase 0 — Foundation: IMPLEMENTED NOW / ACCEPTANCE VERIFIED. Phase 1 — Company + Claim Identity: DESIGN APPROVED, IMPLEMENTATION NOT STARTED.** Live PostgreSQL migration application and runtime queries remain **UNVALIDATED / NEEDS REVIEW**. Do not implement Phase 1 until its specification is reviewed and an implementation plan is approved.
+**Phase 0 — Foundation: IMPLEMENTED NOW / ACCEPTANCE VERIFIED. Phase 1 — Company + Claim Identity: IN PROGRESS.** Task 1 shared contracts are implemented and verified; backend endpoints/persistence are not yet available. Live PostgreSQL migration and integration evidence remain **UNVALIDATED / NEEDS REVIEW**.
 
 ## What Works
 
@@ -14,6 +14,7 @@
 - **IMPLEMENTED NOW:** Fastify API config validation, structured logging, safe errors, `/health`, `/ready`, and graceful shutdown.
 - **IMPLEMENTED NOW:** Minimal Next.js 15/React 19/Tailwind v4 web shell.
 - **IMPLEMENTED NOW:** 31 tests and the complete Phase 0 acceptance suite pass.
+- **IMPLEMENTED NOW:** Phase 1 framework-neutral company/claim schemas, inferred types, lifecycle constants, and stable errors are published from `@takeover/shared`; its 29 tests, strict typecheck, and lint pass.
 
 ## Partially Implemented / Unvalidated
 
@@ -126,6 +127,19 @@ Boundaries:
 - Do not import `@takeover/database` from the web app.
 - Do not duplicate shared domain/API contracts inside `apps/web`.
 - Product success, verification, ownership, payment, rankings, and real-time events remain unavailable and must not be fabricated.
+
+#### Phase 1 shared contracts ready now
+
+Claude may now import these authoritative exports from `@takeover/shared` and remove matching provisional company-identity contracts:
+
+- Constants: `COMPANY_STATUSES`, `VERIFICATION_LEVELS`, `ACCESS_REQUEST_STATUSES`, `TAKEOVER_INTENT_STATUSES`, `QUOTE_AUTHORITY`.
+- Company schemas/types: `httpsUrlSchema`, `companyStatusSchema` / `CompanyStatus`, `verificationLevelSchema` / `VerificationLevel`, `companyInputSchema` / `CompanyInput`, `companySchema` / `Company`, `companyContactSchema` / `CompanyContact`, `companyVerificationSchema` / `CompanyVerification`.
+- Claim and intent schemas/types: `companyClaimRequestSchema` / `CompanyClaimRequest`, `companyClaimResultSchema` / `CompanyClaimResult`, `takeoverPreparationRequestSchema` / `TakeoverPreparationRequest`, `takeoverIntentSchema` / `TakeoverIntent`, `takeoverIntentStatusSchema` / `TakeoverIntentStatus`, `territoryExternalRefSchema`, `quoteSnapshotSchema` / `QuoteSnapshot`.
+- Verification/session schemas/types: `emailVerificationRequestSchema` / `EmailVerificationRequest`, `emailTokenExchangeRequestSchema` / `EmailTokenExchangeRequest`, `emailTokenExchangeResultSchema` / `EmailTokenExchangeResult`, `managementLinkRequestSchema` / `ManagementLinkRequest`, `managementContextSchema` / `ManagementContext`, `acceptedDeliverySchema` / `AcceptedDelivery`.
+- Access/recovery schemas/types: `accessRequestStatusSchema` / `AccessRequestStatus`, `companyAccessRequestSchema` / `CompanyAccessRequest`, `accessDecisionRequestSchema` / `AccessDecisionRequest`, `accessDecisionResultSchema` / `AccessDecisionResult`, `recoveryRequestSchema` / `RecoveryRequest`, `recoveryRequestResultSchema` / `RecoveryRequestResult`.
+- New stable errors: `AUTHORIZATION_REQUIRED`, `CONTACT_VERIFICATION_REQUIRED`, `INVALID_OR_EXPIRED_TOKEN`, `COMPANY_ACCESS_PENDING`, `COMPANY_ACCESS_DENIED`, `COMPANY_WEBSITE_CLAIMED`, `RATE_LIMITED`, `CONFLICT`, and `MANUAL_RECOVERY_UNAVAILABLE` through `ERROR_CODES` / `ErrorCode`.
+
+All Phase 1 intent/claim responses enforce `checkoutAvailable: false`; quote data is labeled `quoteAuthority: 'reference_only'`. No product endpoint exists yet, so UI integration must retain honest unavailable/pending states.
 
 ### Claude → Codex
 

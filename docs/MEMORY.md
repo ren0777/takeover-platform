@@ -128,9 +128,39 @@ Reason: the capture flow stops at a clearly labeled payment-not-connected bounda
 **Requested fields — territory history including `previousOwner.logoUrl`.**
 Reason: the territory detail page shows ownership history with logos; without the logo URL the history section degrades to text-only.
 
+**BLOCKING product-direction change — V1 removes password authentication. Read before starting Phase 1.**
+Approved by the product owner on 2026-08-29. TakeOver V1 does not require traditional accounts. The frontend will not build login, signup, forgot-password, or reset-password screens, and no frontend work depends on them.
+
+The replacement flow is: `TAKE OVER` → company details → bid → payment → backend-confirmed ownership → secure email management link when needed. Company identity is established during capture rather than before it, and ongoing company management is passwordless and email-link based.
+
+This conflicts with currently documented backend plans, which were written before the change and are **not** yet updated:
+
+- `PHASES.md` Phase 1 — Identity lists "signup/login/logout", "password reset", and "secure sessions".
+- `PRD.md` "Identity, companies, and permissions" and `ARCHITECTURE.md` "Authentication and Authorization" describe the same password-based model.
+
+Codex owns those sections; Claude has not rewritten them. They need revision before Phase 1 begins, or Phase 1 will implement an authentication model the product no longer wants.
+
+Backend capabilities the passwordless flow requires:
+
+- Issue a signed, single-use, expiring management link to a company's contact email, with a documented expiry window and a defined behavior for reuse after consumption.
+- Establish a session from that link, scoped to one company, with revocation and re-issue paths.
+- Bind an email address to a company at capture time, and define what happens when the same email later captures a second territory (same company vs. new company).
+- Define whether an unverified, newly-created company may complete a capture, or whether verification gates it. The frontend must not guess this.
+- Rate-limit link issuance and define the response shape when throttled.
+
+Until these exist, the frontend renders the management-link request UI and its sent/expired/invalid states against fixtures only, and never claims a link was actually delivered or a session actually established.
+
+**Requested contracts — shared domain types do not exist yet.**
+`@takeover/shared` currently exports only `ApiSuccess`, `ApiError`, `apiSuccessSchema`, `apiErrorSchema`, `ERROR_CODES`, `ErrorCode`, `Money`, `moneySchema`, `createMoney`, `isMoney`, `CURRENCY_CODE_PATTERN`, `DEFAULT_CURRENCY`, and `HEALTH_STATUS`. There are no `Territory`, `Company`, `Season`, `Battle`, `LeaderboardEntry`, or `ActivityEvent` contracts.
+
+These are domain contracts shared with the API, so per `RULES.md` they belong in `@takeover/shared` and must not be authored canonically inside `apps/web`. Codex should publish them as part of Phase 2 (territories) and Phase 4 (competition).
+
+Until they land, `apps/web` defines clearly-labeled **provisional presentation view models** in a single quarantined module. They are explicitly not canonical, are consumed only through the data-access seam, and are to be deleted and replaced by the `@takeover/shared` contracts when those exist. This is recorded so the duplication is deliberate, visible, and temporary rather than silent.
+
 ## Recent Important Changes
 
 - 2026-08-29: Approved lean Phase 0 design committed.
 - 2026-08-29: Detailed implementation plan committed; execution started.
 - 2026-08-29: A concurrent alternate plan edit was detected and preserved separately. Next.js 16 was rejected and Next.js 15 retained; Prisma 7 was retained with CLI/client/adapter versions matched exactly. Useful exact-version, TDD, and API-smoke improvements were reconciled into the canonical plan because the approved goal is a stable foundation, not adoption of newer majors by default.
 - 2026-08-29: Phase 0 implementation and acceptance verification completed locally/offline; live PostgreSQL application remains unvalidated.
+- 2026-08-29: Product direction changed — V1 drops password authentication in favour of a passwordless, email-link company model. Frontend auth screens are cancelled. Backend Phase 1 identity documentation still describes the superseded password model and needs Codex revision.

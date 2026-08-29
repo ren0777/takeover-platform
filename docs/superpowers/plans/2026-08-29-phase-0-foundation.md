@@ -6,7 +6,25 @@
 
 **Architecture:** A pnpm workspace contains independently deployable Next.js and Fastify applications. Framework-neutral contracts live in `@takeover/shared`, Prisma is owned only by `@takeover/database`, and build-time configuration lives in `@takeover/config`; canonical docs distinguish current, planned, and unvalidated systems.
 
-**Tech Stack:** Node.js 24, pnpm 10, TypeScript strict mode, Next.js 15, React 19, Tailwind CSS v4, Fastify 5, Zod 4, Prisma 6 with PostgreSQL, Vitest, ESLint 9, Prettier 3.
+**Tech Stack:** Node.js 24.12.0, pnpm 10.32.1, TypeScript 5.9.3 strict mode, Next.js 15.5.24, React 19.2.8, Tailwind CSS 4.3.3, Fastify 5.12.1, Zod 4.5.2, Prisma 7.10.0 with PostgreSQL, Vitest 3.2.7, ESLint 9.39.5, Prettier 3.9.6.
+
+**Execution status:** Canonical docs are committed in `470d31c`; root workspace tooling and a successful `pnpm install` are committed in `c71f2f5`. Tasks 3 through 7 remain unimplemented and unverified.
+
+## Approved Version Matrix
+
+| Component                                | Phase 0 version                     | Decision                                               |
+| ---------------------------------------- | ----------------------------------- | ------------------------------------------------------ |
+| Node.js                                  | 24.12.0 local; package floor `>=22` | Current local runtime with supported deployment floor  |
+| pnpm                                     | 10.32.1                             | Pinned by root `packageManager`                        |
+| Next.js                                  | 15.5.24                             | Next.js 16 concurrent proposal rejected                |
+| React / React DOM                        | 19.2.8                              | Approved React major, exact matching pair              |
+| TypeScript                               | 5.9.3                               | TypeScript 7 explicitly excluded                       |
+| Tailwind CSS / PostCSS plugin            | 4.3.3                               | Approved Tailwind v4 line                              |
+| Fastify                                  | 5.12.1                              | Approved API foundation                                |
+| Zod                                      | 4.5.2                               | Shared and API validation                              |
+| Prisma CLI / client / PostgreSQL adapter | 7.10.0 / 7.10.0 / 7.10.0            | Exact match required; Prisma 8 RC excluded             |
+| PostgreSQL driver                        | `pg` 8.23.0                         | Required by the Prisma 7 PostgreSQL adapter            |
+| Vitest                                   | 3.2.7                               | Preserves the successfully installed Phase 0 toolchain |
 
 ## Global Constraints
 
@@ -19,20 +37,24 @@
 - Use integer minor units and never floating-point arithmetic for money.
 - Mark documentation claims as `IMPLEMENTED NOW`, `PLANNED`, or `UNVALIDATED / NEEDS REVIEW`.
 - Do not mark Phase 0 complete unless every acceptance check has current evidence.
+- Pin `prisma`, `@prisma/client`, and `@prisma/adapter-pg` to exactly `7.10.0`; do not use Prisma 8 prereleases.
+- Use Prisma 7's `prisma.config.ts`, generated-client output, and PostgreSQL driver-adapter architecture rather than Prisma 6 configuration patterns.
+- Preserve the successfully installed root toolchain; do not weaken peer-dependency checks through a permissive `.npmrc`.
 
 ---
 
 ## File Map
 
-| Area | Files | Responsibility |
-| --- | --- | --- |
-| Root | `package.json`, `pnpm-workspace.yaml`, `tsconfig.json`, `eslint.config.mjs`, `.prettierrc.json`, `.prettierignore`, `.gitignore`, `.env.example` | Workspace orchestration and repository-wide policy |
-| Config | `packages/config/package.json`, `packages/config/typescript/*.json`, `packages/config/eslint/base.mjs` | Shared build-time configuration only |
-| Shared | `packages/shared/package.json`, `packages/shared/tsconfig.json`, `packages/shared/src/*`, `packages/shared/test/*` | Browser/server-safe contracts and money validation |
-| Database | `packages/database/package.json`, `packages/database/tsconfig.json`, `packages/database/prisma/schema.prisma`, `packages/database/prisma/migrations/*`, `packages/database/src/client.ts`, `packages/database/src/index.ts` | Exclusive Prisma ownership and lifecycle |
-| API | `apps/api/package.json`, `apps/api/tsconfig.json`, `apps/api/src/config/env.ts`, `apps/api/src/plugins/health.ts`, `apps/api/src/app.ts`, `apps/api/src/server.ts`, `apps/api/test/*` | Independently deployable Fastify runtime |
-| Web | `apps/web/package.json`, `apps/web/tsconfig.json`, `apps/web/next.config.ts`, `apps/web/postcss.config.mjs`, `apps/web/src/app/*` | Minimal independently deployable Next.js shell |
-| Docs | `docs/PRD.md`, `docs/ARCHITECTURE.md`, `docs/RULES.md`, `docs/PHASES.md`, `docs/DESIGN.md`, `docs/MEMORY.md` | Canonical product, architecture, process, and handoff truth |
+| Area       | Files                                                                                                                                                                                                                                                             | Responsibility                                                                           |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Root       | `package.json`, `pnpm-workspace.yaml`, `tsconfig.json`, `eslint.config.mjs`, `.prettierrc.json`, `.prettierignore`, `.gitignore`, `.env.example`                                                                                                                  | Workspace orchestration and repository-wide policy                                       |
+| Config     | `packages/config/package.json`, `packages/config/typescript/*.json`, `packages/config/eslint/base.mjs`                                                                                                                                                            | Shared build-time configuration only                                                     |
+| Shared     | `packages/shared/package.json`, `packages/shared/tsconfig.json`, `packages/shared/src/*`, `packages/shared/test/*`                                                                                                                                                | Browser/server-safe contracts and money validation                                       |
+| Database   | `packages/database/package.json`, `packages/database/tsconfig.json`, `packages/database/prisma.config.ts`, `packages/database/prisma/schema.prisma`, `packages/database/prisma/migrations/*`, `packages/database/src/client.ts`, `packages/database/src/index.ts` | Exclusive Prisma 7 ownership and lifecycle                                               |
+| API        | `apps/api/package.json`, `apps/api/tsconfig.json`, `apps/api/src/config/env.ts`, `apps/api/src/plugins/health.ts`, `apps/api/src/app.ts`, `apps/api/src/server.ts`, `apps/api/test/*`                                                                             | Independently deployable Fastify runtime                                                 |
+| Web        | `apps/web/package.json`, `apps/web/tsconfig.json`, `apps/web/next.config.ts`, `apps/web/postcss.config.mjs`, `apps/web/src/app/*`                                                                                                                                 | Minimal independently deployable Next.js shell                                           |
+| Smoke test | `scripts/smoke-api.mjs`                                                                                                                                                                                                                                           | Starts the compiled API on a free port, probes endpoints, and verifies graceful shutdown |
+| Docs       | `docs/PRD.md`, `docs/ARCHITECTURE.md`, `docs/RULES.md`, `docs/PHASES.md`, `docs/DESIGN.md`, `docs/MEMORY.md`                                                                                                                                                      | Canonical product, architecture, process, and handoff truth                              |
 
 ## Dependency Order
 
@@ -57,6 +79,7 @@ Canonical docs and root policy
 **Spec mapping:** Canonical Documentation; Scope Boundary; Handoff Boundary.
 
 **Files:**
+
 - Create: `docs/PRD.md`
 - Create: `docs/ARCHITECTURE.md`
 - Create: `docs/RULES.md`
@@ -65,6 +88,7 @@ Canonical docs and root policy
 - Create: `docs/MEMORY.md`
 
 **Interfaces:**
+
 - Consumes: approved Phase 0 specification and the user's master product requirements.
 - Produces: the constraints and status vocabulary every later task follows.
 
@@ -94,7 +118,7 @@ Run:
 
 ```powershell
 rg -n "IMPLEMENTED NOW|PLANNED|UNVALIDATED / NEEDS REVIEW" docs/PRD.md docs/ARCHITECTURE.md docs/RULES.md docs/PHASES.md docs/DESIGN.md docs/MEMORY.md
-rg -n "Redis|queue|worker|Stripe|Razorpay|auth provider|email provider" docs/*.md
+rg -n "Redis|queue|worker|Stripe|Razorpay|auth provider|email provider" docs -g '*.md'
 ```
 
 Expected: all six documents use honest status labels; prohibited Phase 0 infrastructure appears only as planned/excluded text.
@@ -111,6 +135,7 @@ git commit -m "docs: establish takeover product foundations"
 **Spec mapping:** Repository Architecture; Tooling and Commands; Error Handling and Security Baseline.
 
 **Files:**
+
 - Create: `package.json`
 - Create: `pnpm-workspace.yaml`
 - Create: `tsconfig.json`
@@ -126,6 +151,7 @@ git commit -m "docs: establish takeover product foundations"
 - Create: `packages/config/eslint/base.mjs`
 
 **Interfaces:**
+
 - Consumes: Node 24 and pnpm 10.
 - Produces: strict shared TypeScript and ESLint configuration; root commands used by every later task.
 
@@ -173,6 +199,7 @@ git commit -m "chore: establish pnpm workspace tooling"
 **Spec mapping:** Shared Contract Design; `packages/shared`; Testing Strategy.
 
 **Files:**
+
 - Create: `packages/shared/package.json`
 - Create: `packages/shared/tsconfig.json`
 - Create: `packages/shared/src/api.ts`
@@ -183,6 +210,7 @@ git commit -m "chore: establish pnpm workspace tooling"
 - Create: `packages/shared/test/money.test.ts`
 
 **Interfaces:**
+
 - Consumes: Zod only at runtime; shared build configuration.
 - Produces: `apiSuccessSchema`, `apiErrorSchema`, `ApiSuccess<T>`, `ApiError`, `moneySchema`, `Money`, `createMoney`, `CURRENCY_CODE_PATTERN`, and `ERROR_CODES`.
 
@@ -238,8 +266,10 @@ git commit -m "feat: add framework-neutral shared contracts"
 **Spec mapping:** Database Foundation; `packages/database`; Tooling and Commands.
 
 **Files:**
+
 - Create: `packages/database/package.json`
 - Create: `packages/database/tsconfig.json`
+- Create: `packages/database/prisma.config.ts`
 - Create: `packages/database/prisma/schema.prisma`
 - Create: `packages/database/prisma/migrations/20260829000000_initialize_foundation/migration.sql`
 - Create: `packages/database/prisma/migrations/migration_lock.toml`
@@ -248,12 +278,13 @@ git commit -m "feat: add framework-neutral shared contracts"
 - Create: `packages/database/test/client.test.ts`
 
 **Interfaces:**
+
 - Consumes: `DATABASE_URL` for Prisma CLI/runtime use.
 - Produces: `getDatabaseClient(): PrismaClient` and `disconnectDatabase(): Promise<void>`.
 
 - [ ] **Step 1: Write the failing client lifecycle test**
 
-Mock `@prisma/client` and assert repeated `getDatabaseClient()` calls return the same instance and `disconnectDatabase()` calls `$disconnect` only after initialization.
+Mock the generated Prisma client and `PrismaPg` adapter boundary. Assert repeated `getDatabaseClient()` calls return the same instance and `disconnectDatabase()` calls `$disconnect` only after initialization.
 
 - [ ] **Step 2: Run the test to verify the red state**
 
@@ -267,11 +298,11 @@ Expected: failure because lifecycle exports do not exist.
 
 - [ ] **Step 3: Add minimal schema and migration foundation**
 
-Configure the Prisma client generator and PostgreSQL datasource. Define one infrastructure-only `SystemMetadata` model mapped to `system_metadata`, with UUID `id`, unique `key`, string `value`, and timestamps. The migration must enable `pgcrypto` and create only this table/index. Document in the schema that it is not a product-domain model.
+Pin `prisma`, `@prisma/client`, and `@prisma/adapter-pg` to exactly `7.10.0`; add `pg` `8.23.0` and `@types/pg` `8.23.1`. Configure Prisma 7 through `prisma.config.ts`, including schema path, migration path, and `DATABASE_URL`. Use the `prisma-client` generator with an explicit output under `src/generated/prisma`; the schema datasource declares PostgreSQL without a Prisma 6-style `url` field. Define one infrastructure-only `SystemMetadata` model mapped to `system_metadata`, with UUID `id`, unique `key`, string `value`, and timestamps. The migration must enable `pgcrypto` and create only this table/index. Document that it is not a product-domain model.
 
 - [ ] **Step 4: Implement the client lifecycle**
 
-Use one module-scoped client, construct lazily, and clear it after disconnect. Do not connect eagerly and do not read or validate unrelated runtime configuration in this package.
+Use one module-scoped generated Prisma client, construct it lazily with `PrismaPg`, and clear it after disconnect. Accept or resolve a PostgreSQL connection string only when constructing the client; do not connect eagerly and do not validate unrelated runtime configuration in this package. Keep the lifecycle test from Step 1 so the adapter migration does not remove behavioral coverage.
 
 - [ ] **Step 5: Generate and validate Prisma**
 
@@ -319,6 +350,7 @@ git commit -m "feat: establish prisma database package"
 **Spec mapping:** API Runtime Design; `apps/api`; Error Handling and Security Baseline; Testing Strategy.
 
 **Files:**
+
 - Create: `apps/api/package.json`
 - Create: `apps/api/tsconfig.json`
 - Create: `apps/api/src/config/env.ts`
@@ -329,6 +361,7 @@ git commit -m "feat: establish prisma database package"
 - Create: `apps/api/test/health.test.ts`
 
 **Interfaces:**
+
 - Consumes: `@takeover/shared` envelopes and `@takeover/database` shutdown lifecycle.
 - Produces: `parseApiConfig(env)`, `buildApp(options?)`, `GET /health`, `GET /ready`, and an executable server.
 
@@ -383,6 +416,7 @@ git commit -m "feat: add fastify runtime foundation"
 **Spec mapping:** `apps/web`; Repository Architecture; Testing Strategy.
 
 **Files:**
+
 - Create: `apps/web/package.json`
 - Create: `apps/web/tsconfig.json`
 - Create: `apps/web/next-env.d.ts`
@@ -393,12 +427,13 @@ git commit -m "feat: add fastify runtime foundation"
 - Create: `apps/web/src/app/page.tsx`
 
 **Interfaces:**
+
 - Consumes: shared build configuration; no API or database runtime.
 - Produces: a minimal standalone-capable Next.js build and development server.
 
 - [ ] **Step 1: Configure the independent web package**
 
-Use Next.js 15, React 19, TypeScript, Tailwind v4 through `@tailwindcss/postcss`, and `output: 'standalone'`. Provide package-local `dev`, `build`, `start`, `typecheck`, `lint`, and `test` scripts. The Phase 0 test script may use Vitest with `--passWithNoTests` because no product behavior exists.
+Pin Next.js to `15.5.24`, React and React DOM to `19.2.8`, TypeScript to `5.9.3`, and Tailwind CSS plus `@tailwindcss/postcss` to `4.3.3`. Use `output: 'standalone'`. Provide package-local `dev`, `build`, `start`, `typecheck`, `lint`, and `test` scripts. Add one deterministic site-metadata helper test rather than snapshots or placeholder product behavior; do not add territory fixtures or product UI.
 
 - [ ] **Step 2: Implement the minimal shell**
 
@@ -429,10 +464,13 @@ git commit -m "feat: add minimal next web foundation"
 **Spec mapping:** Verification and Completion Criteria; Tooling and Commands; Handoff Boundary.
 
 **Files:**
+
+- Create: `scripts/smoke-api.mjs`
 - Modify: `docs/PHASES.md`
 - Modify: `docs/MEMORY.md`
 
 **Interfaces:**
+
 - Consumes: every Phase 0 deliverable.
 - Produces: evidence-backed Phase 0 status and Codex-to-Claude handoff.
 
@@ -455,18 +493,24 @@ Expected: every command exits 0.
 
 - [ ] **Step 2: Start the compiled API and probe runtime endpoints**
 
-Start `apps/api` on an unused loopback port with production logging, wait until it listens, request `/health` and `/ready`, verify HTTP 200 plus expected JSON envelopes, send termination, and assert a clean exit. Use a PowerShell process with `-WindowStyle Hidden` if a background process is required.
+Create and run `scripts/smoke-api.mjs`. It asks the OS for an unused loopback port, starts `apps/api/dist/server.js` with `API_HOST` and `API_PORT`, polls until healthy, requests `/health`, `/ready`, and an unknown route, verifies the expected envelopes, sends `SIGTERM`, and asserts a clean exit. This cross-platform script replaces shell-specific background-process orchestration.
+
+Run:
+
+```powershell
+node scripts/smoke-api.mjs
+```
 
 Expected response properties:
 
 ```json
-{"data":{"status":"ok"}}
+{ "data": { "status": "ok" } }
 ```
 
 and
 
 ```json
-{"data":{"status":"ready","checks":{"application":"ok"}}}
+{ "data": { "status": "ready", "checks": { "application": "ok" } } }
 ```
 
 Additional envelope fields such as request IDs or timestamps are allowed when documented.
@@ -504,8 +548,8 @@ Record exact commands and results in `MEMORY.md`; enumerate the workspace; state
 Run:
 
 ```powershell
-rg -n "IMPLEMENTED NOW|PLANNED|UNVALIDATED / NEEDS REVIEW" docs/*.md
-rg -n "complete|implemented|working|connected" docs/*.md
+rg -n "IMPLEMENTED NOW|PLANNED|UNVALIDATED / NEEDS REVIEW" docs -g '*.md'
+rg -n "complete|implemented|working|connected" docs -g '*.md'
 ```
 
 Expected: every completion claim is supported by Step 1 or Step 2 evidence; planned product systems remain clearly labeled.
@@ -537,3 +581,4 @@ Expected: clean `main` branch with coherent Phase 0 commits. Do not begin Phase 
 - **Canonical-doc review timing:** Because canonical docs did not exist when this plan was authored, Task 1 requires a plan-to-doc cross-check before Task 2, and Task 7 repeats the truth review after implementation.
 - **Type consistency:** Shared exports consumed by API are named explicitly; database lifecycle signatures are stable across Tasks 4 and 5.
 - **Verification:** All ten approved acceptance criteria have explicit commands or repository inspections in Task 7.
+- **Concurrent-plan reconciliation:** Preserved exact versioning, detailed TDD cases, Prisma 7, and the cross-platform smoke script from the alternate. Rejected Next.js 16, TypeScript 7, Prisma 8 prereleases, permissive peer-dependency settings, docs-after-code ordering, Bash-only verification, and removal of the database lifecycle test.

@@ -2,17 +2,18 @@
 
 ## Current Phase
 
-**Phase 0 — Foundation: IN PROGRESS / UNVALIDATED.** The design specification and implementation plan are approved and committed. Canonical documentation is being established before scaffold code.
+**Phase 0 — Foundation: IN PROGRESS / UNVALIDATED.** Canonical documentation and root pnpm tooling exist. Shared contracts, Prisma, API, web, and final verification remain incomplete.
 
 ## What Works
 
 - **IMPLEMENTED NOW:** Git repository on `main`.
 - **IMPLEMENTED NOW:** Approved Phase 0 design and detailed implementation plan.
+- **IMPLEMENTED NOW:** Six canonical docs and root pnpm/config foundation; `pnpm install` succeeded.
 
 ## Partially Implemented
 
-- Six canonical documents are being created.
-- Monorepo, applications, packages, tests, and verification are not yet present.
+- `packages/config` and root workspace commands exist.
+- Applications, shared/database packages, tests, and full verification are not yet present.
 
 ## Broken / Known Issues
 
@@ -28,6 +29,8 @@
 - `packages/config` contains build-time configuration only.
 - No Redis, queues, workers, providers, or product modules in Phase 0.
 - Money uses safe integer minor units and uppercase three-letter currency codes.
+- Stable Phase 0 versions: Next.js `15.5.24`, React/React DOM `19.2.8`, TypeScript `5.9.3`, Tailwind CSS `4.3.3`, Fastify `5.12.1`, Zod `4.5.2`, and Prisma CLI/client/PostgreSQL adapter `7.10.0` exactly matched.
+- Prisma 7 uses `prisma.config.ts`, explicit generated-client output, and the PostgreSQL driver adapter. Prisma 8 release candidates and TypeScript 7 are excluded.
 
 ## API Contracts
 
@@ -89,4 +92,4 @@ Reason: the territory detail page shows ownership history with logos; without th
 
 - 2026-08-29: Approved lean Phase 0 design committed.
 - 2026-08-29: Detailed implementation plan committed; execution started.
-
+- 2026-08-29: A concurrent alternate plan edit was detected and preserved separately. Next.js 16 was rejected and Next.js 15 retained; Prisma 7 was retained with CLI/client/adapter versions matched exactly. Useful exact-version, TDD, and API-smoke improvements were reconciled into the canonical plan because the approved goal is a stable foundation, not adoption of newer majors by default.

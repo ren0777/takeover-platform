@@ -1,4 +1,6 @@
-# Phase 0 Foundation Implementation Plan
+# Archived Concurrent Phase 0 Plan (Non-Canonical)
+
+> **DO NOT EXECUTE:** Preserved for review history. It contains rejected Next.js 16 and outdated Prisma 7 configuration details. The reconciled canonical plan is `docs/superpowers/plans/2026-08-29-phase-0-foundation.md`.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -31,50 +33,53 @@ Every task's requirements implicitly include this section.
 
 ## File Structure
 
-| Path | Responsibility |
-|---|---|
-| `package.json` | Private root, pins pnpm, orchestrates recursive scripts |
-| `pnpm-workspace.yaml` | Declares `apps/*` and `packages/*` |
-| `tsconfig.json` | Root solution file referencing workspaces |
-| `.gitignore` / `.env.example` | Ignore rules; env names with safe illustrative values only |
-| `.prettierrc.json` / `.prettierignore` | Formatting |
-| `eslint.config.js` | Root flat config consuming `@takeover/config` |
-| `packages/config/tsconfig.base.json` | Strict TS base extended by every workspace |
-| `packages/config/eslint.base.js` | Shared flat ESLint config array |
-| `packages/shared/src/envelope.ts` | `ApiSuccess`/`ApiError` Zod schemas + types |
-| `packages/shared/src/errors.ts` | Stable error-code constants |
-| `packages/shared/src/money.ts` | Money schema, guard, constructor |
-| `packages/shared/src/constants.ts` | Infrastructure-neutral domain constants |
-| `packages/shared/src/index.ts` | Public surface |
-| `packages/database/prisma/schema.prisma` | PostgreSQL schema, infrastructure model only |
-| `packages/database/prisma/migrations/` | Committed initial migration |
-| `packages/database/src/client.ts` | `getDatabaseClient` / `disconnectDatabase` |
-| `apps/api/src/config/env.ts` | Zod-validated runtime configuration |
-| `apps/api/src/plugins/health.ts` | `/health` and `/ready` routes |
-| `apps/api/src/app.ts` | Builds Fastify instance, binds no port |
-| `apps/api/src/server.ts` | Process lifecycle: listen, signals, exit codes |
-| `apps/web/src/app/layout.tsx` | Root layout + metadata |
-| `apps/web/src/app/page.tsx` | Minimal shell |
-| `apps/web/src/app/globals.css` | Tailwind v4 entry |
-| `scripts/smoke-api.mjs` | Starts compiled API, asserts health endpoints |
-| `docs/*.md` | Six canonical documents |
+| Path                                     | Responsibility                                             |
+| ---------------------------------------- | ---------------------------------------------------------- |
+| `package.json`                           | Private root, pins pnpm, orchestrates recursive scripts    |
+| `pnpm-workspace.yaml`                    | Declares `apps/*` and `packages/*`                         |
+| `tsconfig.json`                          | Root solution file referencing workspaces                  |
+| `.gitignore` / `.env.example`            | Ignore rules; env names with safe illustrative values only |
+| `.prettierrc.json` / `.prettierignore`   | Formatting                                                 |
+| `eslint.config.js`                       | Root flat config consuming `@takeover/config`              |
+| `packages/config/tsconfig.base.json`     | Strict TS base extended by every workspace                 |
+| `packages/config/eslint.base.js`         | Shared flat ESLint config array                            |
+| `packages/shared/src/envelope.ts`        | `ApiSuccess`/`ApiError` Zod schemas + types                |
+| `packages/shared/src/errors.ts`          | Stable error-code constants                                |
+| `packages/shared/src/money.ts`           | Money schema, guard, constructor                           |
+| `packages/shared/src/constants.ts`       | Infrastructure-neutral domain constants                    |
+| `packages/shared/src/index.ts`           | Public surface                                             |
+| `packages/database/prisma/schema.prisma` | PostgreSQL schema, infrastructure model only               |
+| `packages/database/prisma/migrations/`   | Committed initial migration                                |
+| `packages/database/src/client.ts`        | `getDatabaseClient` / `disconnectDatabase`                 |
+| `apps/api/src/config/env.ts`             | Zod-validated runtime configuration                        |
+| `apps/api/src/plugins/health.ts`         | `/health` and `/ready` routes                              |
+| `apps/api/src/app.ts`                    | Builds Fastify instance, binds no port                     |
+| `apps/api/src/server.ts`                 | Process lifecycle: listen, signals, exit codes             |
+| `apps/web/src/app/layout.tsx`            | Root layout + metadata                                     |
+| `apps/web/src/app/page.tsx`              | Minimal shell                                              |
+| `apps/web/src/app/globals.css`           | Tailwind v4 entry                                          |
+| `scripts/smoke-api.mjs`                  | Starts compiled API, asserts health endpoints              |
+| `docs/*.md`                              | Six canonical documents                                    |
 
 ---
 
 ### Task 1: Workspace root, shared config, and tooling
 
 **Files:**
+
 - Create: `package.json`, `pnpm-workspace.yaml`, `tsconfig.json`, `.gitignore`, `.env.example`, `.npmrc`
 - Create: `.prettierrc.json`, `.prettierignore`, `eslint.config.js`
 - Create: `packages/config/package.json`, `packages/config/tsconfig.base.json`, `packages/config/eslint.base.js`
 
 **Interfaces:**
+
 - Consumes: nothing (first task)
 - Produces: `@takeover/config` exporting `./tsconfig.base.json` and `./eslint.base.js`; root scripts `dev build typecheck lint test format format:check db:generate db:validate smoke:api`
 
 - [ ] **Step 1: Create the workspace manifest files**
 
 `pnpm-workspace.yaml`:
+
 ```yaml
 packages:
   - 'apps/*'
@@ -82,12 +87,14 @@ packages:
 ```
 
 `.npmrc`:
+
 ```
 strict-peer-dependencies=false
 auto-install-peers=true
 ```
 
 `package.json`:
+
 ```json
 {
   "name": "takeover",
@@ -124,6 +131,7 @@ auto-install-peers=true
 - [ ] **Step 2: Create ignore and environment example files**
 
 `.gitignore`:
+
 ```
 node_modules/
 dist/
@@ -139,6 +147,7 @@ generated/
 ```
 
 `.env.example` — names and safe illustrative values only, no real secrets:
+
 ```
 NODE_ENV=development
 HOST=127.0.0.1
@@ -150,6 +159,7 @@ DATABASE_URL=postgresql://takeover:takeover@localhost:5432/takeover?schema=publi
 - [ ] **Step 3: Create `packages/config`**
 
 `packages/config/package.json`:
+
 ```json
 {
   "name": "@takeover/config",
@@ -167,6 +177,7 @@ DATABASE_URL=postgresql://takeover:takeover@localhost:5432/takeover?schema=publi
 ```
 
 `packages/config/tsconfig.base.json`:
+
 ```json
 {
   "compilerOptions": {
@@ -193,6 +204,7 @@ DATABASE_URL=postgresql://takeover:takeover@localhost:5432/takeover?schema=publi
 ```
 
 `packages/config/eslint.base.js`:
+
 ```js
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
@@ -219,6 +231,7 @@ export default baseConfig;
 - [ ] **Step 4: Create root ESLint and Prettier configuration**
 
 `eslint.config.js`:
+
 ```js
 import { baseConfig } from '@takeover/config/eslint.base.js';
 import reactHooks from 'eslint-plugin-react-hooks';
@@ -248,6 +261,7 @@ export default [
 ```
 
 `.prettierrc.json`:
+
 ```json
 {
   "semi": true,
@@ -258,6 +272,7 @@ export default [
 ```
 
 `.prettierignore`:
+
 ```
 node_modules/
 dist/
@@ -271,6 +286,7 @@ generated/
 - [ ] **Step 5: Create the root TypeScript solution file**
 
 `tsconfig.json`:
+
 ```json
 {
   "files": [],
@@ -304,11 +320,13 @@ git commit -m "chore: establish pnpm workspace root and shared tooling config"
 ### Task 2: `packages/shared` contracts (TDD)
 
 **Files:**
+
 - Create: `packages/shared/package.json`, `packages/shared/tsconfig.json`
 - Create: `packages/shared/src/{money,envelope,errors,constants,index}.ts`
 - Test: `packages/shared/test/{money,envelope}.test.ts`
 
 **Interfaces:**
+
 - Consumes: `@takeover/config/tsconfig.base.json`
 - Produces, imported by `apps/api` and later `apps/web` as `@takeover/shared`:
   - `type Money = { amountMinor: number; currency: string }`
@@ -325,6 +343,7 @@ git commit -m "chore: establish pnpm workspace root and shared tooling config"
 - [ ] **Step 1: Create the package manifest and TS config**
 
 `packages/shared/package.json`:
+
 ```json
 {
   "name": "@takeover/shared",
@@ -345,6 +364,7 @@ git commit -m "chore: establish pnpm workspace root and shared tooling config"
 ```
 
 `packages/shared/tsconfig.json`:
+
 ```json
 {
   "extends": "@takeover/config/tsconfig.base.json",
@@ -360,6 +380,7 @@ git commit -m "chore: establish pnpm workspace root and shared tooling config"
 - [ ] **Step 2: Write the failing money tests**
 
 `packages/shared/test/money.test.ts`:
+
 ```ts
 import { describe, expect, it } from 'vitest';
 import { createMoney, isMoney, moneySchema } from '../src/money.js';
@@ -429,6 +450,7 @@ Expected: FAIL — cannot resolve `../src/money.js`.
 - [ ] **Step 4: Implement money primitives**
 
 `packages/shared/src/money.ts`:
+
 ```ts
 import { z } from 'zod';
 
@@ -468,6 +490,7 @@ Expected: PASS.
 - [ ] **Step 6: Write the failing envelope tests**
 
 `packages/shared/test/envelope.test.ts`:
+
 ```ts
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -518,6 +541,7 @@ Expected: FAIL — cannot resolve `../src/envelope.js`.
 - [ ] **Step 8: Implement envelopes, error codes, and constants**
 
 `packages/shared/src/errors.ts`:
+
 ```ts
 /** Stable, transport-agnostic error codes shared by API and clients. */
 export const ERROR_CODES = {
@@ -531,6 +555,7 @@ export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
 ```
 
 `packages/shared/src/envelope.ts`:
+
 ```ts
 import { z } from 'zod';
 
@@ -567,6 +592,7 @@ export type ApiError = {
 ```
 
 `packages/shared/src/constants.ts`:
+
 ```ts
 /** Infrastructure-neutral constants shared across workspaces. */
 export const DEFAULT_CURRENCY = 'USD';
@@ -579,6 +605,7 @@ export const HEALTH_STATUS = {
 ```
 
 `packages/shared/src/index.ts`:
+
 ```ts
 export { moneySchema, createMoney, isMoney } from './money.js';
 export type { Money } from './money.js';
@@ -606,6 +633,7 @@ git commit -m "feat(shared): add money primitives, API envelopes, and error code
 ### Task 3: `packages/database` — sole Prisma owner
 
 **Files:**
+
 - Create: `packages/database/package.json`, `packages/database/tsconfig.json`
 - Create: `packages/database/prisma/schema.prisma`
 - Create: `packages/database/prisma/migrations/0000_init/migration.sql`
@@ -613,6 +641,7 @@ git commit -m "feat(shared): add money primitives, API envelopes, and error code
 - Create: `packages/database/src/client.ts`, `packages/database/src/index.ts`
 
 **Interfaces:**
+
 - Consumes: `@takeover/config/tsconfig.base.json`
 - Produces, imported by `apps/api` only (never by `apps/web`):
   - `getDatabaseClient(): PrismaClient` — lazily constructs and memoizes a single client
@@ -622,6 +651,7 @@ git commit -m "feat(shared): add money primitives, API envelopes, and error code
 - [ ] **Step 1: Create the package manifest**
 
 `packages/database/package.json`:
+
 ```json
 {
   "name": "@takeover/database",
@@ -645,6 +675,7 @@ git commit -m "feat(shared): add money primitives, API envelopes, and error code
 ```
 
 `packages/database/tsconfig.json`:
+
 ```json
 {
   "extends": "@takeover/config/tsconfig.base.json",
@@ -694,6 +725,7 @@ Note: Prisma 7 may require an explicit `output` path on the `client` generator. 
 `prisma migrate dev` requires a running PostgreSQL server. `prisma migrate diff` does not, so it is used to produce the committed initial migration offline.
 
 Run:
+
 ```bash
 mkdir -p packages/database/prisma/migrations/0000_init
 pnpm --filter @takeover/database exec prisma migrate diff \
@@ -703,6 +735,7 @@ pnpm --filter @takeover/database exec prisma migrate diff \
 ```
 
 Then create `packages/database/prisma/migrations/migration_lock.toml`:
+
 ```toml
 # Please do not edit this file manually
 provider = "postgresql"
@@ -713,6 +746,7 @@ Expected: `migration.sql` contains a `CREATE TABLE "infrastructure_metadata"` st
 - [ ] **Step 4: Implement the client lifecycle**
 
 `packages/database/src/client.ts`:
+
 ```ts
 import { PrismaClient } from '@prisma/client';
 
@@ -742,6 +776,7 @@ export async function disconnectDatabase(): Promise<void> {
 ```
 
 `packages/database/src/index.ts`:
+
 ```ts
 export { getDatabaseClient, disconnectDatabase, isDatabaseInitialized } from './client.js';
 ```
@@ -769,6 +804,7 @@ git commit -m "feat(database): add prisma postgresql foundation and client lifec
 ### Task 4: `apps/api` — Fastify foundation (TDD)
 
 **Files:**
+
 - Create: `apps/api/package.json`, `apps/api/tsconfig.json`, `apps/api/tsconfig.build.json`
 - Create: `apps/api/src/config/env.ts`
 - Create: `apps/api/src/plugins/health.ts`
@@ -776,6 +812,7 @@ git commit -m "feat(database): add prisma postgresql foundation and client lifec
 - Test: `apps/api/test/{env,health}.test.ts`
 
 **Interfaces:**
+
 - Consumes: `@takeover/shared` (`ERROR_CODES`, `HEALTH_STATUS`, `ApiSuccess`), `@takeover/database` (`disconnectDatabase`, `isDatabaseInitialized`)
 - Produces:
   - `loadConfig(source?: NodeJS.ProcessEnv): AppConfig` where `AppConfig = { nodeEnv: 'development' | 'test' | 'production'; host: string; port: number; logLevel: 'fatal'|'error'|'warn'|'info'|'debug'|'trace'; databaseUrl?: string }`
@@ -785,6 +822,7 @@ git commit -m "feat(database): add prisma postgresql foundation and client lifec
 - [ ] **Step 1: Create the manifest and TS configs**
 
 `apps/api/package.json`:
+
 ```json
 {
   "name": "@takeover/api",
@@ -815,6 +853,7 @@ git commit -m "feat(database): add prisma postgresql foundation and client lifec
 ```
 
 `apps/api/tsconfig.json`:
+
 ```json
 {
   "extends": "@takeover/config/tsconfig.base.json",
@@ -830,6 +869,7 @@ git commit -m "feat(database): add prisma postgresql foundation and client lifec
 ```
 
 `apps/api/tsconfig.build.json`:
+
 ```json
 {
   "extends": "./tsconfig.json",
@@ -841,6 +881,7 @@ git commit -m "feat(database): add prisma postgresql foundation and client lifec
 - [ ] **Step 2: Write the failing config tests**
 
 `apps/api/test/env.test.ts`:
+
 ```ts
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config/env.js';
@@ -903,6 +944,7 @@ Expected: FAIL — cannot resolve `../src/config/env.js`.
 - [ ] **Step 4: Implement configuration validation**
 
 `apps/api/src/config/env.ts`:
+
 ```ts
 import { z } from 'zod';
 
@@ -962,6 +1004,7 @@ Expected: PASS.
 - [ ] **Step 6: Write the failing health tests**
 
 `apps/api/test/health.test.ts`:
+
 ```ts
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
@@ -1039,6 +1082,7 @@ Expected: FAIL — cannot resolve `../src/app.js`.
 - [ ] **Step 8: Implement the health plugin**
 
 `apps/api/src/plugins/health.ts`:
+
 ```ts
 import type { FastifyInstance } from 'fastify';
 import { HEALTH_STATUS } from '@takeover/shared';
@@ -1071,6 +1115,7 @@ export async function healthPlugin(app: FastifyInstance): Promise<void> {
 - [ ] **Step 9: Implement `app.ts`**
 
 `apps/api/src/app.ts`:
+
 ```ts
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ERROR_CODES } from '@takeover/shared';
@@ -1089,11 +1134,7 @@ export function buildApp(overrides: Partial<AppConfig> = {}): FastifyInstance {
     logger: {
       level: overrides.logLevel ?? 'info',
       redact: {
-        paths: [
-          'req.headers.authorization',
-          'req.headers.cookie',
-          'res.headers["set-cookie"]',
-        ],
+        paths: ['req.headers.authorization', 'req.headers.cookie', 'res.headers["set-cookie"]'],
         censor: '[redacted]',
       },
     },
@@ -1141,6 +1182,7 @@ Expected: PASS (all env and health tests).
 - [ ] **Step 11: Implement `server.ts` process lifecycle**
 
 `apps/api/src/server.ts`:
+
 ```ts
 import { disconnectDatabase, isDatabaseInitialized } from '@takeover/database';
 import { buildApp } from './app.js';
@@ -1202,12 +1244,14 @@ git commit -m "feat(api): add validated config, health routes, and process lifec
 ### Task 5: `apps/web` — minimal Next.js shell
 
 **Files:**
+
 - Create: `apps/web/package.json`, `apps/web/tsconfig.json`, `apps/web/next.config.ts`, `apps/web/postcss.config.mjs`
 - Create: `apps/web/src/app/{layout.tsx,page.tsx,globals.css}`
 - Create: `apps/web/src/lib/site.ts`
 - Test: `apps/web/test/site.test.ts`
 
 **Interfaces:**
+
 - Consumes: `@takeover/shared` (proves the cross-workspace import path works)
 - Produces: `SITE = { name: 'TakeOver', tagline: 'Own a piece of the internet.' }`, `buildPageTitle(pageName?: string): string`
 
@@ -1216,6 +1260,7 @@ Phase 0 adds no product UI. The one extracted function exists so the web app has
 - [ ] **Step 1: Create the manifest and configs**
 
 `apps/web/package.json`:
+
 ```json
 {
   "name": "@takeover/web",
@@ -1247,6 +1292,7 @@ Phase 0 adds no product UI. The one extracted function exists so the web app has
 ```
 
 `apps/web/tsconfig.json`:
+
 ```json
 {
   "extends": "@takeover/config/tsconfig.base.json",
@@ -1261,12 +1307,19 @@ Phase 0 adds no product UI. The one extracted function exists so the web app has
     "plugins": [{ "name": "next" }],
     "paths": { "@/*": ["./src/*"] }
   },
-  "include": ["next-env.d.ts", "src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", ".next/types/**/*.ts"],
+  "include": [
+    "next-env.d.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "test/**/*.ts",
+    ".next/types/**/*.ts"
+  ],
   "exclude": ["node_modules"]
 }
 ```
 
 `apps/web/next.config.ts`:
+
 ```ts
 import type { NextConfig } from 'next';
 
@@ -1279,6 +1332,7 @@ export default nextConfig;
 ```
 
 `apps/web/postcss.config.mjs`:
+
 ```js
 const config = {
   plugins: { '@tailwindcss/postcss': {} },
@@ -1290,6 +1344,7 @@ export default config;
 - [ ] **Step 2: Write the failing site test**
 
 `apps/web/test/site.test.ts`:
+
 ```ts
 import { describe, expect, it } from 'vitest';
 import { SITE, buildPageTitle } from '../src/lib/site.js';
@@ -1323,6 +1378,7 @@ Expected: FAIL — cannot resolve `../src/lib/site.js`.
 - [ ] **Step 4: Implement the site metadata helper**
 
 `apps/web/src/lib/site.ts`:
+
 ```ts
 export const SITE = {
   name: 'TakeOver',
@@ -1347,6 +1403,7 @@ Expected: PASS.
 - [ ] **Step 6: Create the Tailwind v4 stylesheet and app shell**
 
 `apps/web/src/app/globals.css`:
+
 ```css
 @import 'tailwindcss';
 
@@ -1367,6 +1424,7 @@ body {
 Note: this is the minimal token set Phase 0 needs to render a styled shell. The full TakeOver design system (owner/challenger/contested/premium semantics, typography, radii) is specified in `docs/DESIGN.md` and implemented during the frontend milestone, not here.
 
 `apps/web/src/app/layout.tsx`:
+
 ```tsx
 import type { Metadata } from 'next';
 import { SITE, buildPageTitle } from '@/lib/site';
@@ -1387,6 +1445,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 ```
 
 `apps/web/src/app/page.tsx`:
+
 ```tsx
 import { SITE } from '@/lib/site';
 
@@ -1424,26 +1483,25 @@ git commit -m "feat(web): add minimal next.js shell with tailwind v4 foundation"
 ### Task 6: Root test orchestration and API runtime smoke check
 
 **Files:**
+
 - Create: `vitest.config.ts` (root, workspace projects)
 - Create: `scripts/smoke-api.mjs`
 
 **Interfaces:**
+
 - Consumes: `apps/api/dist/server.js` from Task 4
 - Produces: `pnpm test` runs every workspace suite in one pass; `pnpm smoke:api` proves the compiled API serves both health endpoints and shuts down cleanly
 
 - [ ] **Step 1: Create the root Vitest configuration**
 
 `vitest.config.ts`:
+
 ```ts
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    projects: [
-      'packages/shared',
-      'apps/api',
-      'apps/web',
-    ],
+    projects: ['packages/shared', 'apps/api', 'apps/web'],
   },
 });
 ```
@@ -1493,7 +1551,13 @@ const port = await findFreePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 const child = spawn(process.execPath, ['apps/api/dist/server.js'], {
-  env: { ...process.env, NODE_ENV: 'production', HOST: '127.0.0.1', PORT: String(port), LOG_LEVEL: 'warn' },
+  env: {
+    ...process.env,
+    NODE_ENV: 'production',
+    HOST: '127.0.0.1',
+    PORT: String(port),
+    LOG_LEVEL: 'warn',
+  },
   stdio: ['ignore', 'inherit', 'inherit'],
 });
 
@@ -1568,9 +1632,11 @@ git commit -m "chore: add root test orchestration and api runtime smoke check"
 ### Task 7: The six canonical documents
 
 **Files:**
+
 - Create: `docs/PRD.md`, `docs/ARCHITECTURE.md`, `docs/RULES.md`, `docs/PHASES.md`, `docs/DESIGN.md`, `docs/MEMORY.md`
 
 **Interfaces:**
+
 - Consumes: the verified state produced by Tasks 1–6
 - Produces: the shared documentation both agents read at session start
 
@@ -1653,9 +1719,11 @@ git commit -m "docs: add six canonical project documents"
 ### Task 8: Full Phase 0 acceptance verification
 
 **Files:**
+
 - Modify: `docs/PHASES.md`, `docs/MEMORY.md` (record real results)
 
 **Interfaces:**
+
 - Consumes: everything from Tasks 1–7
 - Produces: an honest Phase 0 status
 
@@ -1708,22 +1776,22 @@ git commit -m "docs: record phase 0 verification results and remaining blockers"
 
 **1. Spec coverage.** Each spec requirement maps to a task:
 
-| Spec requirement | Task |
-|---|---|
-| Git init with `main` | Already done (commit `d071581`) |
-| pnpm workspace with five workspaces | 1, 2, 3, 4, 5 |
-| Six canonical documents | 7 |
-| Minimal Next 15+/React 19/TS/Tailwind v4 web app | 5 |
-| Minimal Fastify API, `app.ts` / `server.ts` split | 4 |
-| Runtime configuration validation | 4 |
-| Pino structured logging, redaction, request IDs | 4 |
-| Graceful shutdown, exit codes | 4 |
-| Liveness and readiness endpoints | 4, 6 |
-| Shared contracts, constants, money primitives | 2 |
-| PostgreSQL/Prisma config, client lifecycle, initial migration, validation | 3 |
-| Strict TS, ESLint, Prettier, Vitest, root commands | 1, 6 |
-| Verification of install/lint/test/build/prisma/startup/health | 8 |
-| Exclusions honored (no auth, payments, product models, Redis, queues) | Global Constraints; verified in 8 Step 2 |
+| Spec requirement                                                          | Task                                     |
+| ------------------------------------------------------------------------- | ---------------------------------------- |
+| Git init with `main`                                                      | Already done (commit `d071581`)          |
+| pnpm workspace with five workspaces                                       | 1, 2, 3, 4, 5                            |
+| Six canonical documents                                                   | 7                                        |
+| Minimal Next 15+/React 19/TS/Tailwind v4 web app                          | 5                                        |
+| Minimal Fastify API, `app.ts` / `server.ts` split                         | 4                                        |
+| Runtime configuration validation                                          | 4                                        |
+| Pino structured logging, redaction, request IDs                           | 4                                        |
+| Graceful shutdown, exit codes                                             | 4                                        |
+| Liveness and readiness endpoints                                          | 4, 6                                     |
+| Shared contracts, constants, money primitives                             | 2                                        |
+| PostgreSQL/Prisma config, client lifecycle, initial migration, validation | 3                                        |
+| Strict TS, ESLint, Prettier, Vitest, root commands                        | 1, 6                                     |
+| Verification of install/lint/test/build/prisma/startup/health             | 8                                        |
+| Exclusions honored (no auth, payments, product models, Redis, queues)     | Global Constraints; verified in 8 Step 2 |
 
 **2. Placeholder scan.** No "TBD", no "add error handling", no "similar to Task N". Two implementation notes flag genuine tool-behavior uncertainty (Prisma 7 generator `output`, Vitest 4 project configs) and each states the exact fallback and requires recording the outcome — these are contingencies with defined resolutions, not deferred decisions.
 

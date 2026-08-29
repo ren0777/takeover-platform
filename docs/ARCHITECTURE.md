@@ -4,9 +4,9 @@
 
 ## System Overview
 
-### Phase 0 boundary — UNVALIDATED / NEEDS REVIEW
+### Phase 0 boundary — IN PROGRESS / UNVALIDATED
 
-The approved foundation is a pnpm workspace with two independent deployment units and three shared packages. Only the design/plan and canonical docs exist at this point; runnable applications will be labeled implemented only after verification.
+The pnpm workspace root, shared build configuration, design/plan, and canonical docs exist. The two deployment units and remaining shared packages are still being implemented; runnable applications will be labeled implemented only after verification.
 
 ```mermaid
 flowchart LR
@@ -47,7 +47,7 @@ Future modules live under `apps/api/src/modules/<feature>` only when implemented
 
 ## Database Architecture
 
-- **PLANNED FOR PHASE 0:** PostgreSQL datasource, Prisma client generation, one infrastructure metadata model/migration, and lazy client lifecycle.
+- **PLANNED FOR PHASE 0:** Prisma `7.10.0` CLI, client, and PostgreSQL adapter pinned to the exact same version; `prisma.config.ts`; explicit generated-client output; PostgreSQL driver adapter; one infrastructure metadata model/migration; and lazy client lifecycle.
 - **PLANNED:** Product models include User, Company, CompanyMember, CompanyVerification, TerritoryCategory, Territory, TerritoryOwnership, Bid, Payment, PaymentEvent, WebhookEvent, Season, SeasonCompanyStats, SeasonTerritoryStats, LeaderboardSnapshot, Battle, BattleParticipant, BattleEvent, ActivityEvent, AuditLog, and AdminAction.
 - **UNVALIDATED / NEEDS REVIEW:** Exact columns, enum strategy, deletion policy, contention definition, season reset policy, battle scoring, and payment-refund state repair.
 
@@ -246,12 +246,12 @@ Use managed PostgreSQL point-in-time recovery, encrypted backups, documented ret
 
 ### Phase 0 planned variables
 
-| Variable | Scope | Purpose |
-| --- | --- | --- |
-| `NODE_ENV` | API/server | Runtime mode |
-| `API_HOST` | API | Listen host |
-| `API_PORT` | API | Listen port |
-| `LOG_LEVEL` | API | Pino level |
+| Variable       | Scope            | Purpose                   |
+| -------------- | ---------------- | ------------------------- |
+| `NODE_ENV`     | API/server       | Runtime mode              |
+| `API_HOST`     | API              | Listen host               |
+| `API_PORT`     | API              | Listen port               |
+| `LOG_LEVEL`    | API              | Pino level                |
 | `DATABASE_URL` | Prisma/API later | PostgreSQL connection URL |
 
 Provider/auth/email secrets are not defined in Phase 0.
@@ -260,4 +260,3 @@ Provider/auth/email secrets are not defined in Phase 0.
 
 - **IMPLEMENTED NOW:** None.
 - **PLANNED:** PostgreSQL runtime, one identity/email approach, DNS verification lookup, Stripe payment adapter, optional later Razorpay adapter, monitoring/error reporting, and SSE-compatible deployment.
-

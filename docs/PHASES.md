@@ -15,8 +15,8 @@
 - [x] Audit the initially empty repository.
 - [x] Approve and commit the Phase 0 design specification.
 - [x] Approve and commit the detailed implementation plan.
-- [ ] Create and cross-check all six canonical docs.
-- [ ] Establish pnpm workspaces and strict shared tooling.
+- [x] Create and cross-check all six canonical docs (`470d31c`).
+- [x] Establish pnpm workspaces and strict shared tooling; verify `pnpm install` (`c71f2f5`).
 - [ ] Create/test framework-neutral shared contracts.
 - [ ] Create/validate the Prisma/PostgreSQL foundation.
 - [ ] Create/test the Fastify runtime and health endpoints.
@@ -172,4 +172,3 @@
 **Tests:** load, soak, concurrency, failover, backup restore, migration rollback/recovery, dependency/security scan, payment/provider suite, and deployment smoke tests.
 
 **Risks:** incomplete observability, provider outage, database saturation, migration downtime, credential exposure, and launching with untested recovery.
-

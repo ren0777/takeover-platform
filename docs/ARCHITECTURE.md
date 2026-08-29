@@ -278,14 +278,14 @@ Provider, email, token-pepper, and session secrets are not defined in Phase 0. P
 
 ### Phase 1 planned identity defaults
 
-| Setting | Default |
-| --- | ---: |
-| Email verification TTL | 15 minutes |
+| Setting                           |    Default |
+| --------------------------------- | ---------: |
+| Email verification TTL            | 15 minutes |
 | Management/access-review link TTL | 15 minutes |
-| Management session TTL | 8 hours |
-| Access request TTL | 7 days |
-| Company draft TTL | 24 hours |
-| Recovery request TTL | 7 days |
+| Management session TTL            |    8 hours |
+| Access request TTL                |     7 days |
+| Company draft TTL                 |   24 hours |
+| Recovery request TTL              |     7 days |
 
 The Phase 1 API validates these as runtime configuration. Management cookies are opaque and server-resolved, `HttpOnly`, `Secure` in production, `SameSite=Lax` by default, have no `Domain`, and use `Path=/api`.
 

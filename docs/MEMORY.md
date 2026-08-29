@@ -24,6 +24,7 @@
 
 - No product API, company/contact identity, email delivery, management capability, territory, bidding, payment, ownership, activity, season, battle, or admin functionality exists.
 - No PostgreSQL instance is provisioned; `prisma migrate deploy` and runtime queries are unvalidated.
+- Claude observed an intermittent cold-start timeout in `apps/api/test/health.test.ts` under full-suite parallel load. It passes in isolation. Baseline evidence on 2026-08-30 passed under the full workspace run, with the file completing in 628 ms and its first test in 599 ms. Do not mask a real startup defect; gather repeated-load evidence before adding an explicit timeout or optimizing setup.
 
 ## Important Architectural Decisions
 

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node.js 24.12.0, pnpm 10.32.1, TypeScript 5.9.3 strict mode, Next.js 15.5.24, React 19.2.8, Tailwind CSS 4.3.3, Fastify 5.12.1, Zod 4.5.2, Prisma 7.10.0 with PostgreSQL, Vitest 3.2.7, ESLint 9.39.5, Prettier 3.9.6.
 
-**Execution status:** Canonical docs are committed in `470d31c`; root workspace tooling and a successful `pnpm install` are committed in `c71f2f5`. Tasks 3 through 7 remain unimplemented and unverified.
+**Execution status:** All Phase 0 tasks and approved local/offline acceptance checks are implemented and verified. Applying the migration and querying a live PostgreSQL instance remain unvalidated because no database was provisioned.
 
 ## Approved Version Matrix
 
@@ -298,7 +298,7 @@ Expected: failure because lifecycle exports do not exist.
 
 - [ ] **Step 3: Add minimal schema and migration foundation**
 
-Pin `prisma`, `@prisma/client`, and `@prisma/adapter-pg` to exactly `7.10.0`; add `pg` `8.23.0` and `@types/pg` `8.23.1`. Configure Prisma 7 through `prisma.config.ts`, including schema path, migration path, and `DATABASE_URL`. Use the `prisma-client` generator with an explicit output under `src/generated/prisma`; the schema datasource declares PostgreSQL without a Prisma 6-style `url` field. Define one infrastructure-only `SystemMetadata` model mapped to `system_metadata`, with UUID `id`, unique `key`, string `value`, and timestamps. The migration must enable `pgcrypto` and create only this table/index. Document that it is not a product-domain model.
+Pin `prisma`, `@prisma/client`, and `@prisma/adapter-pg` to exactly `7.10.0`; add `pg` `8.23.0` and `@types/pg` `8.23.1`. Configure Prisma 7 through `prisma.config.ts`, including schema path, migration path, and `DATABASE_URL`. Use the `prisma-client` generator with an explicit output under `src/generated/prisma`; the schema datasource declares PostgreSQL without a Prisma 6-style `url` field. Define one infrastructure-only `SystemMetadata` model mapped to `system_metadata`, with UUID `id`, unique `key`, string `value`, and timestamps. Keep the migration aligned with offline `prisma migrate diff`; Prisma generates the UUID client-side, so no `pgcrypto` extension or database UUID default is introduced. Document that this is not a product-domain model.
 
 - [ ] **Step 4: Implement the client lifecycle**
 
@@ -429,11 +429,11 @@ git commit -m "feat: add fastify runtime foundation"
 **Interfaces:**
 
 - Consumes: shared build configuration; no API or database runtime.
-- Produces: a minimal standalone-capable Next.js build and development server.
+- Produces: a minimal independently deployable Next.js build and development server.
 
 - [ ] **Step 1: Configure the independent web package**
 
-Pin Next.js to `15.5.24`, React and React DOM to `19.2.8`, TypeScript to `5.9.3`, and Tailwind CSS plus `@tailwindcss/postcss` to `4.3.3`. Use `output: 'standalone'`. Provide package-local `dev`, `build`, `start`, `typecheck`, `lint`, and `test` scripts. Add one deterministic site-metadata helper test rather than snapshots or placeholder product behavior; do not add territory fixtures or product UI.
+Pin Next.js to `15.5.24`, React and React DOM to `19.2.8`, TypeScript to `5.9.3`, and Tailwind CSS plus `@tailwindcss/postcss` to `4.3.3`. Use the standard `next build` / `next start` deployment output; optional standalone packaging is not retained because Windows denied pnpm symlink creation during verification. Provide package-local `dev`, `build`, `start`, `typecheck`, `lint`, and `test` scripts. Add one deterministic site-metadata helper test rather than snapshots or placeholder product behavior; do not add territory fixtures or product UI.
 
 - [ ] **Step 2: Implement the minimal shell**
 
@@ -450,7 +450,7 @@ pnpm --filter @takeover/web test
 pnpm --filter @takeover/web build
 ```
 
-Expected: all commands exit 0 and `.next/standalone` exists.
+Expected: all commands exit 0 and the standard `.next` production output exists.
 
 - [ ] **Step 4: Commit web foundation**
 

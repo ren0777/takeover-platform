@@ -1,12 +1,12 @@
 # TakeOver.com Architecture
 
-> **Current status:** Phase 0 is **IN PROGRESS / UNVALIDATED**. Sections labeled **IMPLEMENTED NOW** describe files already committed; **PLANNED** diagrams describe intended product flows, not working systems; **UNVALIDATED / NEEDS REVIEW** marks unresolved choices.
+> **Current status:** Phase 0 acceptance is **IMPLEMENTED NOW / VERIFIED**. Applying the migration and executing queries against a live PostgreSQL instance are **UNVALIDATED / NEEDS REVIEW**. **PLANNED** diagrams describe intended product flows, not working systems.
 
 ## System Overview
 
-### Phase 0 boundary — IN PROGRESS / UNVALIDATED
+### Phase 0 boundary — IMPLEMENTED NOW
 
-The pnpm workspace root, shared build configuration, design/plan, and canonical docs exist. The two deployment units and remaining shared packages are still being implemented; runnable applications will be labeled implemented only after verification.
+The pnpm workspace, shared build configuration, canonical docs, independently buildable web/API applications, shared contracts, Prisma package, tests, and runtime smoke check exist and pass the Phase 0 acceptance suite.
 
 ```mermaid
 flowchart LR
@@ -32,14 +32,14 @@ flowchart LR
 
 ## Frontend and Backend Boundaries
 
-- **PLANNED:** `apps/web` owns product presentation, browser behavior, and frontend orchestration. It does not decide ownership, price legality, verification, payment success, rankings, or scores.
-- **PLANNED:** `apps/api` owns HTTP/SSE delivery, application services, authorization, transactional domain workflows, integrations, and backend observability.
-- **PLANNED:** `@takeover/shared` is the sole shared contract source. Frontend-only view models remain clearly presentation-specific.
-- **PLANNED:** `@takeover/database` is server-only and the sole Prisma owner.
+- **IMPLEMENTED NOW:** `apps/web` is an independent minimal presentation deployment and does not import database code. Product presentation and orchestration remain planned.
+- **IMPLEMENTED NOW:** `apps/api` is an independent Fastify deployment with infrastructure routes. Product services, authorization, transactions, integrations, and SSE remain planned.
+- **IMPLEMENTED NOW:** `@takeover/shared` is the sole shared contract source. Frontend-only view models may remain clearly presentation-specific.
+- **IMPLEMENTED NOW:** `@takeover/database` is server-only and the sole Prisma owner.
 
 ## API Runtime
 
-### Phase 0 — PLANNED
+### Phase 0 — IMPLEMENTED NOW
 
 `app.ts` constructs Fastify for injection or hosting; `server.ts` owns environment parsing, listening, signals, shutdown, and exit behavior. Infrastructure plugins remain focused. Phase 0 exposes liveness and application readiness without claiming database readiness.
 
@@ -47,7 +47,9 @@ Future modules live under `apps/api/src/modules/<feature>` only when implemented
 
 ## Database Architecture
 
-- **PLANNED FOR PHASE 0:** Prisma `7.10.0` CLI, client, and PostgreSQL adapter pinned to the exact same version; `prisma.config.ts`; explicit generated-client output; PostgreSQL driver adapter; one infrastructure metadata model/migration; and lazy client lifecycle.
+- **IMPLEMENTED NOW:** Prisma `7.10.0` CLI, client, and PostgreSQL adapter are pinned exactly; `prisma.config.ts` owns CLI configuration; the generated client has explicit output; `PrismaPg` supplies the driver adapter; one infrastructure-only `SystemMetadata` model/migration and a tested lazy client lifecycle exist.
+- **IMPLEMENTED NOW:** The initial SQL migration matches the offline `prisma migrate diff` shape. UUID generation remains Prisma-client-side, so the migration introduces no `pgcrypto` dependency or database default.
+- **UNVALIDATED / NEEDS REVIEW:** The migration has not been applied to a live PostgreSQL instance and no runtime query has been executed.
 - **PLANNED:** Product models include User, Company, CompanyMember, CompanyVerification, TerritoryCategory, Territory, TerritoryOwnership, Bid, Payment, PaymentEvent, WebhookEvent, Season, SeasonCompanyStats, SeasonTerritoryStats, LeaderboardSnapshot, Battle, BattleParticipant, BattleEvent, ActivityEvent, AuditLog, and AdminAction.
 - **UNVALIDATED / NEEDS REVIEW:** Exact columns, enum strategy, deletion policy, contention definition, season reset policy, battle scoring, and payment-refund state repair.
 
@@ -224,18 +226,19 @@ Audit records capture actor, action, target, safe before/after context, request 
 ## Rate Limiting and Security
 
 - **PLANNED:** Endpoint-specific rate limiting, secure session cookies, CSRF strategy, request-size limits, URL/SSRF protections, provider signature validation, replay protection, and abuse signals.
-- **PLANNED FOR PHASE 0:** environment validation, safe errors, structured logging, request IDs, and conventional secret redaction.
+- **IMPLEMENTED NOW:** environment validation, safe errors, structured logging, request IDs, and conventional secret redaction.
 - ORM use does not replace authorization or database constraints.
 
 ## Deployment
 
-- **PLANNED FOR PHASE 0:** independent production builds for `apps/web` and `apps/api`.
+- **IMPLEMENTED NOW:** independent production builds for `apps/web` and `apps/api`; the web application deploys with the standard Next.js `next build` / `next start` output.
+- **UNVALIDATED / NEEDS REVIEW:** Next's optional `output: 'standalone'` packaging was not retained because pnpm symlink creation was denied by this Windows environment. It is not required for Vercel or standard `next start` deployment and can be re-evaluated in the actual deployment environment.
 - **UNVALIDATED / NEEDS REVIEW:** hosting providers, regions, domain topology, TLS termination, database connection pooling, migration runner, autoscaling, and SSE compatibility.
 - Web remains Vercel-compatible. API can deploy independently to a Node-compatible platform.
 
 ## Observability
 
-- **PLANNED FOR PHASE 0:** structured application/request logs and health/readiness endpoints.
+- **IMPLEMENTED NOW:** structured application/request logs with credential redaction, request IDs, `/health`, and application-only `/ready`.
 - **PLANNED:** metrics for latency, errors, database pool, payment/webhook outcomes, transaction conflicts, event lag, and season jobs; tracing across provider callbacks; alerts and runbooks.
 
 ## Backup Strategy — PLANNED
@@ -244,7 +247,7 @@ Use managed PostgreSQL point-in-time recovery, encrypted backups, documented ret
 
 ## Environment Variables
 
-### Phase 0 planned variables
+### Phase 0 implemented variables
 
 | Variable       | Scope            | Purpose                   |
 | -------------- | ---------------- | ------------------------- |
@@ -258,5 +261,5 @@ Provider/auth/email secrets are not defined in Phase 0.
 
 ## External Integrations
 
-- **IMPLEMENTED NOW:** None.
+- **IMPLEMENTED NOW:** No external service connection. The PostgreSQL driver and Prisma adapter are installed but no live database was contacted.
 - **PLANNED:** PostgreSQL runtime, one identity/email approach, DNS verification lookup, Stripe payment adapter, optional later Razorpay adapter, monitoring/error reporting, and SSE-compatible deployment.

@@ -1,6 +1,6 @@
 # TakeOver.com Engineering Constitution
 
-> **Status:** These rules are **IMPLEMENTED NOW** as project policy. Enforcement automation is **UNVALIDATED / NEEDS REVIEW** until Phase 0 checks pass.
+> **Status:** These rules are **IMPLEMENTED NOW** as project policy. Phase 0 TypeScript, lint, formatting, test, and boundary enforcement is verified; product-domain enforcement remains **PLANNED** with its features.
 
 ## Correctness Rules
 

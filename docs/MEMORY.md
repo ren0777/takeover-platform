@@ -2,23 +2,28 @@
 
 ## Current Phase
 
-**Phase 0 — Foundation: IN PROGRESS / UNVALIDATED.** Canonical documentation and root pnpm tooling exist. Shared contracts, Prisma, API, web, and final verification remain incomplete.
+**Phase 0 — Foundation: IMPLEMENTED NOW / ACCEPTANCE VERIFIED.** Do not start Phase 1 without explicit approval. Live PostgreSQL migration application and runtime queries remain **UNVALIDATED / NEEDS REVIEW**.
 
 ## What Works
 
 - **IMPLEMENTED NOW:** Git repository on `main`.
 - **IMPLEMENTED NOW:** Approved Phase 0 design and detailed implementation plan.
 - **IMPLEMENTED NOW:** Six canonical docs and root pnpm/config foundation; `pnpm install` succeeded.
+- **IMPLEMENTED NOW:** `@takeover/shared` API envelopes, stable errors, constants, and integer-minor-unit money primitives.
+- **IMPLEMENTED NOW:** Prisma 7 schema/config, generated-client lifecycle, infrastructure migration, and offline validation/diff.
+- **IMPLEMENTED NOW:** Fastify API config validation, structured logging, safe errors, `/health`, `/ready`, and graceful shutdown.
+- **IMPLEMENTED NOW:** Minimal Next.js 15/React 19/Tailwind v4 web shell.
+- **IMPLEMENTED NOW:** 31 tests and the complete Phase 0 acceptance suite pass.
 
-## Partially Implemented
+## Partially Implemented / Unvalidated
 
-- `packages/config` and root workspace commands exist.
-- Applications, shared/database packages, tests, and full verification are not yet present.
+- The PostgreSQL adapter and migration exist, but no live PostgreSQL server was contacted.
+- Next.js standard production output is verified. Optional standalone packaging is unvalidated because Windows denied pnpm symlink creation.
 
 ## Broken / Known Issues
 
-- No runnable application exists yet.
-- No PostgreSQL instance is provisioned or validated.
+- No product API, authentication, territory, bidding, payment, ownership, activity, season, battle, or admin functionality exists.
+- No PostgreSQL instance is provisioned; `prisma migrate deploy` and runtime queries are unvalidated.
 
 ## Important Architectural Decisions
 
@@ -34,21 +39,47 @@
 
 ## API Contracts
 
-**PLANNED FOR PHASE 0:**
+**IMPLEMENTED NOW:**
 
 - `GET /health` → `{ "data": { "status": "ok" } }`
 - `GET /ready` → `{ "data": { "status": "ready", "checks": { "application": "ok" } } }`
 - Errors → `{ "error": { "code": string, "message": string, "requestId"?: string, "details"?: unknown } }`
 
-No product API contract exists.
+Both success endpoints include `meta.requestId`; `/health` also includes `uptimeSeconds`. `/ready` checks application initialization only and intentionally makes no database-readiness claim. No product API contract exists.
 
 ## Database Changes
 
-No database schema or migration exists yet. A minimal PostgreSQL/Prisma infrastructure foundation is planned; no product model is implemented.
+Prisma owns one infrastructure-only `SystemMetadata` model and the committed `20260829000000_initialize_foundation` migration. Prisma CLI, client, and PostgreSQL adapter are exactly `7.10.0`. Offline generation, validation, and migration diff pass; live application is unvalidated. No product model exists.
+
+## Important Commands
+
+- `pnpm dev` — run web and API development servers.
+- `pnpm build` — build all packages and deployable applications.
+- `pnpm typecheck`, `pnpm lint`, `pnpm test` — workspace validation.
+- `pnpm format` / `pnpm format:check` — formatting.
+- `pnpm db:generate` / `pnpm db:validate` — offline Prisma checks; set `DATABASE_URL` to a syntactically valid PostgreSQL URL.
+- `pnpm smoke:api` — start the compiled API, probe health/readiness/404, and verify graceful shutdown.
+
+## Workspace Structure
+
+```text
+apps/
+  api/       Fastify runtime, config, health plugin, tests
+  web/       Next.js App Router shell, Tailwind v4, tests
+packages/
+  config/    shared TypeScript and ESLint build configuration
+  database/  Prisma 7 config/schema/migration/client lifecycle
+  shared/    framework-neutral Zod contracts, constants, money
+scripts/
+  smoke-api.mjs
+docs/
+  PRD.md ARCHITECTURE.md RULES.md PHASES.md DESIGN.md MEMORY.md
+```
 
 ## Pending Frontend Requirements
 
-- Claude can begin product design only after Phase 0 exports and workspace commands are verified.
+- Claude can safely work inside `apps/web`; its independent build, lint, typecheck, and test commands are verified.
+- Claude can import browser-safe contracts from `@takeover/shared` and must coordinate changes to that package.
 - Frontend must consume shared domain/API contracts from `@takeover/shared`, not duplicate them.
 - Frontend must never import `@takeover/database` or imply backend-confirmed success from fixtures.
 - Approved data-access seam: server components depend on `lib/data/*` functions, never on fixtures or `fetch` directly. A per-resource switch selects fixture or live source so resources go live one at a time as endpoints land, with no parallel logic retained.
@@ -57,20 +88,29 @@ No database schema or migration exists yet. A minimal PostgreSQL/Prisma infrastr
 
 ## Pending Backend Requirements
 
-- Complete and verify Phase 0 only.
 - Design Phase 1 identity separately after explicit approval; do not start it automatically.
 - Product APIs, payment providers, ownership, real-time events, and verification remain planned.
 
 ## Current Blockers
 
-- None for local Phase 0 scaffolding.
-- Live PostgreSQL migration/application evidence may remain unavailable if no database is provisioned; schema validation does not require one.
+- No blocker remains for the approved local/offline Phase 0 acceptance criteria.
+- Live PostgreSQL migration/application evidence is blocked by the absence of a provisioned database.
 
 ## Agent Handoffs
 
 ### Codex → Claude
 
-Not ready for integration yet. Phase 0 will provide `apps/web`, `@takeover/shared`, and verified commands. Until completion, avoid relying on uncommitted package paths or contracts.
+Ready:
+
+- `apps/web` is an independently buildable Next.js 15 shell that Claude can extend.
+- `@takeover/shared` exports `ApiSuccess`, `ApiError`, envelope schemas, `ERROR_CODES`, `Money`, `moneySchema`, `createMoney`, `isMoney`, currency validation, and health constants.
+- `apps/api` serves `GET /health` and `GET /ready`; no product endpoints exist.
+
+Boundaries:
+
+- Do not import `@takeover/database` from the web app.
+- Do not duplicate shared domain/API contracts inside `apps/web`.
+- Product success, verification, ownership, payment, rankings, and real-time events remain unavailable and must not be fabricated.
 
 ### Claude → Codex
 
@@ -93,3 +133,4 @@ Reason: the territory detail page shows ownership history with logos; without th
 - 2026-08-29: Approved lean Phase 0 design committed.
 - 2026-08-29: Detailed implementation plan committed; execution started.
 - 2026-08-29: A concurrent alternate plan edit was detected and preserved separately. Next.js 16 was rejected and Next.js 15 retained; Prisma 7 was retained with CLI/client/adapter versions matched exactly. Useful exact-version, TDD, and API-smoke improvements were reconciled into the canonical plan because the approved goal is a stable foundation, not adoption of newer majors by default.
+- 2026-08-29: Phase 0 implementation and acceptance verification completed locally/offline; live PostgreSQL application remains unvalidated.

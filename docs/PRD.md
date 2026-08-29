@@ -1,6 +1,6 @@
 # TakeOver.com Product Requirements
 
-> **Document status:** Product requirements are **PLANNED** unless a section explicitly says **IMPLEMENTED NOW**. Phase 0 foundation work is in progress and remains **UNVALIDATED / NEEDS REVIEW** until its checks pass.
+> **Document status:** Product requirements are **PLANNED** unless a section explicitly says **IMPLEMENTED NOW**. Phase 0 foundation acceptance is verified; live PostgreSQL migration application remains **UNVALIDATED / NEEDS REVIEW**.
 
 ## Product Vision
 
@@ -185,5 +185,6 @@ Launch is **PLANNED** and requires:
 
 ## Current Delivery Status
 
-- **UNVALIDATED / NEEDS REVIEW:** Phase 0 monorepo foundation is being implemented.
+- **IMPLEMENTED NOW:** Phase 0 monorepo foundation passed its approved local/offline acceptance suite.
+- **UNVALIDATED / NEEDS REVIEW:** Applying the initial migration and querying a live PostgreSQL instance.
 - **PLANNED:** All user-facing gameplay, identity, payment, ownership, ranking, season, battle, activity, and admin capabilities.

@@ -8,7 +8,7 @@
 
 **Dependencies:** Node.js 24, pnpm 10, Git, and package-registry access. Schema validation does not require a live PostgreSQL server.
 
-**Status:** **IN PROGRESS / UNVALIDATED**
+**Status:** **IMPLEMENTED NOW — PHASE 0 ACCEPTANCE VERIFIED.** Applying the committed migration to a live PostgreSQL instance remains **UNVALIDATED / NEEDS REVIEW** and is not a Phase 0 success claim.
 
 **Tasks:**
 
@@ -17,17 +17,21 @@
 - [x] Approve and commit the detailed implementation plan.
 - [x] Create and cross-check all six canonical docs (`470d31c`).
 - [x] Establish pnpm workspaces and strict shared tooling; verify `pnpm install` (`c71f2f5`).
-- [ ] Create/test framework-neutral shared contracts.
-- [ ] Create/validate the Prisma/PostgreSQL foundation.
-- [ ] Create/test the Fastify runtime and health endpoints.
-- [ ] Create/build the minimal Next.js application.
-- [ ] Run the complete acceptance suite and prohibited-architecture scan.
+- [x] Create/test framework-neutral shared contracts (`68d3995`).
+- [x] Create/validate the Prisma 7/PostgreSQL foundation (`90d8cde`).
+- [x] Create/test the Fastify runtime and health endpoints (`650a30c`).
+- [x] Create/build the minimal Next.js application (`dd0ec77`).
+- [x] Run the complete acceptance suite and prohibited-architecture scan.
 
 **Acceptance criteria:** dependency installation; web/API type checks; lint; tests; production builds; Prisma schema validation; compiled API startup; `/health` and `/ready` responses; no prohibited dependencies, fake product state, or placeholder product modules; honest docs and handoff.
 
 **Tests:** shared money/envelope unit tests, database lifecycle unit test, API configuration and injection tests, web static/build verification, and compiled API runtime smoke test.
 
-**Risks:** ecosystem incompatibility across pinned tools; Windows process-shutdown behavior; Next standalone configuration; claiming database readiness without a live database; documentation drifting during scaffold changes.
+**Verification evidence (2026-08-29):** frozen install passed; Prisma Client `7.10.0` generation passed; schema validation passed; all workspace typechecks and lint passed; 31 tests passed; formatting passed; API and web production builds passed; compiled API startup, `/health`, `/ready`, 404 envelope, and graceful shutdown passed; prohibited dependency, placeholder, Prisma-ownership, and shared-boundary scans passed.
+
+**Unvalidated:** `prisma migrate deploy` and runtime queries against a live PostgreSQL server were not run because no database instance was provisioned. The committed migration was compared with offline `prisma migrate diff` output.
+
+**Risks:** ecosystem incompatibility across pinned tools; claiming database readiness without a live database; documentation drifting during later changes; optional standalone packaging requires re-evaluation in an environment that permits pnpm symlink creation.
 
 ## Phase 1 — Identity
 

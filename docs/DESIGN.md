@@ -103,7 +103,7 @@ The board is a tessellated mosaic in which tile size encodes territory importanc
 
 **Liveness direction: Ambient by default with event-driven bursts.**
 
-The intended feel is *quiet tension → something happened → burst of energy → calm again.*
+The intended feel is _quiet tension → something happened → burst of energy → calm again._
 
 - Default state: reign timers tick, a subtle live indicator, quiet activity-rail updates, countdowns without flashy motion. No constant price flickering, no nonstop ticker, no decorative motion added merely to imply liveness.
 - On an authoritative event: short border pulse on the affected tile, previous owner transitions out, new owner transitions in, value updates, activity feed inserts the event, optionally a restrained toast. Bursts settle in roughly 400–700ms.
@@ -116,4 +116,3 @@ Real-time transport is **not implemented**. The frontend defines only an integra
 ## Critical Copy
 
 Use direct labels: `TAKE OVER`, `DEFEND`, `CHALLENGE`, `VIEW EMPIRE`, and `VIEW BATTLE`. Never use success-oriented copy before committed backend confirmation.
-

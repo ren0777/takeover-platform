@@ -16,11 +16,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     ({
       level: options.logLevel ?? 'info',
       redact: {
-        paths: [
-          'req.headers.authorization',
-          'req.headers.cookie',
-          'res.headers.set-cookie',
-        ],
+        paths: ['req.headers.authorization', 'req.headers.cookie', 'res.headers.set-cookie'],
         censor: '[redacted]',
       },
     } satisfies FastifyServerOptions['logger']);

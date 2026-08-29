@@ -242,4 +242,3 @@ If any check depends on unavailable external infrastructure, it remains explicit
 At completion, Claude Code can safely develop `apps/web` and consume published exports from `@takeover/shared`. Claude should not copy API schemas or directly import `@takeover/database`.
 
 Codex should next design Phase 1 identity as its own reviewed specification. Phase 1 does not begin automatically. Changes to shared contracts, environment requirements, or independently deployable application boundaries must be documented in `docs/MEMORY.md` before another agent relies on them.
-

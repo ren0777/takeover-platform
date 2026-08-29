@@ -187,4 +187,3 @@ Launch is **PLANNED** and requires:
 
 - **UNVALIDATED / NEEDS REVIEW:** Phase 0 monorepo foundation is being implemented.
 - **PLANNED:** All user-facing gameplay, identity, payment, ownership, ranking, season, battle, activity, and admin capabilities.
-

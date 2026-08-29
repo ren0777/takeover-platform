@@ -19,7 +19,9 @@ export type ApiConfig = {
 export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
   const result = apiEnvironmentSchema.safeParse(source);
   if (!result.success) {
-    const fields = [...new Set(result.error.issues.map((issue) => issue.path.join('.')))].join(', ');
+    const fields = [...new Set(result.error.issues.map((issue) => issue.path.join('.')))].join(
+      ', ',
+    );
     throw new Error(`Invalid API configuration: ${fields}`);
   }
 

@@ -65,13 +65,20 @@ Future API modules are feature-local under `apps/api/src/modules/<feature>/` and
 Success:
 
 ```json
-{"data":{},"meta":{}}
+{ "data": {}, "meta": {} }
 ```
 
 Error:
 
 ```json
-{"error":{"code":"STABLE_MACHINE_CODE","message":"Safe human message","requestId":"request-id","details":{}}}
+{
+  "error": {
+    "code": "STABLE_MACHINE_CODE",
+    "message": "Safe human message",
+    "requestId": "request-id",
+    "details": {}
+  }
+}
 ```
 
 - Omit optional envelope fields when absent.
@@ -125,4 +132,3 @@ Error:
 - Update `MEMORY.md` after meaningful backend work and when shared contracts change.
 - `MEMORY.md` is curated shared context, not a raw activity log.
 - Do not mark a phase complete without its acceptance criteria and test evidence.
-

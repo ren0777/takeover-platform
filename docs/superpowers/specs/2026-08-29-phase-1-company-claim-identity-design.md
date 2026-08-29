@@ -1,6 +1,6 @@
 # TakeOver.com Phase 1 Company + Claim Identity Design
 
-**Status:** APPROVED on 2026-08-29; documentation only. Phase 1 implementation has not started.
+**Status:** APPROVED on 2026-08-29 and V1 defaults locked on 2026-08-30; documentation only. Phase 1 implementation has not started.
 
 ## Purpose
 
@@ -47,6 +47,21 @@ Company identity, contact verification, management authority, payment, and terri
 6. An existing managed company cannot be claimed by verifying a second email or making a payment.
 7. A prepared takeover intent explains the quote the visitor saw; it never locks that quote.
 8. Browser return/success URLs never establish ownership. Only verified server-side payment state may participate in capture.
+9. A new-company contact must complete email verification and receive the draft-company grant/session before any future checkout can begin.
+10. An existing-company requester must verify email and then receive manager approval or successful manual recovery before receiving a grant/session or resuming takeover checkout.
+
+## Locked V1 Defaults
+
+- Email verification challenge: 15 minutes.
+- Management-link and access-review exchange token: 15 minutes.
+- Management session: 8 hours.
+- Company access request: 7 days.
+- Private company draft: 24 hours.
+- Manual recovery request: 7 days.
+- Existing-company takeover intents survive with their access request for at most 7 days; new-company intents expire with their 24-hour draft.
+- Management cookie: opaque identifier, `HttpOnly`, `Secure` in production, `SameSite=Lax` by default, no `Domain`, and `Path=/api`.
+
+All durations are validated API runtime configuration values. Code must not repeat literal duration values across services.
 
 ## Recommended Capability Architecture
 
@@ -183,6 +198,8 @@ A requester cannot edit the company, initiate payment, or alter ownership while 
 
 Before Phase 3 creates checkout, the service reloads the authoritative territory version, owner, winning amount, legal minimum, and currency. A mismatch moves the intent to `review_required` and returns both the prior snapshot and current values. The requester must explicitly accept a newly calculated quote. Approval of company access never accepts a changed price, and no revised amount is automatically charged.
 
+Phase 1 persists only an explicitly non-authoritative `territoryExternalRef` and optional reference-only quote snapshot. It creates no `Territory` model, ownership rule, final pricing calculation, checkout, or `review_required` transition. Phase 2 replaces the external reference with an authoritative territory relationship; Phase 3 owns revalidation and stale-quote review.
+
 ## Proposed HTTP Contracts
 
 Paths are proposed for implementation-plan review; shared Zod request/response schemas will live in `@takeover/shared`. All responses use the existing success/error envelopes.
@@ -271,7 +288,7 @@ Phase 1 will add only modules with real behavior. Likely feature boundaries are 
 - Fastify routes parse shared schemas, apply transport controls, and call one application operation.
 - Services own challenge issuance/exchange, access-request transitions, authorization policy, and audit decisions independently of HTTP.
 - Repositories own Prisma persistence and accept a transaction client for atomic state changes.
-- Email delivery is behind a small provider interface. No provider is selected by this specification.
+- Email delivery is behind `EmailProvider`, with `sendVerification`, `sendManagementLink`, `sendAccessRequestNotification`, and `sendAccessDecisionNotification` operations. Phase 1 includes an in-memory development/test transport that is impossible to enable in production. A production provider remains configurable and unimplemented until selected.
 - Token generation, hashing, and cookie serialization are infrastructure services and never leak secrets into shared contracts.
 
 No Nest-style container, generic controller hierarchy, Redis, queue, worker, Dodo SDK, or placeholder product modules are introduced by the specification.
@@ -338,15 +355,12 @@ Phase 1 may be marked complete only when:
 
 ## Unresolved Questions
 
-These do not change the approved architecture but must be decided before or during the Phase 1 implementation plan:
+The following remain deliberately unresolved after locking the V1 Phase 1 defaults:
 
-1. Email delivery provider, sender-domain setup, retry/bounce handling, and local test transport.
-2. Exact TTLs for verification links, approval links, management links, sessions, access requests, and takeover intents.
-3. Canonical company website uniqueness, collision/merge policy, and handling of admin-seeded companies with no active manager.
-4. Production web/API domain topology, which determines the final cookie `SameSite`, CORS, and CSRF configuration.
-5. Manual reviewer identity, operational authorization, evidence requirements, SLA, and recovery notification policy. Phase 1 may create recovery requests but cannot invent an unsafe global admin login.
-6. Whether Phase 1 persists a partial `TakeoverIntent` before Phase 2 or publishes only its contract/state seam until an authoritative territory foreign key exists. No unenforced or placeholder territory model is permitted.
-7. Dodo's current webhook/signature/retry/refund details, deferred to official-documentation review in Phase 3.
+1. Production email provider, sender-domain setup, retry/bounce handling, and provider-specific delivery evidence. Phase 1 supplies only the provider interface and development/test transport.
+2. Manual reviewer identity, operational authorization, evidence requirements, SLA, and recovery notification policy. Phase 1 stores pending recovery state and exposes no public approval operation.
+3. Production deployment topology may require replacing the default `SameSite=Lax` policy. Any cross-site change requires a separate CORS/CSRF review before deployment.
+4. Dodo's current webhook/signature/retry/refund details remain deferred to official-documentation review in Phase 3.
 
 ## Phase 0 Compatibility Self-Review
 

@@ -1,7 +1,29 @@
 import type { Metadata } from 'next';
+import { Inter, JetBrains_Mono, Space_Grotesk } from 'next/font/google';
 import type { ReactNode } from 'react';
 import { buildPageTitle, SITE } from '@/lib/site';
 import './globals.css';
+
+/** Display face: territory names, headings, rank numerals. */
+const display = Space_Grotesk({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-display',
+});
+
+/** Body face for prose and UI. */
+const body = Inter({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-body',
+});
+
+/** Numeric face so prices, timers, and ranks align across rows and tiles. */
+const mono = JetBrains_Mono({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-mono',
+});
 
 export const metadata: Metadata = {
   title: buildPageTitle(),
@@ -10,7 +32,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${display.variable} ${body.variable} ${mono.variable}`}>
       <body>
         <a className="skip-link" href="#main-content">
           Skip to content

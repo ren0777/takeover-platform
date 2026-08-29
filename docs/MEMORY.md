@@ -43,6 +43,10 @@
 - A different verified contact for an existing managed company creates a pending `CompanyAccessRequest`; checkout and mutations remain blocked until an existing manager approves or manual recovery succeeds. Payment never grants access.
 - `TakeoverIntent` snapshots are explanatory only and never lock price. Checkout must later revalidate owner/version/current amount/legal minimum/currency and require explicit review when stale.
 - Dodo Payments is the planned Phase 3 V1 provider behind `PaymentProvider`/`DodoPaymentProvider`. No Dodo SDK exists, and its current signature/event/retry/refund behavior remains **UNVALIDATED / NEEDS REVIEW**.
+- Locked Phase 1 TTLs: verification and management/access-review links 15 minutes; management session 8 hours; access request 7 days; company draft 24 hours; recovery request 7 days.
+- Management cookies default to opaque server-resolved IDs with `HttpOnly`, production `Secure`, `SameSite=Lax`, no `Domain`, and `Path=/api`.
+- Phase 1 uses an `EmailProvider` interface plus an in-memory dev/test-only transport. Production delivery stays configurable/unavailable until a provider is selected; raw link tokens never enter normal logs.
+- A normalized website already claimed by an authoritative company always enters existing-company access/recovery handling. Drafts never silently merge or become a second authoritative company.
 
 ## API Contracts
 
@@ -96,7 +100,7 @@ docs/
 ## Pending Backend Requirements
 
 - Phase 1 design is approved at `docs/superpowers/specs/2026-08-29-phase-1-company-claim-identity-design.md`; implementation has not started and requires a reviewed implementation plan.
-- Resolve Phase 1 email provider/test transport, token/session/access-request TTLs, company collision rules, production cookie/domain topology, manual-reviewer authorization, and exact persistence timing of the `TakeoverIntent` seam.
+- Implement the approved Phase 1 plan after review. Production email provider, any cross-site cookie/CORS change, and manual-reviewer authorization remain unresolved.
 - Phase 1 may implement company drafts/contacts, email challenges, grants, scoped sessions, access requests, approval/rejection, recovery request architecture, rate limits, and audit records only.
 - Territory/ownership remain Phase 2. Pricing, Dodo checkout/webhooks/payment records, and atomic capture remain Phase 3.
 - Product APIs, payment providers, ownership, real-time events, and verification remain planned.

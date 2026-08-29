@@ -37,7 +37,7 @@
 
 **Objective:** Implement low-friction company/contact identity and revocable company-scoped management capabilities without introducing traditional V1 user accounts.
 
-**Dependencies:** Verified Phase 0; approved Phase 1 design; PostgreSQL integration-test environment; selected email delivery/test approach; reviewed TTL, cookie/domain, collision, and recovery policies.
+**Dependencies:** Verified Phase 0; approved Phase 1 design and locked V1 defaults; PostgreSQL integration-test environment. Production email delivery and manual approval execution remain unavailable until separately selected/designed.
 
 **Status:** **PLANNED — DESIGN APPROVED; IMPLEMENTATION NOT STARTED**
 

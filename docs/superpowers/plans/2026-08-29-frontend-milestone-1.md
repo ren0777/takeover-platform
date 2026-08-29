@@ -28,6 +28,20 @@ Every task's requirements implicitly include this section.
 - **Keep** the existing `.skip-link` / `#main-content` contract and `src/lib/site.ts`.
 - **Verification command for every task:** `pnpm --filter @takeover/web test && pnpm --filter @takeover/web typecheck && pnpm --filter @takeover/web lint`
 
+## Execution Status — updated 2026-08-30
+
+Phase 1 (Company + Claim Identity) is **design approved, implementation not started**. `@takeover/shared` still publishes no product-domain contract, so most of this plan is gated.
+
+| Tasks    | Status                 | Reason                                                                                   |
+| -------- | ---------------------- | ---------------------------------------------------------------------------------------- |
+| 1, 2     | **Executable now**     | Domain-independent. Task 2 depends only on `Money`, which is published and authoritative |
+| 3–10, 12 | **Blocked**            | Depend on product-domain shapes that `@takeover/shared` does not yet define              |
+| 11       | **Blocked, rewritten** | Realigned to the Phase 1 claim model; needs the Phase 1 shared schemas                   |
+
+Do not create provisional `Territory`, `Company`, `Season`, `Battle`, `LeaderboardEntry`, or `ActivityEvent` types in `apps/web` to unblock work. The source-of-truth question is being resolved deliberately; introducing duplication to move faster is explicitly rejected.
+
+When Codex publishes the Phase 1 contracts: re-read the six canonical docs, re-inspect `@takeover/shared`, update Task 3 and everything downstream of it to the real types, then resume.
+
 ## File Structure
 
 | Path                           | Responsibility                             |
@@ -2017,18 +2031,30 @@ git commit -m "feat(web): add company profile and leaderboard pages"
 
 ---
 
-### Task 11: Passwordless company management entry
+### Task 11: Company claim and management surfaces (Phase 1 aligned)
+
+> **BLOCKED as of 2026-08-30.** Realigned to `docs/superpowers/specs/2026-08-29-phase-1-company-claim-identity-design.md`. Do not implement until Codex publishes the Phase 1 shared schemas in `@takeover/shared` and resolves the open TTL, collision, draft-checkout, and recovery questions — each of those determines UI copy and state. The step code below is a starting point, not a finished design.
 
 **Files:**
 
 - Create: `apps/web/src/app/manage/page.tsx`
+- Create: `apps/web/src/app/manage/exchange/page.tsx`
+- Create: `apps/web/src/app/manage/access-requests/[id]/page.tsx`
 - Create: `apps/web/src/components/manage/management-link-form.tsx`
 
 **Interfaces:**
 
-- Produces: `/manage`, the passwordless entry point that replaces the cancelled auth screens
+- Produces: the four company-claim surfaces that replace the cancelled auth screens
 
-There is no login, signup, forgot-password, or reset-password screen anywhere in this milestone.
+There is no login, signup, forgot-password, or reset-password screen anywhere in this milestone, and no screen may imply an account exists.
+
+**Non-negotiable constraints carried from the Phase 1 spec:**
+
+1. **No state change on `GET`.** `/manage/exchange` and the access-request page establish a session and render a confirmation screen. Approval and rejection are explicit mutations with CSRF and Origin protection. Prefetchers and email scanners issue `GET`, so a link that approves on load is a correctness bug.
+2. **Scrub the secret.** After exchange, replace the URL so the token leaves browser history. Never log, render, or send it to analytics.
+3. **Enumeration resistance.** Show the same neutral confirmation whether or not the email or company exists. Never narrow copy to "no company found for that email".
+4. **Five separate facts.** Company identity, verified contact, management authority, payment, and ownership are distinct. Verifying an email creates a private, expiring, non-participating draft — it does not publish, activate, or grant ownership. Say so plainly rather than congratulating the user.
+5. **Blocked is not failure.** A pending access request renders as a truthful pending state: a manager was notified, nothing was charged, and manual recovery exists if no manager is reachable.
 
 - [ ] **Step 1: Create the form**
 

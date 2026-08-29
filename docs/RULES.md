@@ -33,6 +33,8 @@
 27. Email-domain matching, DNS access, incorporation, and company-domain email are not V1 participation requirements; a verified contact channel is sufficient.
 28. Opaque security links are purpose-bound, single-use, expiring, revocable, hashed/keyed at rest, and exchanged for short-lived company-scoped sessions.
 29. Prepared takeover quote snapshots never lock price. Revalidate authoritative territory state before checkout and require explicit review of changes.
+30. An unverified contact cannot begin checkout. Existing-company checkout additionally requires an approved active grant/session or successful manual recovery.
+31. Never automatically merge companies by normalized website. A claimed website enters existing-company access/recovery handling, and activation enforces one authoritative company per normalized website.
 
 ## Repository Boundaries
 

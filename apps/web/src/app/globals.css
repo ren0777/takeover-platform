@@ -6,6 +6,24 @@
   --color-border: #27272a;
   --color-foreground: #fafafa;
   --color-muted: #a1a1aa;
+
+  /* Raised surface for elements stacked above --color-surface. */
+  --color-surface-raised: #18181b;
+
+  /* Competitive semantics. Never encode state with colour alone. */
+  --color-premium: #e9b949;
+  --color-contested: #ff5a1f;
+  --color-challenger: #ff8a4c;
+  --color-unclaimed: #7c5cff;
+  --color-owner: #3ddc97;
+  --color-success: #2fbf71;
+  --color-warning: #f5a524;
+  --color-destructive: #e5484d;
+
+  /* Tight radii: structure comes from hairline borders, not rounding. */
+  --radius-tile: 4px;
+  --radius-control: 6px;
+  --radius-pill: 9999px;
 }
 
 * {
@@ -21,7 +39,7 @@ body {
   margin: 0;
   background: var(--color-background);
   color: var(--color-foreground);
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-body), Inter, ui-sans-serif, system-ui, sans-serif;
 }
 
 .skip-link {

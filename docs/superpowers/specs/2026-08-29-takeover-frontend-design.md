@@ -99,41 +99,86 @@ Routes are lowercase kebab-case with stable slugs, per `RULES.md`.
 
 Every dynamic route gets `loading.tsx`, `error.tsx`, and — where a record may be absent — `not-found.tsx`.
 
+### 4.1 Phase 1 company-claim routes
+
+These replace the cancelled auth routes. All are `noindex` — they are capability landings, not public content.
+
+| Route                          | Purpose                                                          |
+| ------------------------------ | ---------------------------------------------------------------- |
+| `/manage`                      | Request a management link for a company/contact pair             |
+| `/manage/exchange`             | Token landing: exchange a single-use link, then scrub the secret |
+| `/manage/access-requests/[id]` | Manager confirmation screen for an explicit approve/reject       |
+| `/manage/company`              | Company-scoped management context for the current session        |
+
+There is deliberately no `/login`, `/signup`, `/forgot-password`, or `/reset-password`.
+
+`/manage/exchange` and `/manage/access-requests/[id]` must perform no state change on `GET`. See §5.4.
+
 ---
 
-## 5. Passwordless Capture and Company Management
+## 5. Company Claim and Management (aligned to Phase 1)
 
-**Product change, 2026-08-29:** V1 requires no traditional accounts. Login, signup, forgot-password, and reset-password screens are **cancelled and will not be built.**
+**Aligned 2026-08-30** to `docs/superpowers/specs/2026-08-29-phase-1-company-claim-identity-design.md`.
 
-The capture flow establishes company identity inline:
+V1 has no `User` model, no passwords, no global end-user session, and no generic authenticated dashboard. **Login, signup, forgot-password, and reset-password screens are cancelled and will not be built.** No screen in this milestone may imply an account exists.
+
+Authority in V1 is a **company-scoped, revocable capability**, not an identity:
 
 ```
-TAKE OVER → company details → bid → payment → backend-confirmed ownership → secure email management link
+opaque email link → exchange → short-lived HttpOnly company-scoped management session
 ```
 
-This strengthens the loop: a visitor who wants a territory never hits an account wall before wanting it.
+Company identity, verified contact, management authority, payment, and ownership are **five separate facts**. The UI must never let one imply another. In particular: payment never grants management access, and a browser return URL never establishes ownership.
 
-### 5.1 Capture steps
+### 5.1 The five surfaces this milestone must express
 
-1. **Territory context.** Territory, current owner, current winning amount, and the server-computed minimum takeover amount.
-2. **Company details.** Name, website, logo, short description, contact email. The email is what a management link is later sent to.
-3. **Bid.** Amount at or above the minimum. The frontend validates the floor for feedback only; the server remains authoritative.
-4. **Review.** Territory, current owner, current amount, required minimum, chosen bid, fees if any, total, and the consequences of capture.
-5. **Payment boundary.** Milestone 1 terminates here in a clearly labeled **payment-not-connected** state naming exactly what is missing.
+Replacing the cancelled auth screens:
 
-### 5.2 States the flow must never fabricate
+1. **Company/contact capture** — collected inside the takeover flow, not as prior onboarding.
+2. **Email verification** — request, sent, exchanging, verified, expired, invalid, already-consumed.
+3. **Management-link exchange** — the landing that trades a single-use token for a scoped session.
+4. **Company-scoped management session** — a management context bound to exactly one company.
+5. **Pending existing-company access request** — the requester's blocked state, and the manager's explicit approve/reject decision.
 
-Authentication, verification, payment success, ownership change, rank movement, and live events. No optimistic UI touches any of them. A pending state is never rendered as success.
+### 5.2 New company preparation
 
-### 5.3 Stale price
+Territory selected → company and contact details entered → intent prepared → verification link emailed → link exchanged → scoped session over a **draft** company.
 
-Designed now, wired when the endpoint exists. On a stale response the modal explains the territory changed, shows the new owner and new current price, shows the new minimum, and requires explicit re-review. **A revised amount is never auto-charged.**
+The draft is private, expiring, and non-participating. Verifying an email does **not** create ownership, does not publish the company, and does not activate it. Only a later confirmed capture can do that. UI copy must say so plainly rather than congratulating the user.
 
-### 5.4 Management link
+### 5.3 Existing managed company access
 
-`/manage` collects an email and requests a single-use, expiring link. States: idle, submitting, sent, throttled, expired, invalid, consumed.
+If the chosen company is already managed, the requester does not gain access. A pending `CompanyAccessRequest` is created and **checkout and mutations stay blocked** until an existing manager explicitly approves.
 
-Milestone 1 renders these against fixtures and **never claims a link was delivered or a session established.** The submit action is disabled during the request and the UI states plainly that delivery is not connected.
+The requester sees a truthful pending state — not an error, and not a success. It explains that a manager was notified, that nothing has been charged, and that a manual recovery path exists if no manager is reachable.
+
+### 5.4 Manager approval — a hard UI constraint
+
+**Approval links must not approve on `GET`.** Opening a review link establishes or refreshes the manager's scoped session and lands on a **confirmation screen**. Approval or rejection is an explicit mutation from that screen, with CSRF and Origin protection.
+
+Any design where following a link performs the approval is a correctness bug, not a convenience. Prefetching, link scanners, and email security crawlers all issue `GET`.
+
+### 5.5 Token handling in the browser
+
+Token landing URLs must not leave secrets in browser history. After exchange, the frontend replaces the URL so the secret is scrubbed. Tokens are never logged, never placed in analytics, and never rendered on screen.
+
+### 5.6 Enumeration resistance
+
+Link-request and verification responses must not reveal whether an email or company exists. The UI shows the same neutral confirmation regardless, and copy must never be tightened into a disclosure such as "no company found for that email".
+
+### 5.7 States the flow must never fabricate
+
+Verification, management access, payment success, company activation, ownership change, rank movement, and live events. No optimistic UI touches any of them. Pending is never rendered as success.
+
+### 5.8 Stale quote review
+
+A prepared takeover intent is **explanatory only and never locks a price**. Before checkout, the server revalidates territory version, owner, current winning amount, legal minimum, and currency. A mismatch moves the intent to `review_required` and returns both the previous snapshot and the current values.
+
+The UI shows both, explains what changed, and requires explicit acceptance of the new quote. **A revised amount is never auto-charged, and approving company access never accepts a changed price.**
+
+### 5.9 Milestone 1 boundary
+
+The endpoints in the Phase 1 spec are proposed, not implemented, and their shared schemas are not yet published. Until they exist, these surfaces render structure and states only. The UI states plainly that the service is not connected and **never claims a link was delivered, a contact verified, or a session established.**
 
 ---
 
@@ -300,14 +345,25 @@ Screen count must not produce shallow placeholder implementations. A screen ship
 
 ## 14. Contracts Required From Codex
 
-Recorded as handoffs in `MEMORY.md`. None block starting this milestone; each blocks _completing_ the corresponding surface.
+Recorded as handoffs in `MEMORY.md`.
 
-1. Domain contracts in `@takeover/shared`: `Territory`, `Company`, `LeaderboardEntry`, `ActivityEvent`.
-2. `displayWeight: number` on territory.
-3. Territory list/detail and history endpoints, including `previousOwner.logoUrl`.
-4. Takeover/payment endpoints including the stale-price response shape.
-5. SSE event stream.
-6. Passwordless management-link issuance and session establishment, plus the capture-time email-to-company binding rules.
+**Blocking — no frontend work may proceed on these surfaces until they land.** As of 2026-08-30, `@takeover/shared` still exports only envelopes, error codes, money primitives, and health constants. It publishes no product-domain contract.
+
+1. Phase 1 shared Zod schemas and inferred types for the company-claim contracts, which the Phase 1 spec states will live in `@takeover/shared`: company claim, email verification and exchange, management link and exchange, management context, access request create/approve/reject/cancel, recovery request, and takeover intent.
+2. Domain contracts: `Territory`, `Company`, `LeaderboardEntry`, `ActivityEvent`.
+3. `displayWeight: number` on territory.
+4. Territory list/detail and history endpoints, including `previousOwner.logoUrl`.
+5. Checkout and stale-quote response shapes carrying both the prior snapshot and the current authoritative values.
+6. SSE event stream.
+
+**Unresolved questions the frontend must not answer on its own.** The Phase 1 spec lists these as open, and each one changes UI copy or state:
+
+- Token, session, and access-request TTLs — these determine what expiry the UI states.
+- Company collision rules — these determine when capture becomes an access request instead.
+- Whether an unactivated draft company may proceed to checkout.
+- Manual-reviewer authorization and the recovery path a blocked requester is offered.
+
+Non-blocking, and buildable now: the design system and the pure formatting utilities, which depend only on `Money` from `@takeover/shared`.
 
 ---
 

@@ -91,7 +91,7 @@ A verified contact has no company authority without an active `CompanyManagement
 
 When a different verified contact selects an existing company with an active manager, the API creates a pending `CompanyAccessRequest`, blocks checkout and mutations, and notifies current managers. Approval atomically creates a target-company grant; rejection cancels or expires the prepared takeover intent. If managers are unreachable, a manual-review request is the only fallback—payment cannot bypass management authorization.
 
-The detailed approved design is `docs/superpowers/specs/2026-08-29-phase-1-company-claim-identity-design.md`. Email delivery provider, TTL values, production cookie topology, company-collision policy, and manual-reviewer authorization remain **UNVALIDATED / NEEDS REVIEW**.
+The detailed approved design is `docs/superpowers/specs/2026-08-29-phase-1-company-claim-identity-design.md`. V1 TTLs, the default `SameSite=Lax` cookie policy, exact normalized-website collision behavior, a dev/test email transport, and the external territory-reference seam are locked. Production email delivery, cross-site deployment changes, and manual-reviewer authorization remain **UNVALIDATED / NEEDS REVIEW**.
 
 ## Territories and Ownership — PLANNED
 
@@ -275,6 +275,19 @@ Use managed PostgreSQL point-in-time recovery, encrypted backups, documented ret
 | `DATABASE_URL` | Prisma/API later | PostgreSQL connection URL |
 
 Provider, email, token-pepper, and session secrets are not defined in Phase 0. Phase 1 variables will be selected in its implementation plan and documented before use; Dodo variables belong to Phase 3.
+
+### Phase 1 planned identity defaults
+
+| Setting | Default |
+| --- | ---: |
+| Email verification TTL | 15 minutes |
+| Management/access-review link TTL | 15 minutes |
+| Management session TTL | 8 hours |
+| Access request TTL | 7 days |
+| Company draft TTL | 24 hours |
+| Recovery request TTL | 7 days |
+
+The Phase 1 API validates these as runtime configuration. Management cookies are opaque and server-resolved, `HttpOnly`, `Secure` in production, `SameSite=Lax` by default, have no `Domain`, and use `Path=/api`.
 
 ## External Integrations
 

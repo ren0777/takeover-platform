@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { getDatabaseClient } from '@takeover/database';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { buildApp } from '../../src/app.js';
+import { parseApiConfig } from '../../src/config/env.js';
 import {
   PrismaCompanyIdentityRepository,
   mapMinorAmountToSafeInteger,
@@ -32,6 +34,31 @@ async function createCompany(status: 'DRAFT' | 'ACTIVE', normalizedWebsite: stri
 beforeEach(resetIdentityTables);
 
 describe('Phase 1 PostgreSQL invariants', () => {
+  it('wires the real claim route when validated database configuration is supplied', async () => {
+    const apiConfig = parseApiConfig({
+      DATABASE_URL: process.env.TEST_DATABASE_URL,
+      EMAIL_PROVIDER: 'development',
+      NODE_ENV: 'test',
+    });
+    const app = buildApp({ config: apiConfig, logger: false });
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/company-claims',
+        payload: {
+          company: { name: 'My Cool Startup', websiteUrl: 'https://mycoolstartup.com' },
+          contactEmail: 'founder@gmail.com',
+          intent: { territoryExternalRef: 'ai-coding' },
+        },
+      });
+      expect(response.statusCode).toBe(202);
+      expect(response.json().data).toMatchObject({ checkoutAvailable: false });
+      await expect(prisma.emailVerificationChallenge.count()).resolves.toBe(1);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('creates a new-company claim atomically without storing a raw token', async () => {
     const repository = new PrismaCompanyIdentityRepository(prisma);
     const tokenDigest = new Uint8Array(32).fill(9);

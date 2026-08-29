@@ -1,6 +1,5 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { getDatabaseClient, Prisma, type PrismaClient } from '@takeover/database';
-import type { ManagementAuthority } from './authorization.js';
 import type {
   CompanyIdentityRepository,
   BeginClaimRecord,
@@ -10,6 +9,9 @@ import type {
   ConsumeChallengeInput,
   CreateSessionInput,
   IntentRecord,
+  IssueContactVerificationChallengeInput,
+  IssuedContactVerificationChallenge,
+  ManagementSessionAuthority,
   RateLimitInput,
   RevokeSessionInput,
   SessionRecord,
@@ -133,6 +135,62 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
     await this.prisma.emailVerificationChallenge.update({
       where: { id: challengeId },
       data: { deliveryStatus: status },
+    });
+  }
+
+  async issueContactVerificationChallenge(
+    input: IssueContactVerificationChallengeInput,
+  ): Promise<IssuedContactVerificationChallenge | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      const contact = await transaction.companyContact.findUnique({
+        where: { normalizedEmail: input.normalizedEmail },
+      });
+      if (contact === null || contact.revokedAt !== null) return null;
+      const intent = await transaction.takeoverIntent.findFirst({
+        where: {
+          companyId: input.companyId,
+          contactId: contact.id,
+          status: 'AWAITING_EMAIL_VERIFICATION',
+        },
+        include: { company: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (intent === null || intent.expiresAt <= input.now) return null;
+
+      await transaction.emailVerificationChallenge.updateMany({
+        where: {
+          companyId: input.companyId,
+          consumedAt: null,
+          contactId: contact.id,
+          purpose: 'CONTACT_VERIFICATION',
+          revokedAt: null,
+        },
+        data: { revokedAt: input.now },
+      });
+      const challenge = await transaction.emailVerificationChallenge.create({
+        data: {
+          companyId: input.companyId,
+          contactId: contact.id,
+          expiresAt: input.expiresAt,
+          purpose: 'CONTACT_VERIFICATION',
+          selector: input.selector,
+          tokenDigest: Buffer.from(input.tokenDigest),
+        },
+      });
+      await this.writeAudit(transaction, {
+        action: 'email_verification.reissued',
+        actorId: contact.id,
+        actorType: 'CONTACT',
+        companyId: input.companyId,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        targetId: challenge.id,
+        targetType: 'email_verification_challenge',
+      });
+      return {
+        challengeId: challenge.id,
+        companyName: intent.company.name,
+        toEmail: contact.email,
+      };
     });
   }
 
@@ -362,10 +420,24 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
   async resolveManagementSession(
     digest: Uint8Array,
     now: Date,
-  ): Promise<ManagementAuthority | null> {
+  ): Promise<ManagementSessionAuthority | null> {
     const session = await this.prisma.companyManagementSession.findUnique({
       where: { tokenDigest: Buffer.from(digest) },
-      include: { grant: true },
+      include: {
+        company: true,
+        grant: {
+          include: {
+            contact: {
+              include: {
+                verifications: {
+                  where: { status: 'VERIFIED' },
+                  select: { companyId: true, level: true },
+                },
+              },
+            },
+          },
+        },
+      },
     });
     if (
       session === null ||
@@ -378,11 +450,16 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
       return null;
     }
     return {
+      company: mapCompany(session.company),
       companyId: session.companyId,
       contactId: session.grant.contactId,
+      csrfDigest: new Uint8Array(session.csrfDigest),
       expiresAt: session.expiresAt,
       grantId: session.grantId,
       sessionId: session.id,
+      verificationLevels: session.grant.contact.verifications
+        .filter((verification) => verification.companyId === session.companyId)
+        .map((verification) => verification.level),
     };
   }
 

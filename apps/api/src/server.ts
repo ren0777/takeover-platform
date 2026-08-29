@@ -4,7 +4,7 @@ import { parseApiConfig } from './config/env.js';
 
 async function startServer(): Promise<void> {
   const config = parseApiConfig(process.env);
-  const app = buildApp({ logLevel: config.logLevel, nodeEnv: config.nodeEnv });
+  const app = buildApp({ config });
   let shuttingDown = false;
 
   const shutdown = async (signal: NodeJS.Signals | 'IPC'): Promise<void> => {

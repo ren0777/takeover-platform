@@ -1,22 +1,44 @@
 import { ERROR_CODES, type ApiError } from '@takeover/shared';
 import Fastify, { type FastifyInstance, type FastifyServerOptions, LogController } from 'fastify';
+import { ZodError } from 'zod';
 import type { ApiConfig } from './config/env.js';
+import {
+  createCompanyIdentityService,
+  type CompanyIdentityService,
+} from './modules/company-identity/service.js';
+import { PrismaCompanyIdentityRepository } from './modules/company-identity/prisma-repository.js';
+import { companyIdentityPlugin } from './plugins/company-identity.js';
+import { databasePlugin } from './plugins/database.js';
+import { emailPlugin } from './plugins/email.js';
 import { healthPlugin } from './plugins/health.js';
+import { createOpaqueTokenService } from './security/opaque-token.js';
 
 export type BuildAppOptions = {
   logger?: FastifyServerOptions['logger'];
+  config?: ApiConfig;
   nodeEnv?: ApiConfig['nodeEnv'];
   logLevel?: ApiConfig['logLevel'];
+  companyIdentity?: {
+    config: ApiConfig['identity'];
+    service: CompanyIdentityService;
+  };
 };
 
 export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
-  const nodeEnv = options.nodeEnv ?? 'development';
+  const runtimeConfig = options.config;
+  const nodeEnv = runtimeConfig?.nodeEnv ?? options.nodeEnv ?? 'development';
   const logger =
     options.logger ??
     ({
       level: options.logLevel ?? 'info',
       redact: {
-        paths: ['req.headers.authorization', 'req.headers.cookie', 'res.headers.set-cookie'],
+        paths: [
+          'req.body.token',
+          'req.headers.authorization',
+          'req.headers.cookie',
+          'req.headers.x-csrf-token',
+          'res.headers.set-cookie',
+        ],
         censor: '[redacted]',
       },
     } satisfies FastifyServerOptions['logger']);
@@ -46,8 +68,8 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       typeof error.statusCode === 'number'
         ? error.statusCode
         : undefined;
-    const statusCode =
-      reportedStatusCode !== undefined && reportedStatusCode < 500 ? reportedStatusCode : 500;
+    const isValidationError = error instanceof ZodError || normalizedError.name === 'ZodError';
+    const statusCode = isValidationError ? 400 : (reportedStatusCode ?? 500);
     const isServerError = statusCode >= 500;
     if (isServerError) {
       request.log.error(
@@ -56,9 +78,26 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       );
     }
 
+    const reportedCode =
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      typeof error.code === 'string' &&
+      Object.values(ERROR_CODES).includes(error.code as (typeof ERROR_CODES)[keyof typeof ERROR_CODES])
+        ? error.code
+        : undefined;
+    const code =
+      reportedCode ??
+      (statusCode === 401 || statusCode === 403
+        ? ERROR_CODES.AUTHORIZATION_REQUIRED
+        : statusCode === 503
+          ? ERROR_CODES.SERVICE_UNAVAILABLE
+          : isServerError
+            ? ERROR_CODES.INTERNAL_ERROR
+            : ERROR_CODES.VALIDATION_ERROR);
     const body: ApiError = {
       error: {
-        code: isServerError ? ERROR_CODES.INTERNAL_ERROR : ERROR_CODES.VALIDATION_ERROR,
+        code,
         message:
           isServerError && nodeEnv === 'production'
             ? 'Internal server error'
@@ -70,5 +109,29 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   });
 
   app.register(healthPlugin);
+  if (options.companyIdentity !== undefined) {
+    app.register(companyIdentityPlugin, {
+      config: options.companyIdentity.config,
+      nodeEnv,
+      service: options.companyIdentity.service,
+    });
+  } else if (runtimeConfig?.databaseUrl !== undefined) {
+    app.register(async (identityApp) => {
+      await databasePlugin(identityApp);
+      await emailPlugin(identityApp, runtimeConfig);
+      const service = createCompanyIdentityService({
+        clock: { now: () => new Date() },
+        config: runtimeConfig.identity,
+        emailProvider: identityApp.emailProvider,
+        repository: new PrismaCompanyIdentityRepository(identityApp.database),
+        tokens: createOpaqueTokenService(runtimeConfig.identity.tokenHmacSecret),
+      });
+      await companyIdentityPlugin(identityApp, {
+        config: runtimeConfig.identity,
+        nodeEnv,
+        service,
+      });
+    });
+  }
   return app;
 }

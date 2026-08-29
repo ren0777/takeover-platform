@@ -96,6 +96,29 @@ export type VerificationExchangeResult =
       verificationLevels: ['CONTACT_VERIFIED'];
     };
 
+export type IssueContactVerificationChallengeInput = {
+  companyId: string;
+  expiresAt: Date;
+  normalizedEmail: string;
+  now: Date;
+  requestId?: string;
+  selector: string;
+  tokenDigest: Uint8Array;
+};
+
+export type IssuedContactVerificationChallenge = {
+  challengeId: string;
+  companyName: string;
+  toEmail: string;
+};
+
+export type ManagementSessionAuthority = ManagementAuthority & {
+  company: CompanyRecord;
+  csrfDigest: Uint8Array;
+  expiresAt: Date;
+  verificationLevels: Array<'CONTACT_VERIFIED' | 'DOMAIN_VERIFIED' | 'MANUALLY_VERIFIED'>;
+};
+
 export type RateLimitInput = {
   expiresAt: Date;
   keyDigest: Uint8Array;
@@ -115,6 +138,7 @@ export type CreateSessionInput = {
 
 export type SessionRecord = ManagementAuthority & {
   csrfDigest: Uint8Array;
+  expiresAt: Date;
   tokenDigest: Uint8Array;
 };
 
@@ -129,7 +153,10 @@ export interface CompanyIdentityRepository {
   consumeContactVerification(input: ConsumeChallengeInput): Promise<VerificationExchangeResult>;
   consumeRateLimit(input: RateLimitInput): Promise<{ allowed: boolean; retryAfterSeconds: number }>;
   createManagementSession(input: CreateSessionInput): Promise<SessionRecord>;
+  issueContactVerificationChallenge(
+    input: IssueContactVerificationChallengeInput,
+  ): Promise<IssuedContactVerificationChallenge | null>;
   markChallengeDelivery(challengeId: string, status: 'SENT' | 'FAILED'): Promise<void>;
-  resolveManagementSession(digest: Uint8Array, now: Date): Promise<ManagementAuthority | null>;
+  resolveManagementSession(digest: Uint8Array, now: Date): Promise<ManagementSessionAuthority | null>;
   revokeManagementSession(input: RevokeSessionInput): Promise<void>;
 }

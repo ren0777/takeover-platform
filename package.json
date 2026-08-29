@@ -14,9 +14,11 @@
     "typecheck": "pnpm --recursive --if-present typecheck",
     "lint": "pnpm --recursive --if-present lint",
     "test": "pnpm --recursive --if-present test",
+    "test:integration": "pnpm --recursive --if-present test:integration",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:generate": "pnpm --filter @takeover/database db:generate",
+    "db:test:prepare": "pnpm --filter @takeover/database db:test:prepare",
     "db:validate": "pnpm --filter @takeover/database db:validate",
     "smoke:api": "node scripts/smoke-api.mjs"
   },

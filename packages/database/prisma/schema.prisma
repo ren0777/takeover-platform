@@ -18,3 +18,297 @@ model SystemMetadata {
 
   @@map("system_metadata")
 }
+
+enum CompanyStatus {
+  DRAFT
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum CompanyVerificationLevel {
+  CONTACT_VERIFIED
+  DOMAIN_VERIFIED
+  MANUALLY_VERIFIED
+}
+
+enum CompanyVerificationStatus {
+  PENDING
+  VERIFIED
+  FAILED
+  REVOKED
+}
+
+enum EmailChallengePurpose {
+  CONTACT_VERIFICATION
+  MANAGEMENT_LINK
+  ACCESS_REQUEST_REVIEW
+  ACCESS_DECISION
+  RECOVERY_CONTINUATION
+}
+
+enum EmailDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum ManagementGrantStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum ManagementGrantSource {
+  INITIAL_CONTACT
+  ACCESS_REQUEST
+  MANUAL_RECOVERY
+}
+
+enum CompanyAccessRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
+enum RecoveryRequestStatus {
+  NONE
+  PENDING
+  EXPIRED
+}
+
+enum TakeoverIntentStatus {
+  AWAITING_EMAIL_VERIFICATION
+  AWAITING_COMPANY_ACCESS
+  IDENTITY_READY
+  EXPIRED
+  CANCELLED
+}
+
+enum AuditActorType {
+  CONTACT
+  MANAGEMENT_GRANT
+  MANAGEMENT_SESSION
+  SYSTEM
+  OPERATOR
+}
+
+model Company {
+  id                 String                       @id @default(uuid()) @db.Uuid
+  name               String                       @db.VarChar(120)
+  normalizedName     String                       @map("normalized_name") @db.VarChar(120)
+  slug               String?                      @unique @db.VarChar(140)
+  websiteUrl         String                       @map("website_url") @db.VarChar(2048)
+  normalizedWebsite  String                       @map("normalized_website") @db.VarChar(2048)
+  logoUrl            String?                      @map("logo_url") @db.VarChar(2048)
+  status             CompanyStatus                @default(DRAFT)
+  expiresAt          DateTime?                    @map("expires_at") @db.Timestamptz(3)
+  activatedAt        DateTime?                    @map("activated_at") @db.Timestamptz(3)
+  createdAt          DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  verifications      CompanyVerification[]
+  challenges         EmailVerificationChallenge[]
+  managementGrants   CompanyManagementGrant[]
+  managementSessions CompanyManagementSession[]
+  accessRequests     CompanyAccessRequest[]
+  takeoverIntents    TakeoverIntent[]
+  auditLogs          AuditLog[]
+
+  @@index([normalizedWebsite])
+  @@index([status, expiresAt])
+  @@map("companies")
+}
+
+model CompanyContact {
+  id               String                       @id @default(uuid()) @db.Uuid
+  email            String                       @db.VarChar(320)
+  normalizedEmail  String                       @unique @map("normalized_email") @db.VarChar(320)
+  emailVerifiedAt  DateTime?                    @map("email_verified_at") @db.Timestamptz(3)
+  revokedAt        DateTime?                    @map("revoked_at") @db.Timestamptz(3)
+  createdAt        DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  verifications    CompanyVerification[]
+  challenges       EmailVerificationChallenge[]
+  managementGrants CompanyManagementGrant[]
+  accessRequests   CompanyAccessRequest[]
+  takeoverIntents  TakeoverIntent[]
+
+  @@map("company_contacts")
+}
+
+model CompanyVerification {
+  id            String                    @id @default(uuid()) @db.Uuid
+  companyId     String                    @map("company_id") @db.Uuid
+  contactId     String?                   @map("contact_id") @db.Uuid
+  level         CompanyVerificationLevel
+  status        CompanyVerificationStatus @default(PENDING)
+  source        String                    @db.VarChar(64)
+  verifiedAt    DateTime?                 @map("verified_at") @db.Timestamptz(3)
+  failedAt      DateTime?                 @map("failed_at") @db.Timestamptz(3)
+  revokedAt     DateTime?                 @map("revoked_at") @db.Timestamptz(3)
+  failureReason String?                   @map("failure_reason") @db.VarChar(500)
+  createdAt     DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  company       Company                   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  contact       CompanyContact?           @relation(fields: [contactId], references: [id], onDelete: Restrict)
+
+  @@index([companyId, level, status])
+  @@map("company_verifications")
+}
+
+model EmailVerificationChallenge {
+  id              String                @id @default(uuid()) @db.Uuid
+  selector        String                @unique @db.VarChar(64)
+  tokenDigest     Bytes                 @map("token_digest")
+  purpose         EmailChallengePurpose
+  contactId       String                @map("contact_id") @db.Uuid
+  companyId       String                @map("company_id") @db.Uuid
+  accessRequestId String?               @map("access_request_id") @db.Uuid
+  deliveryStatus  EmailDeliveryStatus   @default(PENDING) @map("delivery_status")
+  expiresAt       DateTime              @map("expires_at") @db.Timestamptz(3)
+  consumedAt      DateTime?             @map("consumed_at") @db.Timestamptz(3)
+  revokedAt       DateTime?             @map("revoked_at") @db.Timestamptz(3)
+  failedAttempts  Int                   @default(0) @map("failed_attempts")
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+  contact         CompanyContact        @relation(fields: [contactId], references: [id], onDelete: Restrict)
+  company         Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  accessRequest   CompanyAccessRequest? @relation(fields: [accessRequestId], references: [id], onDelete: Restrict)
+
+  @@index([contactId, purpose, createdAt])
+  @@index([expiresAt])
+  @@map("email_verification_challenges")
+}
+
+model CompanyManagementGrant {
+  id               String                     @id @default(uuid()) @db.Uuid
+  companyId        String                     @map("company_id") @db.Uuid
+  contactId        String                     @map("contact_id") @db.Uuid
+  status           ManagementGrantStatus      @default(ACTIVE)
+  source           ManagementGrantSource
+  accessRequestId  String?                    @map("access_request_id") @db.Uuid
+  grantedByGrantId String?                    @map("granted_by_grant_id") @db.Uuid
+  grantedAt        DateTime                   @default(now()) @map("granted_at") @db.Timestamptz(3)
+  revokedAt        DateTime?                  @map("revoked_at") @db.Timestamptz(3)
+  createdAt        DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  company          Company                    @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  contact          CompanyContact             @relation(fields: [contactId], references: [id], onDelete: Restrict)
+  accessRequest    CompanyAccessRequest?      @relation("AccessRequestGrant", fields: [accessRequestId], references: [id], onDelete: Restrict)
+  grantedByGrant   CompanyManagementGrant?    @relation("GrantIssuer", fields: [grantedByGrantId], references: [id], onDelete: Restrict)
+  issuedGrants     CompanyManagementGrant[]   @relation("GrantIssuer")
+  sessions         CompanyManagementSession[]
+  decidedRequests  CompanyAccessRequest[]     @relation("AccessDecisionGrant")
+
+  @@unique([companyId, contactId])
+  @@index([companyId, status])
+  @@map("company_management_grants")
+}
+
+model CompanyManagementSession {
+  id          String                 @id @default(uuid()) @db.Uuid
+  companyId   String                 @map("company_id") @db.Uuid
+  grantId     String                 @map("grant_id") @db.Uuid
+  tokenDigest Bytes                  @unique @map("token_digest")
+  csrfDigest  Bytes                  @map("csrf_digest")
+  expiresAt   DateTime               @map("expires_at") @db.Timestamptz(3)
+  lastSeenAt  DateTime?              @map("last_seen_at") @db.Timestamptz(3)
+  revokedAt   DateTime?              @map("revoked_at") @db.Timestamptz(3)
+  createdAt   DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  company     Company                @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  grant       CompanyManagementGrant @relation(fields: [grantId], references: [id], onDelete: Restrict)
+
+  @@index([companyId, expiresAt])
+  @@index([grantId, revokedAt])
+  @@map("company_management_sessions")
+}
+
+model CompanyAccessRequest {
+  id                  String                       @id @default(uuid()) @db.Uuid
+  companyId           String                       @map("company_id") @db.Uuid
+  contactId           String                       @map("contact_id") @db.Uuid
+  takeoverIntentId    String?                      @unique @map("takeover_intent_id") @db.Uuid
+  status              CompanyAccessRequestStatus   @default(PENDING)
+  requestedAt         DateTime                     @default(now()) @map("requested_at") @db.Timestamptz(3)
+  expiresAt           DateTime                     @map("expires_at") @db.Timestamptz(3)
+  decidedAt           DateTime?                    @map("decided_at") @db.Timestamptz(3)
+  decidedByGrantId    String?                      @map("decided_by_grant_id") @db.Uuid
+  decisionReason      String?                      @map("decision_reason") @db.VarChar(500)
+  lastNotifiedAt      DateTime?                    @map("last_notified_at") @db.Timestamptz(3)
+  notificationCount   Int                          @default(0) @map("notification_count")
+  recoveryRequestedAt DateTime?                    @map("recovery_requested_at") @db.Timestamptz(3)
+  recoveryExpiresAt   DateTime?                    @map("recovery_expires_at") @db.Timestamptz(3)
+  recoveryStatus      RecoveryRequestStatus        @default(NONE) @map("recovery_status")
+  createdAt           DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  company             Company                      @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  contact             CompanyContact               @relation(fields: [contactId], references: [id], onDelete: Restrict)
+  takeoverIntent      TakeoverIntent?              @relation(fields: [takeoverIntentId], references: [id], onDelete: Restrict)
+  decidedByGrant      CompanyManagementGrant?      @relation("AccessDecisionGrant", fields: [decidedByGrantId], references: [id], onDelete: Restrict)
+  challenges          EmailVerificationChallenge[]
+  resultingGrants     CompanyManagementGrant[]     @relation("AccessRequestGrant")
+
+  @@index([companyId, status])
+  @@index([contactId, requestedAt])
+  @@index([expiresAt])
+  @@map("company_access_requests")
+}
+
+model TakeoverIntent {
+  id                       String                @id @default(uuid()) @db.Uuid
+  companyId                String                @map("company_id") @db.Uuid
+  contactId                String                @map("contact_id") @db.Uuid
+  territoryExternalRef     String                @map("territory_external_ref") @db.VarChar(128)
+  intendedAmountMinor      BigInt?               @map("intended_amount_minor")
+  currency                 String?               @db.Char(3)
+  quotedTerritoryVersion   String?               @map("quoted_territory_version") @db.VarChar(128)
+  quotedOwnerCompanyId     String?               @map("quoted_owner_company_id") @db.Uuid
+  quotedWinningAmountMinor BigInt?               @map("quoted_winning_amount_minor")
+  quotedMinimumAmountMinor BigInt?               @map("quoted_minimum_amount_minor")
+  quoteObservedAt          DateTime?             @map("quote_observed_at") @db.Timestamptz(3)
+  status                   TakeoverIntentStatus  @default(AWAITING_EMAIL_VERIFICATION)
+  expiresAt                DateTime              @map("expires_at") @db.Timestamptz(3)
+  createdAt                DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+  company                  Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  contact                  CompanyContact        @relation(fields: [contactId], references: [id], onDelete: Restrict)
+  accessRequest            CompanyAccessRequest?
+
+  @@index([companyId, status])
+  @@index([contactId, createdAt])
+  @@index([expiresAt])
+  @@map("takeover_intents")
+}
+
+model AuditLog {
+  id         String         @id @default(uuid()) @db.Uuid
+  actorType  AuditActorType @map("actor_type")
+  actorId    String?        @map("actor_id") @db.Uuid
+  companyId  String?        @map("company_id") @db.Uuid
+  action     String         @db.VarChar(120)
+  targetType String         @map("target_type") @db.VarChar(80)
+  targetId   String?        @map("target_id") @db.Uuid
+  requestId  String?        @map("request_id") @db.VarChar(128)
+  reason     String?        @db.VarChar(500)
+  metadata   Json?
+  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  company    Company?       @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([companyId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_logs")
+}
+
+model SecurityRateLimitBucket {
+  id              String   @id @default(uuid()) @db.Uuid
+  keyDigest       Bytes    @map("key_digest")
+  windowStartedAt DateTime @map("window_started_at") @db.Timestamptz(3)
+  expiresAt       DateTime @map("expires_at") @db.Timestamptz(3)
+  count           Int      @default(0)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([keyDigest, windowStartedAt], map: "security_rate_limit_bucket_scope_key")
+  @@index([expiresAt])
+  @@map("security_rate_limit_buckets")
+}

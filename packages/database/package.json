@@ -17,6 +17,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "db:generate": "prisma generate",
+    "db:test:prepare": "node scripts/prepare-integration-database.mjs",
     "db:validate": "prisma validate",
     "db:migrate:deploy": "prisma migrate deploy"
   },

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createDatabaseLifecycle } from '../src/client.js';
+import { createDatabaseLifecycle, createTransactionRunner } from '../src/client.js';
 
 describe('database client lifecycle', () => {
   it('constructs a client lazily and reuses it', () => {
@@ -28,5 +28,24 @@ describe('database client lifecycle', () => {
 
     expect(lifecycle.getDatabaseClient()).toBe(secondClient);
     expect(factory).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('database transaction runner', () => {
+  it('passes the transaction client supplied by the lifecycle-owned client', async () => {
+    const transactionClient = { marker: 'transaction-client' };
+    const client = {
+      $transaction: vi.fn(async (operation: (value: typeof transactionClient) => Promise<string>) =>
+        operation(transactionClient),
+      ),
+    };
+    const getClient = vi.fn(() => client);
+    const runTransaction = createTransactionRunner(getClient);
+    const operation = vi.fn(async (value: typeof transactionClient) => value.marker);
+
+    await expect(runTransaction(operation)).resolves.toBe('transaction-client');
+    expect(getClient).toHaveBeenCalledOnce();
+    expect(client.$transaction).toHaveBeenCalledOnce();
+    expect(operation).toHaveBeenCalledWith(transactionClient);
   });
 });

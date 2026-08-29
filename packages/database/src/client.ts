@@ -5,6 +5,10 @@ type DisconnectableClient = {
   $disconnect(): Promise<void>;
 };
 
+type TransactionalClient<TTransaction> = {
+  $transaction<TResult>(operation: (transaction: TTransaction) => Promise<TResult>): Promise<TResult>;
+};
+
 export type DatabaseLifecycle<TClient extends DisconnectableClient> = {
   getDatabaseClient(): TClient;
   isDatabaseInitialized(): boolean;
@@ -34,6 +38,16 @@ export function createDatabaseLifecycle<TClient extends DisconnectableClient>(
   };
 }
 
+export function createTransactionRunner<TTransaction, TClient extends TransactionalClient<TTransaction>>(
+  getClient: () => TClient,
+) {
+  return function withTransaction<TResult>(
+    operation: (transaction: TTransaction) => Promise<TResult>,
+  ): Promise<TResult> {
+    return getClient().$transaction(operation);
+  };
+}
+
 function createPrismaClient(): PrismaClient {
   const connectionString = process.env.DATABASE_URL;
   if (connectionString === undefined || connectionString.length === 0) {
@@ -49,3 +63,4 @@ const lifecycle = createDatabaseLifecycle(createPrismaClient);
 export const getDatabaseClient = lifecycle.getDatabaseClient;
 export const isDatabaseInitialized = lifecycle.isDatabaseInitialized;
 export const disconnectDatabase = lifecycle.disconnectDatabase;
+export const withDatabaseTransaction = createTransactionRunner(getDatabaseClient);

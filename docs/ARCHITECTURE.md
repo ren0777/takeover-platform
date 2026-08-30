@@ -1,6 +1,6 @@
 # TakeOver.com Architecture
 
-> **Current status:** Phase 0 acceptance is **IMPLEMENTED NOW / VERIFIED**. Applying the migration and executing queries against a live PostgreSQL instance are **UNVALIDATED / NEEDS REVIEW**. **PLANNED** diagrams describe intended product flows, not working systems.
+> **Current status:** Phases 0 and 1 are **IMPLEMENTED NOW / VERIFIED** locally, including both migrations and Phase 1 integration/concurrency tests against a dedicated PostgreSQL 17 test database. Production email delivery and manual-recovery execution are unavailable. **PLANNED** diagrams describe intended later product flows, not working systems.
 
 ## System Overview
 
@@ -33,7 +33,7 @@ flowchart LR
 ## Frontend and Backend Boundaries
 
 - **IMPLEMENTED NOW:** `apps/web` is an independent minimal presentation deployment and does not import database code. Product presentation and orchestration remain planned.
-- **IMPLEMENTED NOW:** `apps/api` is an independent Fastify deployment with infrastructure routes. Product services, authorization, transactions, integrations, and SSE remain planned.
+- **IMPLEMENTED NOW:** `apps/api` is an independent Fastify deployment with infrastructure routes plus the Phase 1 company-claim identity module. Territory, payment/capture, competition, and SSE remain planned.
 - **IMPLEMENTED NOW:** `@takeover/shared` is the sole shared contract source. Frontend-only view models may remain clearly presentation-specific.
 - **IMPLEMENTED NOW:** `@takeover/database` is server-only and the sole Prisma owner.
 
@@ -45,28 +45,33 @@ flowchart LR
 
 Future modules live under `apps/api/src/modules/<feature>` only when implemented. Routes remain thin; services/domain logic own decisions; repositories own Prisma queries; integrations implement provider interfaces.
 
+### Phase 1 — IMPLEMENTED NOW
+
+`modules/company-identity` contains thin routes, service/domain authorization decisions, and a repository interface with Prisma implementation. Fastify plugins own database, cookie, email-provider, and company-identity wiring. Business rules are HTTP-independent and integration-tested against PostgreSQL.
+
 ## Database Architecture
 
-- **IMPLEMENTED NOW:** Prisma `7.10.0` CLI, client, and PostgreSQL adapter are pinned exactly; `prisma.config.ts` owns CLI configuration; the generated client has explicit output; `PrismaPg` supplies the driver adapter; one infrastructure-only `SystemMetadata` model/migration and a tested lazy client lifecycle exist.
+- **IMPLEMENTED NOW:** Prisma `7.10.0` CLI, client, and PostgreSQL adapter are pinned exactly; `prisma.config.ts` owns CLI configuration; the generated client has explicit output; `PrismaPg` supplies the driver adapter; a tested lazy client lifecycle exists.
 - **IMPLEMENTED NOW:** The initial SQL migration matches the offline `prisma migrate diff` shape. UUID generation remains Prisma-client-side, so the migration introduces no `pgcrypto` dependency or database default.
-- **UNVALIDATED / NEEDS REVIEW:** The migration has not been applied to a live PostgreSQL instance and no runtime query has been executed.
-- **PLANNED:** Phase 1 product models are Company, CompanyContact, CompanyVerification, EmailVerificationChallenge, CompanyManagementGrant, CompanyManagementSession, CompanyAccessRequest, TakeoverIntent, and AuditLog. There is no V1 `User` or `CompanyMember` model. Later phases add TerritoryCategory, Territory, TerritoryOwnership, Bid, Payment, PaymentEvent, WebhookEvent, Season, SeasonCompanyStats, SeasonTerritoryStats, LeaderboardSnapshot, Battle, BattleParticipant, BattleEvent, ActivityEvent, and AdminAction only when implemented.
+- **IMPLEMENTED NOW:** The foundation and company-claim identity migrations apply cleanly to a dedicated PostgreSQL 17 test database; runtime persistence and approve/reject concurrency tests pass.
+- **IMPLEMENTED NOW:** Phase 1 models are `Company`, `CompanyContact`, `CompanyVerification`, `EmailVerificationChallenge`, `CompanyManagementGrant`, `CompanyManagementSession`, `CompanyAccessRequest`, `TakeoverIntent`, `AuditLog`, and `SecurityRateLimitBucket`. There is no V1 `User` or `CompanyMember` model.
+- **PLANNED:** Later phases add TerritoryCategory, Territory, TerritoryOwnership, Bid, Payment, PaymentEvent, WebhookEvent, Season, SeasonCompanyStats, SeasonTerritoryStats, LeaderboardSnapshot, Battle, BattleParticipant, BattleEvent, ActivityEvent, and AdminAction only when implemented.
 - **UNVALIDATED / NEEDS REVIEW:** Exact columns, enum strategy, deletion policy, contention definition, season reset policy, battle scoring, and payment-refund state repair.
 
 Future critical invariants include one active territory owner, unique provider event IDs, unique idempotency keys in scope, safe money checks, immutable financial references, and explicit lifecycle states. PostgreSQL transactions and locks/versions will protect capture workflows.
 
-## Company Claim Identity and Authorization — PLANNED
+## Company Claim Identity and Authorization — IMPLEMENTED NOW
 
 V1 intentionally has no traditional account system: no `User`, passwords, signup/login, password reset, global end-user roles, or global authenticated dashboard. Company identity is separate from management authority.
 
-The approved capability flow is an opaque email link exchanged for a short-lived Secure, HttpOnly, company-scoped management session. Link secrets have at least 256 bits of cryptographically secure randomness; only selectors and keyed digests are stored. Links are purpose-bound, single-use, expiring, and revocable. Sessions and grants authorize exactly one company.
+The implemented capability flow is an opaque email link exchanged for a short-lived Secure-in-production, HttpOnly, company-scoped management session. Link secrets have at least 256 bits of cryptographically secure randomness; only selectors and keyed digests are stored. Links are purpose-bound, single-use, expiring, and revocable. Sessions and grants authorize exactly one company.
 
 ```mermaid
 sequenceDiagram
   actor Contact
   participant Web
   participant API
-  participant Email as Future email adapter
+  participant Email as EmailProvider boundary
   participant DB as PostgreSQL
   Contact->>Web: Enter company and contact email
   Web->>API: Begin company claim
@@ -83,7 +88,7 @@ sequenceDiagram
 
 A verified contact has no company authority without an active `CompanyManagementGrant`. A grant is exercised through a valid session scoped to the same company. A session for Company A never authorizes Company B. Company IDs, websites, email strings, payment details, and browser return URLs are not credentials.
 
-## Companies, Contacts, and Verification — PLANNED
+## Companies, Contacts, and Verification — IMPLEMENTED NOW
 
 `Company` stores identity and a lifecycle. A new company begins as a private, expiring, non-participating draft and becomes public/active only through the future confirmed capture transaction. `CompanyContact` stores a normalized verified contact channel and is deliberately not a human account. `CompanyManagementGrant` binds a contact to one company, including a draft; `CompanyManagementSession` exercises that grant. The same contact may hold separate grants and sessions for multiple companies without gaining global authority.
 
@@ -92,6 +97,10 @@ A verified contact has no company authority without an active `CompanyManagement
 When a different verified contact selects an existing company with an active manager, the API creates a pending `CompanyAccessRequest`, blocks checkout and mutations, and notifies current managers. Approval atomically creates a target-company grant; rejection cancels or expires the prepared takeover intent. If managers are unreachable, a manual-review request is the only fallback—payment cannot bypass management authorization.
 
 The detailed approved design is `docs/superpowers/specs/2026-08-29-phase-1-company-claim-identity-design.md`. V1 TTLs, the default `SameSite=Lax` cookie policy, exact normalized-website collision behavior, a dev/test email transport, and the external territory-reference seam are locked. Production email delivery, cross-site deployment changes, and manual-reviewer authorization remain **UNVALIDATED / NEEDS REVIEW**.
+
+Implemented Phase 1 routes are `POST /api/company-claims`, email verification issue/exchange, management-link issue/exchange, management context/session revocation, access-request approve/reject, recovery-request creation, and reference-only takeover-intent preparation. Cookie-authenticated mutations require the company-scoped opaque session, exact trusted Origin, and matching CSRF cookie/header. `GET /__dev/email-captures/:messageId` exists only when development mode, explicit capture enablement, and loopback binding all hold.
+
+Manual recovery execution is **PLANNED / UNAVAILABLE**: the non-public `ManualRecoveryOperatorPort` fails with a typed unavailable result, and no operator credential, approval route, or environment bypass exists. Production email delivery is also **PLANNED**; the implemented in-memory transport is development/test-only.
 
 ## Territories and Ownership — PLANNED
 
@@ -235,15 +244,15 @@ flowchart TD
 
 A future explicit state machine records challenger, defender, selected territories, start/end, current state, winner, reason, participants, and append-only timeline. No scoring metric will be implemented until it is independently verifiable.
 
-## Audit and Admin — PLANNED
+## Audit — IMPLEMENTED NOW; Admin — PLANNED
 
 Audit records capture actor type, company-scoped grant/session where applicable, action, target, safe before/after context, request ID, reason, and timestamp. Phase 1 security actions—including challenge exchange, grant/session revocation, access-request decisions, and recovery requests—are audited. A later operator identity and authorization model must be designed separately; V1 company sessions do not confer administrator authority. Controlled reversals never edit financial history invisibly.
 
 ## Rate Limiting and Security
 
-- **PLANNED:** Endpoint-specific rate limiting; selector-plus-secret tokens with at least 256 bits of secret entropy and keyed digests at rest; purpose/scope/expiry/consumption/revocation checks; company-scoped Secure/HttpOnly cookies; CSRF and Origin strategy; enumeration resistance; request-size limits; URL/SSRF protections; provider signature validation; replay protection; and abuse signals.
-- **PLANNED:** Critical link issuance, access-request, and notification throttles use durable PostgreSQL state so correctness does not depend on one process. Redis is not required by the approved Phase 1 design.
-- **IMPLEMENTED NOW:** environment validation, safe errors, structured logging, request IDs, and conventional secret redaction.
+- **IMPLEMENTED NOW:** Phase 1 endpoint-specific rate limits; selector-plus-secret tokens with at least 256 bits of secret entropy and keyed digests at rest; purpose/scope/expiry/consumption/revocation checks; company-scoped Secure-in-production/HttpOnly cookies; exact-Origin and CSRF checks; practical enumeration resistance; public-HTTPS URL restrictions; environment validation; safe errors; structured logging; request IDs; and secret redaction.
+- **IMPLEMENTED NOW:** Critical link issuance, access/recovery request, exchange, and notification throttles use durable PostgreSQL buckets/counters so correctness does not depend on one process. Redis is not required or installed.
+- **PLANNED:** Provider signature validation, payment replay protection, broader abuse signals, and deployment-level request/body limits belong to later reviewed phases.
 - ORM use does not replace authorization or database constraints.
 
 ## Deployment
@@ -276,7 +285,7 @@ Use managed PostgreSQL point-in-time recovery, encrypted backups, documented ret
 
 Provider, email, token-pepper, and session secrets are not defined in Phase 0. Phase 1 variables will be selected in its implementation plan and documented before use; Dodo variables belong to Phase 3.
 
-### Phase 1 planned identity defaults
+### Phase 1 implemented identity defaults
 
 | Setting                           |    Default |
 | --------------------------------- | ---------: |
@@ -291,6 +300,6 @@ The Phase 1 API validates these as runtime configuration. Management cookies are
 
 ## External Integrations
 
-- **IMPLEMENTED NOW:** No external service connection. The PostgreSQL driver and Prisma adapter are installed but no live database was contacted.
-- **PLANNED:** PostgreSQL runtime; a future email delivery adapter for passwordless contact verification and management links; Dodo Payments as the Phase 3 V1 payment adapter; optional future domain/manual verification and additional payment adapters; monitoring/error reporting; and SSE-compatible deployment.
-- **UNVALIDATED / NEEDS REVIEW:** Email provider/delivery behavior and Dodo's current API, webhook signatures, retries, SDK, event mapping, and refund semantics.
+- **IMPLEMENTED NOW:** PostgreSQL runtime through Prisma/`@prisma/adapter-pg`, verified against a dedicated PostgreSQL 17 test database; an `EmailProvider` boundary with development/test-only transport; and an explicit unavailable production transport.
+- **PLANNED:** A production email adapter for passwordless contact verification and management links; Dodo Payments as the Phase 3 V1 payment adapter; optional future domain/manual verification; monitoring/error reporting; and SSE-compatible deployment.
+- **UNVALIDATED / NEEDS REVIEW:** Production email-provider behavior and Dodo's current API, webhook signatures, retries, SDK, event mapping, and refund semantics.

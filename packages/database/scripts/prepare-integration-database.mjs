@@ -21,15 +21,11 @@ if (databaseName.length === 0 || !databaseName.toLowerCase().includes('test')) {
 }
 
 const prismaCli = fileURLToPath(new URL('./index.js', import.meta.resolve('prisma')));
-const result = spawnSync(
-  process.execPath,
-  [prismaCli, 'migrate', 'reset', '--force'],
-  {
-    cwd: new URL('..', import.meta.url),
-    env: { ...process.env, DATABASE_URL: rawUrl },
-    stdio: 'inherit',
-  },
-);
+const result = spawnSync(process.execPath, [prismaCli, 'migrate', 'reset', '--force'], {
+  cwd: new URL('..', import.meta.url),
+  env: { ...process.env, DATABASE_URL: rawUrl },
+  stdio: 'inherit',
+});
 
 if (result.error !== undefined) throw result.error;
 if (result.status !== 0) process.exit(result.status ?? 1);

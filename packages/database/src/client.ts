@@ -6,7 +6,9 @@ type DisconnectableClient = {
 };
 
 type TransactionalClient<TTransaction> = {
-  $transaction<TResult>(operation: (transaction: TTransaction) => Promise<TResult>): Promise<TResult>;
+  $transaction<TResult>(
+    operation: (transaction: TTransaction) => Promise<TResult>,
+  ): Promise<TResult>;
 };
 
 export type DatabaseLifecycle<TClient extends DisconnectableClient> = {
@@ -38,9 +40,10 @@ export function createDatabaseLifecycle<TClient extends DisconnectableClient>(
   };
 }
 
-export function createTransactionRunner<TTransaction, TClient extends TransactionalClient<TTransaction>>(
-  getClient: () => TClient,
-) {
+export function createTransactionRunner<
+  TTransaction,
+  TClient extends TransactionalClient<TTransaction>,
+>(getClient: () => TClient) {
   return function withTransaction<TResult>(
     operation: (transaction: TTransaction) => Promise<TResult>,
   ): Promise<TResult> {

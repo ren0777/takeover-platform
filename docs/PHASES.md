@@ -39,7 +39,7 @@
 
 **Dependencies:** Verified Phase 0; approved Phase 1 design and locked V1 defaults; PostgreSQL integration-test environment. Production email delivery and manual approval execution remain unavailable until separately selected/designed.
 
-**Status:** **IN PROGRESS — TASK 1 SHARED CONTRACTS VERIFIED; BACKEND IMPLEMENTATION CONTINUES**
+**Status:** **IMPLEMENTED NOW — LOCAL AND POSTGRESQL ACCEPTANCE VERIFIED**
 
 **Tasks:** company identity and drafts; contact-email verification; purpose-bound opaque challenges; management grants; short-lived company-scoped HttpOnly sessions; access requests; approve/reject/cancel/expire transitions; notification throttles; manual-recovery request architecture; authorization policies; rate limits; audit trail; `TakeoverIntent` contract/state seam only.
 
@@ -50,6 +50,8 @@
 **Tests:** challenge purpose/success/failure/expiry/replay/revocation; secure cookie and CSRF/Origin behavior; unauthorized and cross-company actions; grant/session revocation; pending-request checkout denial; concurrent approve/reject; notification/request rate limits; enumeration-safe issuance; audit atomicity; quote-staleness state transitions; PostgreSQL integration behavior.
 
 **Risks:** email compromise or delivery failure; bearer-link leakage/scanners; company squatting/collisions; access-request spam; stale sessions; cross-company privilege escalation; unavailable managers; unsafe manual recovery; cookie topology errors; and accidentally building a global user abstraction through contacts.
+
+**Verified evidence (2026-08-30):** shared, API unit/HTTP, security, PostgreSQL persistence, and concurrent approve/reject tests pass; both migrations apply to a dedicated PostgreSQL 17 test database; independent builds and compiled API smoke pass. Production email delivery and manual-recovery execution remain unavailable by design and are not completion claims. A traced `@prisma/adapter-pg`/`pg` deprecation warning remains documented for upgrade review.
 
 ## Phase 2 — Territories
 

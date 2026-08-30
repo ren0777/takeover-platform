@@ -54,6 +54,24 @@ Supporting modules: `src/lib/api/client.ts` (envelope handling, CSRF header, typ
 
 Do not create provisional `Territory`, `Season`, `Battle`, `LeaderboardEntry`, or `ActivityEvent` types in `apps/web`. When Phase 2 lands, re-read the canonical docs, re-inspect `@takeover/shared`, then rewrite Task 3 and everything downstream against the real contracts.
 
+### Committed follow-up — access-review discovery
+
+`?requestId=` is a stopgap, not the durable mechanism. When Codex publishes the manager pending-request endpoint, `/access-review` must fetch pending requests for the session's company and render them for explicit decision. The query parameter may remain only as a deep-link convenience. A manager whose review link has expired must still be able to decide from an existing session, which the query parameter alone cannot deliver.
+
+### Phase 2 reconciliation — known conflicts to resolve before resuming
+
+Recorded from `MEMORY.md` on 2026-08-30, before Phase 2 contracts exist. Each contradicts something currently written in `DESIGN.md` or the frontend spec, so resolve them rather than implementing from the older text.
+
+- **`contested` is not a Phase 2 state.** Public states are `unclaimed`, `claimed`, and `disabled`; contested is absent until Phase 3 bidding can define it authoritatively. The board must ship without a contested treatment, and the 2px contested border, the ember token usage, and the contested badge stay unused. `DESIGN.md` still describes contested as a first-class board state and needs a status label.
+- **`displayWeight` is authoritative, `1..100`, and carries no price meaning.** Once published, `tierOf` must consume it directly and the current-price fallback should be deleted rather than kept as a secondary path. Flagship/major/standard bands remain presentation-only, and tile size must not be described as reflecting price, volume, or company size.
+- **Suspended owners stay publicly named** with `status: suspended`. The territory card and company profile need that state; suspension never rewrites ownership.
+- **Territory detail previews five history entries** through one server constant, with full history cursor-paginated. Do not invent a different preview count.
+- **Territory versions are bigint as decimal strings over JSON.** Treat them as opaque strings; never parse to `number`.
+
+### Blocked beyond Phase 2
+
+Even once territory contracts land, these stay out of scope until later authoritative phases: leaderboard, activity rail, contested UI, price display, takeover bid, Dodo/payment, and capture success.
+
 ## File Structure
 
 | Path                           | Responsibility                             |

@@ -28,19 +28,31 @@ Every task's requirements implicitly include this section.
 - **Keep** the existing `.skip-link` / `#main-content` contract and `src/lib/site.ts`.
 - **Verification command for every task:** `pnpm --filter @takeover/web test && pnpm --filter @takeover/web typecheck && pnpm --filter @takeover/web lint`
 
-## Execution Status — updated 2026-08-30
+## Execution Status — updated 2026-08-30 (Phase 1 shipped)
 
-Phase 1 (Company + Claim Identity) is **design approved, implementation not started**. `@takeover/shared` still publishes no product-domain contract, so most of this plan is gated.
+Phase 1 (Company + Claim Identity) is **implemented and verified** by Codex, and its contracts are published in `@takeover/shared`. Phase 2 (Territories + Ownership) is **approved design, implementation not started**, so the board still has no authoritative data.
 
-| Tasks    | Status                 | Reason                                                                                   |
-| -------- | ---------------------- | ---------------------------------------------------------------------------------------- |
-| 1, 2     | **Executable now**     | Domain-independent. Task 2 depends only on `Money`, which is published and authoritative |
-| 3–10, 12 | **Blocked**            | Depend on product-domain shapes that `@takeover/shared` does not yet define              |
-| 11       | **Blocked, rewritten** | Realigned to the Phase 1 claim model; needs the Phase 1 shared schemas                   |
+| Tasks    | Status      | Notes                                                                                              |
+| -------- | ----------- | -------------------------------------------------------------------------------------------------- |
+| 1, 2     | **Done**    | Design tokens, typography, and money/duration/colour utilities                                     |
+| 11       | **Done**    | Superseded by the Phase 1 surfaces below; built against real contracts, not the sketch in the task |
+| 3–10, 12 | **Blocked** | Need Phase 2 `Territory`, ownership, and the later leaderboard/activity contracts                  |
 
-Do not create provisional `Territory`, `Company`, `Season`, `Battle`, `LeaderboardEntry`, or `ActivityEvent` types in `apps/web` to unblock work. The source-of-truth question is being resolved deliberately; introducing duplication to move faster is explicitly rejected.
+### Phase 1 surfaces implemented
 
-When Codex publishes the Phase 1 contracts: re-read the six canonical docs, re-inspect `@takeover/shared`, update Task 3 and everything downstream of it to the real types, then resume.
+`/claim`, `/verify`, `/manage` (link request and token exchange), `/manage/company`, `/manage/recovery`, `/access-review` — all `noindex`, all consuming `@takeover/shared` schemas with no duplicated contract in `apps/web`.
+
+Supporting modules: `src/lib/api/client.ts` (envelope handling, CSRF header, typed errors), `src/lib/api/identity.ts` (one function per endpoint), `src/lib/identity/fragment-token.ts`, `src/lib/identity/use-fragment-exchange.ts`, `src/lib/identity/error-copy.ts`, and `src/components/identity/*`.
+
+### Decisions taken during integration
+
+- **`/api` is proxied, not called cross-origin.** The API has no CORS plugin and scopes cookies to `Path=/api`, so `next.config.ts` rewrites `/api/*` to `TAKEOVER_API_ORIGIN`. This also produces the `Origin` header the API's mutation check requires.
+- **Identity surfaces are client components.** Cookies must flow from the browser, and these pages are private and `noindex`, so server rendering buys nothing.
+- **`apps/web` takes no direct zod dependency.** The API client types schemas structurally via `safeParse`, so schemas still come only from `@takeover/shared`.
+
+### Still true, and still enforced
+
+Do not create provisional `Territory`, `Season`, `Battle`, `LeaderboardEntry`, or `ActivityEvent` types in `apps/web`. When Phase 2 lands, re-read the canonical docs, re-inspect `@takeover/shared`, then rewrite Task 3 and everything downstream against the real contracts.
 
 ## File Structure
 

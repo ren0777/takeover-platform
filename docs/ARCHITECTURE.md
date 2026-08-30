@@ -55,7 +55,7 @@ Future modules live under `apps/api/src/modules/<feature>` only when implemented
 - **IMPLEMENTED NOW:** The initial SQL migration matches the offline `prisma migrate diff` shape. UUID generation remains Prisma-client-side, so the migration introduces no `pgcrypto` dependency or database default.
 - **IMPLEMENTED NOW:** The foundation and company-claim identity migrations apply cleanly to a dedicated PostgreSQL 17 test database; runtime persistence and approve/reject concurrency tests pass.
 - **IMPLEMENTED NOW:** Phase 1 models are `Company`, `CompanyContact`, `CompanyVerification`, `EmailVerificationChallenge`, `CompanyManagementGrant`, `CompanyManagementSession`, `CompanyAccessRequest`, `TakeoverIntent`, `AuditLog`, and `SecurityRateLimitBucket`. There is no V1 `User` or `CompanyMember` model.
-- **PLANNED:** Later phases add TerritoryCategory, Territory, TerritoryOwnership, Bid, Payment, PaymentEvent, WebhookEvent, Season, SeasonCompanyStats, SeasonTerritoryStats, LeaderboardSnapshot, Battle, BattleParticipant, BattleEvent, ActivityEvent, and AdminAction only when implemented.
+- **PLANNED:** Phase 2 adds `TerritoryCategory`, `Territory`, and `TerritoryOwnership`; later phases add Bid, Payment, PaymentEvent, WebhookEvent, Season, SeasonCompanyStats, SeasonTerritoryStats, LeaderboardSnapshot, Battle, BattleParticipant, BattleEvent, ActivityEvent, and AdminAction only when implemented.
 - **UNVALIDATED / NEEDS REVIEW:** Exact columns, enum strategy, deletion policy, contention definition, season reset policy, battle scoring, and payment-refund state repair.
 
 Future critical invariants include one active territory owner, unique provider event IDs, unique idempotency keys in scope, safe money checks, immutable financial references, and explicit lifecycle states. PostgreSQL transactions and locks/versions will protect capture workflows.
@@ -104,7 +104,15 @@ Manual recovery execution is **PLANNED / UNAVAILABLE**: the non-public `ManualRe
 
 ## Territories and Ownership — PLANNED
 
-Territory summary fields optimize reads but ownership history is authoritative. Exactly one active ownership is enforced at the database boundary. Current owner, amount, version, previous owner, and reign start are updated only inside the capture transaction.
+The approved Phase 2 design uses `TerritoryOwnership` as the sole source of ownership truth. `Territory` does not duplicate current owner, previous owner, bid, or takeover-price fields. Public current/previous-owner projections are derived from committed reign rows. Stored territory availability is only active or disabled; public `unclaimed`, `claimed`, and `disabled` states are derived from availability plus the active reign. `contested` is absent until Phase 3 has authoritative bidding state.
+
+PostgreSQL will enforce one active reign with a partial unique index and non-overlapping `[capturedAt, endedAt)` ranges with a `btree_gist` exclusion constraint. The Phase 2 migration must run `CREATE EXTENSION IF NOT EXISTS btree_gist`; a production provider that cannot support it is a deployment blocker. Territory bigint versions support locked compare-and-swap transitions and are serialized as decimal strings in JSON.
+
+`displayWeight` is a backend-authoritative `1..100` presentation value. It is independent of price, ownership, bid volume, company size, and gameplay adjacency. CSS mosaic position and physical adjacency remain presentation only.
+
+Phase 2 plans public read APIs for categories, territories, history, public companies, and company holdings. Suspended owners remain truthfully named with public lifecycle status. Five history rows appear in territory detail through one server-owned preview constant; complete history is cursor-paginated. Initial data comes from a small deterministic reviewed seed of unclaimed territories. No ownership mutation HTTP route or general admin surface is introduced.
+
+The existing `TakeoverIntent.territoryExternalRef` remains intact and reference-only. Phase 2 adds a nullable authoritative `territoryId` without rewriting ambiguous references; `quoteAuthority` remains `reference_only` and checkout remains unavailable.
 
 ### Bid creation
 
@@ -188,8 +196,8 @@ flowchart TD
   Bid --> Payment[Validate verified payment amount/currency/reference]
   Payment --> EndOld[End previous ownership]
   EndOld --> New[Create new active ownership]
-  New --> Summary[Update territory summary/version]
-  Summary --> BidStatus[Mark bid captured]
+  New --> Version[Increment authoritative territory version]
+  Version --> BidStatus[Mark bid captured]
   BidStatus --> Stats[Update season statistics]
   Stats --> Activity[Insert activity event]
   Activity --> Audit[Insert audit event]

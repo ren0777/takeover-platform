@@ -1,6 +1,6 @@
 # TakeOver.com Product Requirements
 
-> **Document status:** Product requirements are **PLANNED** unless a section explicitly says **IMPLEMENTED NOW**. Phase 0 foundation acceptance is verified; live PostgreSQL migration application remains **UNVALIDATED / NEEDS REVIEW**.
+> **Document status:** Product requirements are **PLANNED** unless a section explicitly says **IMPLEMENTED NOW**. Phases 0 and 1 are implemented and verified locally, including Phase 1 migrations and integration tests against PostgreSQL 17. Phase 2 territory/ownership architecture is approved but not implemented.
 
 ## Product Vision
 
@@ -67,7 +67,7 @@ All journeys below are **PLANNED**.
 
 ## Functional Requirements
 
-### Company and claim identity — PLANNED
+### Company and claim identity — IMPLEMENTED NOW / PROFILE EXPANSION PLANNED
 
 - V1 has no `User` model, passwords, signup/login, password reset, global authenticated dashboard, or global end-user session.
 - Company identity is separate from management authority. Authority derives from a verified contact, active company-specific grant, and short-lived company-scoped management session.
@@ -77,7 +77,7 @@ All journeys below are **PLANNED**.
 - Company profiles contain identity, website, descriptions, logo, social links, categories, verification state, timestamps, and server-derived statistics.
 - `TakeoverIntent` preserves preparation and a quote snapshot but never locks price or grants management/ownership.
 
-### Company verification — PLANNED
+### Company verification — CONTACT VERIFIED IMPLEMENTED / STRONGER LEVELS PLANNED
 
 - `contact_verified` is sufficient for V1 participation and proves only control of the verified email management channel.
 - Personal email providers are valid; matching-domain email, DNS control, incorporation, and enterprise identity are not required.
@@ -87,10 +87,12 @@ All journeys below are **PLANNED**.
 
 ### Territories and ownership — PLANNED
 
-- Territories have stable IDs/slugs, category, descriptive media references, lifecycle status, pricing policy, summary state, season relevance, and admin controls.
-- Statuses include unclaimed, claimed, contested, and temporarily disabled.
-- Exactly one authoritative active ownership may exist for a territory.
-- Historical ownership records retain prior owners, amounts, and reign boundaries.
+- Territories have stable IDs/slugs, category, validated visual metadata, backend-authoritative `displayWeight` on a `1..100` scale, availability, concurrency version, and timestamps.
+- Public Phase 2 states are derived as unclaimed, claimed, or disabled. `contested` is absent until a later phase can derive it from real authoritative bidding state.
+- `TerritoryOwnership` is the sole ownership source of truth. PostgreSQL permits at most one active reign per territory and prevents overlapping ownership timelines.
+- Historical ownership records retain real companies and reign boundaries. Suspension does not rewrite an owner or replace it with a fabricated placeholder.
+- Physical mosaic position and CSS adjacency carry no gameplay meaning.
+- Initial categories and territories enter through a small deterministic reviewed seed; Phase 2 does not introduce a general administrator mutation surface.
 
 ### Bidding and payments — PLANNED
 
@@ -144,7 +146,7 @@ All journeys below are **PLANNED**.
 ## V1 Scope
 
 - Passwordless company/contact identity, contact-email verification, company-scoped management capabilities, access approval/rejection, and manual-recovery architecture.
-- Public territory list/detail and administrative territory management.
+- Public territory category/list/detail/history and company-territory reads, backed initially by deterministic reviewed territory seed data.
 - Server-calculated takeover price, provider-neutral Dodo Payments implementation when configured and validated, verified webhooks, and atomic ownership history.
 - Live capture activity through validated SSE infrastructure.
 - Company statistics, empire scoring, current leaderboard, configurable seasons, archives, Hall of Fame, essential moderation, and audit logs.
@@ -199,6 +201,6 @@ Launch is **PLANNED** and requires:
 
 ## Current Delivery Status
 
-- **IMPLEMENTED NOW:** Phase 0 monorepo foundation passed its approved local/offline acceptance suite.
-- **UNVALIDATED / NEEDS REVIEW:** Applying the initial migration and querying a live PostgreSQL instance.
-- **PLANNED:** All user-facing gameplay, identity, payment, ownership, ranking, season, battle, activity, and admin capabilities.
+- **IMPLEMENTED NOW:** Phase 0 foundation and Phase 1 company-claim identity passed their approved local and PostgreSQL acceptance suites.
+- **PLANNED:** Phase 2 territory/authoritative ownership implementation; all pricing, payment, capture, ranking, season, battle, activity, and admin capabilities.
+- **UNVALIDATED / NEEDS REVIEW:** Production PostgreSQL/provider configuration, production email delivery, hosting topology, and operational readiness.

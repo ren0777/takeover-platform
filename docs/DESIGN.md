@@ -27,10 +27,11 @@ V1 has no signup/login page, password recovery, persistent global account surfac
 
 ### Ownership states — PLANNED
 
-- **Unclaimed:** no active owner; show the authoritative opening capture amount.
-- **Claimed:** show owner, current winning amount, minimum takeover, and reign start.
-- **Contested:** show server-defined contention honestly; do not infer it from animation alone.
-- **Temporarily disabled:** explain that takeover is unavailable and suppress payment actions.
+- **Unclaimed:** no active ownership exists. Phase 2 shows no fabricated opening price.
+- **Claimed:** show the authoritative owner and reign start. Price and minimum takeover remain absent until Phase 3.
+- **Disabled:** explain that the territory is unavailable while preserving its real owner and history.
+
+`contested` is not a Phase 2 authoritative state and must not appear in Phase 2 contracts, fixtures presented as live, or UI state. It may return only after Phase 3 defines it from real bidding data.
 
 ### Takeover states — PLANNED
 
@@ -89,7 +90,7 @@ Territory mosaic positions and physical CSS adjacency have no gameplay meaning u
 
 ### Semantic color tokens — PLANNED
 
-Components must consume semantic tokens rather than hardcoded values: `background`, `surface`, `raised surface`, `border`, `text`, `muted text`, `owner`, `challenger`, `contested`, `premium`, `success`, `warning`, `destructive`, `unclaimed`. Radii stay tight (tiles tighter than controls; pills reserved for badges). Borders are hairline by default, with a heavier weight reserved for `contested` and owner-is-viewer emphasis.
+Components must consume semantic tokens rather than hardcoded values: `background`, `surface`, `raised surface`, `border`, `text`, `muted text`, `owner`, `challenger`, `premium`, `success`, `warning`, `destructive`, `unclaimed`. Radii stay tight (tiles tighter than controls; pills reserved for badges). Borders are hairline by default, with heavier emphasis reserved for future authoritative competition states and owner-is-viewer emphasis.
 
 Owner brand accents are decorative only. They may tint a border or corner bleed; they may never sit behind text, encode state, or bypass validation of externally sourced color values.
 
@@ -101,11 +102,11 @@ The board is a tessellated mosaic in which tile size encodes territory importanc
 
 - Tile tiers: `flagship` 2×2, `major` 2×1, `standard` 1×1.
 - In-tile hierarchy, in priority order: territory name → current owner and logo → current ownership/bid value → minimum takeover price → primary `TAKE OVER` action → reign and competition metadata.
-- Throne Room energy is reserved for genuinely important moments — crowns for dominant companies, newly captured animation, contested state, #1 empire, season winner. Every card must not become a battle poster.
+- Throne Room energy is reserved for genuinely important authoritative moments — crowns for dominant companies, newly captured animation, future server-confirmed competition, #1 empire, and season winners. Every card must not become a battle poster.
 - Exchange Terminal density is explicitly rejected as the default board experience.
 - The mosaic must stay understandable at 10, 50, and 100+ territories, including when positioning is algorithmic rather than gameplay-derived.
 
-**`tierOf()` is a temporary presentation heuristic only.** Current price is not the permanent authoritative determinant of physical tile importance. An authoritative `displayWeight: number` is requested from Codex (see `MEMORY.md`); until it exists, development-only fixtures may compute a display weight locally. Frontend-derived tier must never be presented as product truth.
+**`tierOf()` is a temporary presentation heuristic only.** Phase 2 will provide backend-authoritative `displayWeight: number` on a `1..100` scale. Suggested frontend bands are `80..100` flagship, `50..79` major, and `1..49` standard; these remain presentation guidance, not backend enums. `displayWeight` is never derived from price, ownership, bid volume, or company size.
 
 ## Liveness Direction — APPROVED, NOT IMPLEMENTED
 
@@ -115,7 +116,7 @@ The intended feel is _quiet tension → something happened → burst of energy �
 
 - Default state: reign timers tick, a subtle live indicator, quiet activity-rail updates, countdowns without flashy motion. No constant price flickering, no nonstop ticker, no decorative motion added merely to imply liveness.
 - On an authoritative event: short border pulse on the affected tile, previous owner transitions out, new owner transitions in, value updates, activity feed inserts the event, optionally a restrained toast. Bursts settle in roughly 400–700ms.
-- Qualifying events: territory captured, company dethroned, territory becomes highly contested, empire milestone, leaderboard #1 change, battle begins/ends, season winner declared.
+- Qualifying events: territory captured, company dethroned, a future authoritative competition threshold, empire milestone, leaderboard #1 change, battle begins/ends, or season winner declaration.
 - Motion communicates state change; it never decorates. Reduced-motion is respected, information never depends on animation alone, animations never block clicks or takeover actions, and layout must not shift.
 - Performance: animate transform/opacity, animate only tiles that actually changed, and never re-render the whole mosaic on a real-time update.
 

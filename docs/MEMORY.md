@@ -4,7 +4,7 @@
 
 **Phase 0 — Foundation: IMPLEMENTED NOW / VERIFIED. Phase 1 — Company + Claim Identity: IMPLEMENTED NOW / VERIFIED in local development and a dedicated PostgreSQL 17 test database.**
 
-Do not start Phase 2 without a reviewed specification and plan.
+**Phase 2 — Territories + Authoritative Ownership: APPROVED DESIGN / IMPLEMENTATION PLAN IN REVIEW.** Do not implement Phase 2 until its exact seed proposal and implementation plan are approved.
 
 ## What Works
 
@@ -40,6 +40,12 @@ Do not start Phase 2 without a reviewed specification and plan.
 - Manual recovery cannot grant authority in Phase 1.
 - PostgreSQL is the durable source of truth for challenges, sessions, requests, throttles, intents, and audits. Redis/queues/workers are absent.
 - Dodo Payments remains PLANNED for Phase 3 behind a provider-neutral interface and is UNVALIDATED / NEEDS REVIEW.
+- Phase 2 will treat `TerritoryOwnership` as the sole ownership source of truth; `Territory` will not duplicate current/previous owner, bid, or price fields.
+- Phase 2 public states are `unclaimed`, `claimed`, and `disabled`. `contested` is absent until authoritative Phase 3 bidding can define it.
+- Phase 2 `displayWeight` is backend-authoritative on `1..100` and has no price, ownership, volume, company-size, or adjacency meaning. Frontend flagship/major/standard bands remain presentation-only.
+- Suspended owners remain publicly named with `status: suspended`; suspension and future moderation redaction do not rewrite ownership.
+- Phase 2 requires PostgreSQL `btree_gist` for non-overlapping ownership timelines. Unsupported production provider capability is a deployment blocker.
+- Territory detail will preview five history entries through one server constant; full history is cursor-paginated.
 
 ## API Contracts
 
@@ -82,9 +88,9 @@ Phase 1 models: `Company`, `CompanyContact`, `CompanyVerification`, `EmailVerifi
 
 - Production email-provider selection and integration.
 - Separately reviewed operator identity/authorization before manual recovery can be executed.
-- Phase 2 territory design and authoritative ownership.
+- Phase 2 shared contracts, Prisma territory/ownership schema, `btree_gist` constraints, reviewed deterministic seed, public read APIs, internal transaction-bound ownership primitive, and nullable `TakeoverIntent.territoryId` seam.
 - Phase 3 pricing, provider-neutral payments, Dodo adapter, checkout, verified webhooks, reconciliation/refunds, and atomic capture.
-- Later authoritative `displayWeight: number` for territory presentation and an SSE activity stream; neither exists yet.
+- Authoritative Phase 2 `displayWeight: number` for territory presentation and a later SSE activity stream; neither exists yet.
 
 ## Current Blockers
 
@@ -110,12 +116,21 @@ Ready endpoints and security requirements are listed in **API Contracts** above.
 ### Claude → Codex
 
 - Preserve frontend-only work in `apps/web`.
-- Phase 2 should consider authoritative territory `displayWeight: number`; CSS mosaic position/adjacency has no gameplay meaning.
+- Phase 2 design approves authoritative territory `displayWeight: number` on `1..100`; CSS mosaic position/adjacency has no gameplay meaning.
 - A future SSE boundary is needed for real activity; do not synthesize production events.
 - Phase 3 stale-price responses must include current owner, current winning amount, current legal minimum, currency, and version, and must require explicit review without auto-charge.
+
+### Codex → Claude — Phase 2 planned, not ready to consume
+
+- Planned public contracts: `TerritoryCategory`, `TerritoryVisualMetadata`, `TerritorySummary`, `TerritoryDetail`, `TerritoryOwnershipSummary`, `TerritoryHistoryEntry`, `CompanyPublicSummary`, `CompanyTerritories`, and pagination/query schemas.
+- Planned public reads: territory categories/list/detail/history and public company/detail/territory holdings.
+- Bigint territory versions will be decimal strings over JSON.
+- `displayWeight` will be authoritative only after implementation and verification. Until then, keep fixture tiers development-only and do not present them as backend truth.
+- No contested, pricing, payment, checkout, ownership mutation, leaderboard, or live-event contract is available from Phase 2 planning.
 
 ## Recent Important Changes
 
 - 2026-08-29: Phase 0 foundation verified with the reconciled stable version matrix.
 - 2026-08-29: V1 traditional authentication was removed in favor of passwordless company-scoped capabilities.
 - 2026-08-30: Phase 1 company-claim identity contracts, schema, security primitives, email boundary, company/access workflows, recovery request seam, and reference-only intent preparation were implemented and verified against PostgreSQL.
+- 2026-08-30: Phase 2 territory/ownership design was approved with suspended-owner truth, no controlled-correction source, required `btree_gist`, five-entry history preview, and a small reviewed seed requirement. Implementation has not started.

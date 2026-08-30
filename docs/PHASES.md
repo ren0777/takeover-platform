@@ -53,21 +53,23 @@
 
 **Verified evidence (2026-08-30):** shared, API unit/HTTP, security, PostgreSQL persistence, and concurrent approve/reject tests pass; both migrations apply to a dedicated PostgreSQL 17 test database; independent builds and compiled API smoke pass. Production email delivery and manual-recovery execution remain unavailable by design and are not completion claims. A traced `@prisma/adapter-pg`/`pg` deprecation warning remains documented for upgrade review.
 
-## Phase 2 — Territories
+## Phase 2 — Territories + Authoritative Ownership
 
 **Objective:** Create authoritative territory discovery and ownership-history foundations.
 
-**Dependencies:** Phase 1 company-scoped authorization; approved territory taxonomy and lifecycle rules.
+**Dependencies:** verified Phase 1; approved Phase 2 design; reviewed initial seed table; PostgreSQL 17 integration environment with `btree_gist` support.
 
 **Status:** **PLANNED**
 
-**Tasks:** categories; territory schema; list/detail APIs; status; ownership summary/history; capture history; admin create/update/disable workflows.
+**Tasks:** framework-neutral shared contracts; categories and territories; authoritative `displayWeight`; deterministic reviewed seed infrastructure; public company projection; list/detail/history/company-territory APIs; ownership history; one active reign; non-overlapping timelines; transaction-bound ownership primitive; nullable `TakeoverIntent.territoryId` compatibility seam.
 
-**Acceptance criteria:** stable public contracts; exactly one authoritative active owner; disabled state enforced; history cannot be overwritten through normal APIs; admin mutations are audited.
+**Explicit exclusions:** no contested state, bid/pricing fields, payment, Dodo, checkout, webhook, paid capture orchestration, ownership mutation HTTP endpoint, general admin interface, seasons, battles, leaderboard/empire scoring, activity/SSE, Redis, queue, or worker.
 
-**Tests:** list/detail, slug uniqueness, active-owner constraint, status transitions, unauthorized admin action, history ordering, and disabled territory behavior.
+**Acceptance criteria:** stable public contracts; deterministic seed is validated/idempotent and creates no fictional ownership; `TerritoryOwnership` is the sole owner truth; PostgreSQL enforces one active reign and non-overlapping history with `btree_gist`; stale versions roll back; disabled ownership remains truthful; suspended owners remain publicly named; public reads leak no private identity state; Phase 1 behavior remains compatible.
 
-**Risks:** denormalized summary drift, taxonomy churn, cache staleness, and unsafe admin repair.
+**Tests:** shared schemas; list/filter/detail/history/company reads; slug and weight constraints; deterministic seed; active-owner and overlap constraints; history immutability; version concurrency; disabled state; suspended-owner projection; intent compatibility; PostgreSQL migration/concurrency; complete scope-drift scan.
+
+**Risks:** taxonomy churn, accidental private-company leakage, cursor instability, direct history mutation, unsupported `btree_gist`, migration/backfill ambiguity, and accidental Phase 3 pricing/payment drift.
 
 ## Phase 3 — Capture Engine
 

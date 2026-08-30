@@ -1,6 +1,6 @@
 # TakeOver.com Phase 2 Territory + Authoritative Ownership Design
 
-**Status:** PROPOSED / AWAITING REVIEW on 2026-08-30. This document is a design specification only; Phase 2 is not implemented.
+**Status:** APPROVED on 2026-08-30 with V1 decisions locked. This document is a design specification only; Phase 2 is not implemented.
 
 ## Purpose
 
@@ -49,6 +49,8 @@ This phase deliberately stops before bidding and payment. It can say who owns a 
 8. Mosaic position and physical CSS adjacency have no gameplay meaning.
 9. Phase 2 exposes only public reads. The future Phase 3 capture orchestrator will be the first normal production caller allowed to transfer ownership.
 10. Initial production data is deterministic and reviewable in version control. The initial seed contains categories and unclaimed territories, not fictional companies or ownership.
+11. A suspended current owner remains publicly named with its real lifecycle status. Suspension never rewrites ownership truth; any future legal redaction is a separate presentation policy.
+12. Territory detail contains exactly five history-preview entries, controlled by one server constant rather than duplicated literals.
 
 ## Alternatives Considered
 
@@ -127,12 +129,12 @@ type TerritoryVisualMetadata = {
 | `companyId`        | UUID                   | Required foreign key to `Company`, `RESTRICT`                         |
 | `capturedAt`       | timestamptz            | Required reign start                                                  |
 | `endedAt`          | timestamptz, nullable  | Null only for the active reign; if present, greater than `capturedAt` |
-| `source`           | enum                   | `INITIAL_SEED`, `PAID_CAPTURE`, or `CONTROLLED_CORRECTION`            |
-| `reason`           | varchar(500), nullable | Safe operational reason; required for controlled correction           |
+| `source`           | enum                   | `INITIAL_SEED` or `PAID_CAPTURE`                                      |
+| `reason`           | varchar(500), nullable | Safe source explanation                                               |
 | `territoryVersion` | bigint                 | Territory version established by this transition                      |
 | `createdAt`        | timestamptz            | Required                                                              |
 
-Phase 2 writes no production ownership rows through an HTTP route. `PAID_CAPTURE` is reserved for the Phase 3 capture transaction. `CONTROLLED_CORRECTION` is reserved for a later separately authorized operator workflow; it is not exposed in Phase 2. The initial seed strategy intentionally creates no fictional ownership, so `INITIAL_SEED` is available only for explicitly approved real launch data if that decision changes before implementation.
+Phase 2 writes no production ownership rows through an HTTP route. `PAID_CAPTURE` is reserved for the Phase 3 capture transaction. The initial seed strategy intentionally creates no fictional ownership, so `INITIAL_SEED` is available only for explicitly approved real launch data if that decision changes before implementation. `CONTROLLED_CORRECTION` is deliberately absent and may be added only with an approved operator authorization and repair workflow.
 
 The ownership model has no amount, bid, payment, provider, season, battle, or score columns.
 
@@ -168,7 +170,7 @@ The migration and repository design must enforce:
 2. A check constraint requires `ended_at IS NULL OR ended_at > captured_at`.
 3. A check constraint requires `territory_version > 0` and `territories.version > 0`.
 4. A uniqueness constraint on `(territory_id, territory_version)` prevents two history rows from claiming the same transition version.
-5. A PostgreSQL exclusion constraint prevents overlapping `[capturedAt, endedAt)` ranges for one territory. The implementation plan must explicitly review the required `btree_gist` extension and migration portability before adoption; if rejected, equivalent database-level overlap protection must be designed rather than silently omitted.
+5. A PostgreSQL exclusion constraint prevents overlapping `[capturedAt, endedAt)` ranges for one territory. The migration must execute `CREATE EXTENSION IF NOT EXISTS btree_gist`; lack of extension support in a production provider is a deployment blocker, not permission to weaken the invariant.
 6. Foreign keys use `RESTRICT`; ordinary code never hard-deletes a territory, category, company referenced by history, or ownership row.
 7. Slugs are unique and normalized before persistence. Database checks constrain their format.
 8. `displayWeight` has a database check matching the shared schema (`1..100`).
@@ -177,7 +179,7 @@ The migration and repository design must enforce:
 11. If the expected version is stale, no ownership or history row changes.
 12. Public reads derive current and previous ownership from committed rows. Clients cannot submit or override ownership fields.
 
-The Phase 2 implementation plan must decide whether invariant 9 also receives a database trigger after measuring the migration/maintenance cost. The partial unique, timeline, foreign-key, version, and range constraints are mandatory regardless.
+The implementation plan must include a narrowly scoped database trigger for invariant 9 so direct writes cannot rewrite ownership identity/history fields or change an ended reign. The partial unique, timeline, foreign-key, version, range, and immutability constraints are mandatory.
 
 ## Internal Transition Boundary
 
@@ -308,7 +310,7 @@ Default ordering is `displayWeight DESC`, then `name ASC`, then `id ASC`. The re
 
 ### `GET /api/territories/:slug`
 
-Returns `TerritoryDetail`, including current ownership, previous owner with `logoUrl` when available, and a small bounded history preview. It returns disabled territories honestly. It does not emit an opening price, current bid, legal minimum, takeover eligibility, or `contested` state.
+Returns `TerritoryDetail`, including current ownership, previous owner with `logoUrl` when available, and the five most recent history entries. The preview limit comes from one server constant. It returns disabled territories honestly. It does not emit an opening price, current bid, legal minimum, takeover eligibility, or `contested` state.
 
 ### `GET /api/territories/:slug/history`
 
@@ -316,7 +318,7 @@ Returns cursor-paginated `TerritoryHistoryEntry[]` ordered by `capturedAt DESC`,
 
 ### `GET /api/companies/:slug`
 
-Returns a privacy-safe public company projection plus `currentTerritoryCount`. It exposes only companies eligible for public presentation. Historical territory responses may still use a safe archived-company summary so history remains intelligible.
+Returns `CompanyPublicSummary`. It exposes only companies eligible for public presentation. Historical territory responses may still use a safe archived-company summary so history remains intelligible. The authoritative `currentTerritoryCount` is returned by the company-territories endpoint rather than duplicated into every company projection.
 
 ### `GET /api/companies/:slug/territories`
 
@@ -347,7 +349,7 @@ It does not expose contact identifiers or emails, verification evidence, managem
 
 The public current-territory count is derived with the ownership query. It is not stored on `Company`. Phase 4 may introduce independently reproducible aggregates if measured query cost justifies them.
 
-Draft companies are not publicly discoverable. If a draft company is encountered as an ownership owner, the API treats it as an integrity failure rather than leaking the draft. Suspension and archival presentation policy is preserved in historical summaries; whether a suspended current owner remains visible but non-participating must be finalized before implementation.
+Draft companies are not publicly discoverable. If a draft company is encountered as an ownership owner, the API treats it as an integrity failure rather than leaking the draft. A suspended current owner remains publicly named with its name, logo, and `suspended` lifecycle status; suspension may later restrict management or capture eligibility but does not alter ownership. Archived companies remain safely identified in historical summaries. Any future legal/moderation redaction must be a separate presentation mechanism and cannot mutate ownership history.
 
 ## Phase 1 `TakeoverIntent` Integration
 
@@ -486,19 +488,20 @@ Important presentation semantics:
 - `capturedAt` and `endedAt` support deterministic client-side duration formatting; the API does not send a drifting duration string.
 - No Phase 2 response contains current bid, minimum takeover, checkout availability, live activity, rank, or payment success.
 
-## Unresolved Questions Requiring Review
+## Locked Review Decisions
 
-1. **Suspended current owners:** should a suspended company remain publicly named as current owner while future capture/management actions are blocked, or should public presentation use a moderation-safe placeholder? The ownership record must remain intact either way.
-2. **Controlled corrections:** is `CONTROLLED_CORRECTION` worth reserving in the initial enum, or should it be added only alongside the future operator authorization/repair design?
-3. **Timeline exclusion:** approve PostgreSQL `btree_gist` for a database-level no-overlap constraint, or require a different equally strong database enforcement mechanism.
-4. **History preview size:** the detail response needs a small fixed preview; five entries is recommended, with full history available from the paginated endpoint.
-5. **Initial taxonomy:** the exact V1 category/territory seed list, copy, visual metadata, and numeric weights require product review in the implementation plan.
+1. Suspended current owners remain truthfully named and expose `status: 'suspended'`; moderation redaction is separate from ownership.
+2. Ownership sources are limited to `INITIAL_SEED` and reserved `PAID_CAPTURE`; no controlled-correction state exists without a real operator workflow.
+3. PostgreSQL `btree_gist` and a database exclusion constraint are required for non-overlapping ownership timelines.
+4. Territory detail returns five history-preview entries from one server-owned constant.
+5. `displayWeight` remains backend-authoritative on a `1..100` scale. Frontend-only guidance is `80..100` flagship, `50..79` major, and `1..49` standard; these labels are not backend enums.
+6. The implementation plan must present a small exact seed proposal of approximately 20–30 territories across 6–8 categories for product review. No production seed data may be written before that table is approved.
 
-None of these questions permits payment, bidding, capture, or contested-state implementation in Phase 2.
+No locked decision permits payment, bidding, capture, or contested-state implementation in Phase 2.
 
 ## Canonical Documentation Reconciliation After Approval
 
-No canonical document is changed by this proposed specification. If this design is approved, the implementation-plan documentation step must reconcile these existing planned statements before implementation:
+The implementation-plan documentation step reconciles these existing planned statements before implementation:
 
 - `PRD.md` and `DESIGN.md` currently list `contested` as a territory/ownership state. They must say it is absent from Phase 2 and reserved for a later authoritative bidding definition.
 - `PHASES.md` currently includes Phase 2 admin create/update/disable workflows. It must instead record deterministic reviewed seed changes and defer general operator mutations until operator authorization exists.
@@ -512,6 +515,6 @@ This reconciliation changes planned architecture only. Phase 0 and Phase 1 imple
 - **Placeholder scan:** no `TBD`, `TODO`, fake owner, fake price, or incomplete success claim is present.
 - **Internal consistency:** current ownership has one source of truth; public state is derived; disabled ownership is preserved; bigint versions are serialized safely.
 - **Scope check:** one Prisma migration, deterministic seed, one focused API module, shared read contracts, and public read endpoints form one bounded implementation plan.
-- **Ambiguity check:** contested state, pricing, writes, seed ownership, intent compatibility, public privacy, and display-weight semantics are explicit.
+- **Ambiguity check:** contested state, pricing, writes, seed ownership, suspended owners, intent compatibility, public privacy, history preview, ownership sources, timeline exclusion, and display-weight semantics are explicit.
 - **Phase boundary check:** no payment provider, checkout, bid, price, webhook, paid capture, SSE, season, battle, leaderboard, queue, worker, or Redis behavior is claimed or planned for Phase 2.
-- **Canonical-doc check:** four planned statements requiring post-approval reconciliation are listed explicitly; no canonical file was edited prematurely.
+- **Canonical-doc check:** approved planned architecture is reconciled without changing verified Phase 0/1 implementation claims.

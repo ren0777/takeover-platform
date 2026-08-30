@@ -40,3 +40,31 @@ export function formatMoneyCompact(money: Money, locale = 'en-US'): string {
 
   return formatter.format(toMajorUnits(money.amountMinor, digits));
 }
+
+/**
+ * Parses a user-entered major-unit amount into integer minor units.
+ *
+ * Works on the decimal string rather than multiplying a float, because
+ * `19.99 * 100` is `1998.9999...` and money must never be derived from floating
+ * point. Returns null for anything not exactly representable in the currency's
+ * minor unit.
+ */
+export function parseMajorAmountToMinor(input: string, currency: string): number | null {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) return null;
+
+  const digits = fractionDigits(new Intl.NumberFormat('en-US', { style: 'currency', currency }));
+
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(trimmed);
+  if (match === null) return null;
+
+  const whole = match[1];
+  const fraction = match[2] ?? '';
+  if (whole === undefined) return null;
+  if (fraction.length > digits) return null;
+
+  const combined = `${whole}${fraction.padEnd(digits, '0')}`;
+  const amountMinor = Number(combined);
+
+  return Number.isSafeInteger(amountMinor) ? amountMinor : null;
+}

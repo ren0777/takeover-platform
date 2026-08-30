@@ -72,6 +72,20 @@ describe('company claim contracts', () => {
     expect(request.quoteSnapshot?.minimumTakeoverAmount.amountMinor).toBe(26000);
   });
 
+  it('rejects mixed currencies across an intended bid and reference quote', () => {
+    expect(() =>
+      takeoverPreparationRequestSchema.parse({
+        territoryExternalRef: 'ai-coding',
+        intendedBid: { amountMinor: 26000, currency: 'USD' },
+        quoteSnapshot: {
+          territoryVersion: 'version-7',
+          minimumTakeoverAmount: { amountMinor: 26000, currency: 'EUR' },
+          observedAt: '2026-08-30T00:00:00.000Z',
+        },
+      }),
+    ).toThrow();
+  });
+
   it('exposes one-company management context with a non-authority CSRF token', () => {
     expect(
       managementContextSchema.parse({

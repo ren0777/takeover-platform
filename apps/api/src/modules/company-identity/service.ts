@@ -4,6 +4,8 @@ import {
   emailVerificationRequestSchema,
   emailTokenExchangeRequestSchema,
   managementLinkRequestSchema,
+  recoveryRequestSchema,
+  takeoverPreparationRequestSchema,
   type AccessDecisionRequest,
   type AccessDecisionResult,
   type AcceptedDelivery,
@@ -15,7 +17,10 @@ import {
   type EmailVerificationRequest,
   type ManagementContext,
   type ManagementLinkRequest,
+  type RecoveryRequest,
+  type RecoveryRequestResult,
   type TakeoverIntent,
+  type TakeoverPreparationRequest,
 } from '@takeover/shared';
 import type { IdentityConfig } from '../../config/env.js';
 import type { EmailProvider } from '../../integrations/email/email-provider.js';
@@ -25,6 +30,7 @@ import type {
   CompanyIdentityRepository,
   CompanyRecord,
   IntentRecord,
+  TakeoverIntentPreparationRecord,
 } from './repository.js';
 import {
   assertCompanyAuthority,
@@ -102,6 +108,49 @@ function mapIntent(record: IntentRecord): TakeoverIntent {
     quoteAuthority: 'reference_only',
     status: record.status.toLowerCase() as TakeoverIntent['status'],
     territoryExternalRef: record.territoryExternalRef,
+  };
+}
+
+function safeMinorAmount(amount: bigint): number {
+  const value = Number(amount);
+  if (!Number.isSafeInteger(value)) throw new Error('Minor amount exceeds safe integer boundary');
+  return value;
+}
+
+function mapPreparedIntent(record: TakeoverIntentPreparationRecord): TakeoverIntent {
+  const currency = record.currency;
+  return {
+    ...mapIntent(record),
+    ...(record.intendedAmountMinor === null || currency === null
+      ? {}
+      : { intendedBid: { amountMinor: safeMinorAmount(record.intendedAmountMinor), currency } }),
+    ...(record.quotedTerritoryVersion === null || record.quoteObservedAt === null
+      ? {}
+      : {
+          quoteSnapshot: {
+            ...(record.quotedOwnerCompanyId === null
+              ? {}
+              : { ownerCompanyId: record.quotedOwnerCompanyId }),
+            ...(record.quotedWinningAmountMinor === null || currency === null
+              ? {}
+              : {
+                  currentWinningAmount: {
+                    amountMinor: safeMinorAmount(record.quotedWinningAmountMinor),
+                    currency,
+                  },
+                }),
+            ...(record.quotedMinimumAmountMinor === null || currency === null
+              ? {}
+              : {
+                  minimumTakeoverAmount: {
+                    amountMinor: safeMinorAmount(record.quotedMinimumAmountMinor),
+                    currency,
+                  },
+                }),
+            observedAt: record.quoteObservedAt.toISOString(),
+            territoryVersion: record.quotedTerritoryVersion,
+          },
+        }),
   };
 }
 
@@ -446,7 +495,10 @@ export function createCompanyIdentityService(dependencies: CompanyIdentityServic
       return { accepted: true };
     },
 
-    async getManagementContext(sessionToken: string, csrfToken: string): Promise<ManagementContext> {
+    async getManagementContext(
+      sessionToken: string,
+      csrfToken: string,
+    ): Promise<ManagementContext> {
       const authority = await dependencies.repository.resolveManagementSession(
         dependencies.tokens.digestSessionToken(sessionToken),
         dependencies.clock.now(),
@@ -648,6 +700,99 @@ export function createCompanyIdentityService(dependencies: CompanyIdentityServic
         csrfToken,
         context,
       );
+    },
+
+    async requestManualRecovery(
+      rawRequest: RecoveryRequest,
+      context: IdentityRequestContext,
+    ): Promise<RecoveryRequestResult> {
+      const request = recoveryRequestSchema.parse(rawRequest);
+      const now = dependencies.clock.now();
+      const normalizedEmail = normalizeContactEmail(request.contactEmail);
+      await enforceRateLimit(
+        `recovery:${request.accessRequestId}:${normalizedEmail}`,
+        dependencies.config.rateLimits.recoveryRequestsPerContactCompanyPerDay,
+        86_400,
+        now,
+      );
+      const recovery = await dependencies.repository.requestManualRecovery({
+        accessRequestId: request.accessRequestId,
+        expiresAt: addSeconds(now, dependencies.config.recoveryRequestTtlSeconds),
+        normalizedEmail,
+        now,
+        requestId: context.requestId,
+      });
+      if (recovery === null) throw new InvalidCapabilityTokenError();
+      return {
+        executionAvailable: false,
+        expiresAt: recovery.expiresAt.toISOString(),
+        id: recovery.id,
+        status: 'pending',
+      };
+    },
+
+    async updateTakeoverPreparation(
+      intentId: string,
+      rawRequest: TakeoverPreparationRequest,
+      sessionToken: string,
+      csrfToken: string,
+      context: IdentityRequestContext,
+    ): Promise<TakeoverIntent> {
+      const request = takeoverPreparationRequestSchema.parse(rawRequest);
+      const authority = await dependencies.repository.resolveManagementSession(
+        dependencies.tokens.digestSessionToken(sessionToken),
+        dependencies.clock.now(),
+      );
+      if (
+        authority === null ||
+        !dependencies.tokens.verifyDigest(
+          dependencies.tokens.digestCsrfToken(csrfToken),
+          authority.csrfDigest,
+        )
+      ) {
+        throw new ManagementAuthorizationRequiredError();
+      }
+      const now = dependencies.clock.now();
+      const record = await dependencies.repository.updateTakeoverPreparation({
+        companyId: authority.companyId,
+        ...(request.intendedBid === undefined
+          ? {}
+          : {
+              currency: request.intendedBid.currency,
+              intendedAmountMinor: BigInt(request.intendedBid.amountMinor),
+            }),
+        intentId,
+        now,
+        requestId: context.requestId,
+        ...(request.quoteSnapshot?.minimumTakeoverAmount === undefined
+          ? {}
+          : {
+              currency: request.quoteSnapshot.minimumTakeoverAmount.currency,
+              quotedMinimumAmountMinor: BigInt(
+                request.quoteSnapshot.minimumTakeoverAmount.amountMinor,
+              ),
+            }),
+        ...(request.quoteSnapshot?.ownerCompanyId === undefined
+          ? {}
+          : { quotedOwnerCompanyId: request.quoteSnapshot.ownerCompanyId }),
+        ...(request.quoteSnapshot === undefined
+          ? {}
+          : {
+              quoteObservedAt: new Date(request.quoteSnapshot.observedAt),
+              quotedTerritoryVersion: request.quoteSnapshot.territoryVersion,
+            }),
+        ...(request.quoteSnapshot?.currentWinningAmount === undefined
+          ? {}
+          : {
+              currency: request.quoteSnapshot.currentWinningAmount.currency,
+              quotedWinningAmountMinor: BigInt(
+                request.quoteSnapshot.currentWinningAmount.amountMinor,
+              ),
+            }),
+        territoryExternalRef: request.territoryExternalRef,
+      });
+      if (record === null) throw new ManagementAuthorizationRequiredError();
+      return mapPreparedIntent(record);
     },
   };
 }

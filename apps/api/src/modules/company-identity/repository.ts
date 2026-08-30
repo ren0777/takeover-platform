@@ -190,6 +190,41 @@ export type PreparedAccessRequestNotification = {
   toEmail: string;
 };
 
+export type RecoveryRecordInput = {
+  accessRequestId: string;
+  expiresAt: Date;
+  normalizedEmail: string;
+  now: Date;
+  requestId?: string;
+};
+
+export type RecoveryRecordResult = { expiresAt: Date; id: string; status: 'PENDING' };
+
+export type UpdateTakeoverPreparationInput = {
+  companyId: string;
+  currency?: string;
+  intendedAmountMinor?: bigint;
+  intentId: string;
+  now: Date;
+  requestId?: string;
+  quotedMinimumAmountMinor?: bigint;
+  quotedOwnerCompanyId?: string;
+  quotedTerritoryVersion?: string;
+  quotedWinningAmountMinor?: bigint;
+  quoteObservedAt?: Date;
+  territoryExternalRef: string;
+};
+
+export type TakeoverIntentPreparationRecord = IntentRecord & {
+  currency: string | null;
+  intendedAmountMinor: bigint | null;
+  quoteObservedAt: Date | null;
+  quotedMinimumAmountMinor: bigint | null;
+  quotedOwnerCompanyId: string | null;
+  quotedTerritoryVersion: string | null;
+  quotedWinningAmountMinor: bigint | null;
+};
+
 export type RateLimitInput = {
   expiresAt: Date;
   keyDigest: Uint8Array;
@@ -245,6 +280,13 @@ export interface CompanyIdentityRepository {
     reason: string,
     now: Date,
   ): Promise<void>;
-  resolveManagementSession(digest: Uint8Array, now: Date): Promise<ManagementSessionAuthority | null>;
+  requestManualRecovery(input: RecoveryRecordInput): Promise<RecoveryRecordResult | null>;
+  resolveManagementSession(
+    digest: Uint8Array,
+    now: Date,
+  ): Promise<ManagementSessionAuthority | null>;
   revokeManagementSession(input: RevokeSessionInput): Promise<void>;
+  updateTakeoverPreparation(
+    input: UpdateTakeoverPreparationInput,
+  ): Promise<TakeoverIntentPreparationRecord | null>;
 }

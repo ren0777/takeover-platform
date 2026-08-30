@@ -455,7 +455,10 @@ describe('Phase 1 PostgreSQL invariants', () => {
     });
     if (exchange.kind !== 'management_session') throw new Error('Expected session');
     await expect(
-      repository.resolveManagementSession(exchange.session.tokenDigest, new Date('2026-08-30T13:08:00.000Z')),
+      repository.resolveManagementSession(
+        exchange.session.tokenDigest,
+        new Date('2026-08-30T13:08:00.000Z'),
+      ),
     ).resolves.toBeNull();
   });
 
@@ -510,6 +513,115 @@ describe('Phase 1 PostgreSQL invariants', () => {
       ).resolves.toMatchObject({ kind: 'management_session' });
     },
   );
+
+  it('persists recovery only for a verified requester and writes an audit record', async () => {
+    const company = await createCompany('ACTIVE', 'https://recovery.example/');
+    const contact = await prisma.companyContact.create({
+      data: {
+        email: 'recovery@gmail.com',
+        emailVerifiedAt: new Date('2026-08-30T13:00:00.000Z'),
+        normalizedEmail: 'recovery@gmail.com',
+      },
+    });
+    await prisma.companyVerification.create({
+      data: {
+        companyId: company.id,
+        contactId: contact.id,
+        level: 'CONTACT_VERIFIED',
+        source: 'email_challenge',
+        status: 'VERIFIED',
+        verifiedAt: new Date('2026-08-30T13:00:00.000Z'),
+      },
+    });
+    const intent = await prisma.takeoverIntent.create({
+      data: {
+        companyId: company.id,
+        contactId: contact.id,
+        expiresAt: new Date('2026-09-01T13:00:00.000Z'),
+        status: 'AWAITING_COMPANY_ACCESS',
+        territoryExternalRef: 'ai-coding',
+      },
+    });
+    const accessRequest = await prisma.companyAccessRequest.create({
+      data: {
+        companyId: company.id,
+        contactId: contact.id,
+        expiresAt: new Date('2026-09-06T13:00:00.000Z'),
+        takeoverIntentId: intent.id,
+      },
+    });
+    const repository = new PrismaCompanyIdentityRepository(prisma);
+
+    await expect(
+      repository.requestManualRecovery({
+        accessRequestId: accessRequest.id,
+        expiresAt: new Date('2026-09-06T14:00:00.000Z'),
+        normalizedEmail: contact.normalizedEmail,
+        now: new Date('2026-08-30T14:00:00.000Z'),
+        requestId: randomUUID(),
+      }),
+    ).resolves.toMatchObject({ id: accessRequest.id, status: 'PENDING' });
+    await expect(
+      repository.requestManualRecovery({
+        accessRequestId: accessRequest.id,
+        expiresAt: new Date('2026-09-06T14:00:00.000Z'),
+        normalizedEmail: 'attacker@gmail.com',
+        now: new Date('2026-08-30T14:00:00.000Z'),
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      prisma.auditLog.count({ where: { action: 'company_recovery.requested' } }),
+    ).resolves.toBe(1);
+  });
+
+  it('updates only an unexpired identity-ready intent in the authorized company', async () => {
+    const company = await createCompany('DRAFT', 'https://intent.example/');
+    const otherCompany = await createCompany('DRAFT', 'https://other-intent.example/');
+    const contact = await prisma.companyContact.create({
+      data: { email: 'intent@gmail.com', normalizedEmail: 'intent@gmail.com' },
+    });
+    const intent = await prisma.takeoverIntent.create({
+      data: {
+        companyId: company.id,
+        contactId: contact.id,
+        expiresAt: new Date('2026-09-01T13:00:00.000Z'),
+        status: 'IDENTITY_READY',
+        territoryExternalRef: 'old-reference',
+      },
+    });
+    const repository = new PrismaCompanyIdentityRepository(prisma);
+
+    await expect(
+      repository.updateTakeoverPreparation({
+        companyId: otherCompany.id,
+        intentId: intent.id,
+        now: new Date('2026-08-30T13:00:00.000Z'),
+        territoryExternalRef: 'ai-coding',
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      repository.updateTakeoverPreparation({
+        companyId: company.id,
+        currency: 'USD',
+        intendedAmountMinor: 26_000n,
+        intentId: intent.id,
+        now: new Date('2026-08-30T13:00:00.000Z'),
+        quoteObservedAt: new Date('2026-08-30T12:55:00.000Z'),
+        quotedMinimumAmountMinor: 26_000n,
+        quotedTerritoryVersion: 'version-7',
+        quotedWinningAmountMinor: 25_000n,
+        territoryExternalRef: 'ai-coding',
+      }),
+    ).resolves.toMatchObject({
+      currency: 'USD',
+      intendedAmountMinor: 26_000n,
+      quotedTerritoryVersion: 'version-7',
+      territoryExternalRef: 'ai-coding',
+    });
+    await expect(
+      prisma.auditLog.count({ where: { action: 'takeover_intent.preparation_updated' } }),
+    ).resolves.toBe(1);
+  });
 
   it('rejects persisted minor units outside the shared safe-integer boundary', () => {
     expect(mapMinorAmountToSafeInteger(BigInt(Number.MAX_SAFE_INTEGER))).toBe(

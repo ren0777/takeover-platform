@@ -100,6 +100,23 @@ function createService(): CompanyIdentityService {
       },
       checkoutAvailable: false as const,
     })),
+    requestManualRecovery: vi.fn(async () => ({
+      executionAvailable: false as const,
+      expiresAt: '2026-09-06T13:00:00.000Z',
+      id: '77777777-7777-4777-8777-777777777777',
+      status: 'pending' as const,
+    })),
+    updateTakeoverPreparation: vi.fn(async () => ({
+      ...intent,
+      intendedBid: { amountMinor: 26_000, currency: 'USD' },
+      quoteSnapshot: {
+        currentWinningAmount: { amountMinor: 25_000, currency: 'USD' },
+        minimumTakeoverAmount: { amountMinor: 26_000, currency: 'USD' },
+        observedAt: '2026-08-30T12:55:00.000Z',
+        territoryVersion: 'version-7',
+      },
+      status: 'identity_ready' as const,
+    })),
   };
 }
 
@@ -110,7 +127,10 @@ afterEach(async () => {
   app = undefined;
 });
 
-function buildIdentityApp(service = createService()): { app: FastifyInstance; service: CompanyIdentityService } {
+function buildIdentityApp(service = createService()): {
+  app: FastifyInstance;
+  service: CompanyIdentityService;
+} {
   app = buildApp({
     companyIdentity: { config: config.identity, service },
     logger: false,
@@ -120,6 +140,62 @@ function buildIdentityApp(service = createService()): { app: FastifyInstance; se
 }
 
 describe('company identity HTTP surface', () => {
+  it('accepts recovery as pending without exposing an approval endpoint', async () => {
+    const harness = buildIdentityApp();
+    const response = await harness.app.inject({
+      method: 'POST',
+      url: '/api/company-recovery-requests',
+      payload: {
+        accessRequestId: '77777777-7777-4777-8777-777777777777',
+        contactEmail: 'requester@gmail.com',
+      },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json().data).toMatchObject({ executionAvailable: false, status: 'pending' });
+    const approval = await harness.app.inject({
+      method: 'POST',
+      url: '/api/company-recovery-requests/77777777-7777-4777-8777-777777777777/approve',
+    });
+    expect(approval.statusCode).toBe(404);
+  });
+
+  it('updates a reference-only intent behind company-scoped session and CSRF checks', async () => {
+    const harness = buildIdentityApp();
+    const payload = {
+      intendedBid: { amountMinor: 26_000, currency: 'USD' },
+      quoteSnapshot: {
+        currentWinningAmount: { amountMinor: 25_000, currency: 'USD' },
+        minimumTakeoverAmount: { amountMinor: 26_000, currency: 'USD' },
+        observedAt: '2026-08-30T12:55:00.000Z',
+        territoryVersion: 'version-7',
+      },
+      territoryExternalRef: 'ai-coding',
+    };
+    const denied = await harness.app.inject({
+      method: 'PUT',
+      url: `/api/takeover-intents/${intent.id}/preparation`,
+      payload,
+    });
+    expect(denied.statusCode).toBe(403);
+
+    const response = await harness.app.inject({
+      method: 'PUT',
+      url: `/api/takeover-intents/${intent.id}/preparation`,
+      headers: {
+        cookie: 'takeover_management=session; takeover_management_csrf=csrf',
+        origin: config.identity.webAppOrigin,
+        'x-csrf-token': 'csrf',
+      },
+      payload,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      checkoutAvailable: false,
+      quoteAuthority: 'reference_only',
+    });
+  });
+
   it('validates claims and returns the shared success envelope', async () => {
     const harness = buildIdentityApp();
     const invalid = await harness.app.inject({
@@ -259,8 +335,7 @@ describe('company identity HTTP surface', () => {
 
   it('returns exactly one scoped context and revokes with valid Origin and CSRF', async () => {
     const harness = buildIdentityApp();
-    const cookie =
-      'takeover_management=session; takeover_management_csrf=management-csrf-secret';
+    const cookie = 'takeover_management=session; takeover_management_csrf=management-csrf-secret';
     const context = await harness.app.inject({
       method: 'GET',
       url: '/api/company-management/context',
@@ -297,8 +372,7 @@ describe('company identity HTTP surface', () => {
         method: 'POST',
         url: `/api/company-access-requests/77777777-7777-4777-8777-777777777777/${decision}`,
         headers: {
-          cookie:
-            'takeover_management=session; takeover_management_csrf=management-csrf-secret',
+          cookie: 'takeover_management=session; takeover_management_csrf=management-csrf-secret',
           origin: 'http://localhost:3000',
           'x-csrf-token': 'management-csrf-secret',
         },

@@ -4,6 +4,8 @@ import {
   emailTokenExchangeRequestSchema,
   emailVerificationRequestSchema,
   managementLinkRequestSchema,
+  recoveryRequestSchema,
+  takeoverPreparationRequestSchema,
   type ApiSuccess,
 } from '@takeover/shared';
 import type { FastifyInstance } from 'fastify';
@@ -130,19 +132,12 @@ export async function companyIdentityRoutes(
       request,
       options.config.webAppOrigin,
     );
-    await options.service.revokeManagementSession(
-      sessionToken,
-      csrfToken,
-      requestContext(request),
-    );
+    await options.service.revokeManagementSession(sessionToken, csrfToken, requestContext(request));
     reply.clearCookie(
       MANAGEMENT_SESSION_COOKIE_NAME,
       managementSessionCookieOptions(options.nodeEnv),
     );
-    reply.clearCookie(
-      MANAGEMENT_CSRF_COOKIE_NAME,
-      managementCsrfCookieOptions(options.nodeEnv),
-    );
+    reply.clearCookie(MANAGEMENT_CSRF_COOKIE_NAME, managementCsrfCookieOptions(options.nodeEnv));
     return reply.status(204).send();
   });
 
@@ -185,4 +180,27 @@ export async function companyIdentityRoutes(
       return { data, meta: { requestId: request.id } };
     },
   );
+
+  app.post('/api/company-recovery-requests', async (request, reply) => {
+    const input = recoveryRequestSchema.parse(request.body);
+    const data = await options.service.requestManualRecovery(input, requestContext(request));
+    return reply.status(202).send({ data, meta: { requestId: request.id } });
+  });
+
+  app.put<{ Params: { id: string } }>('/api/takeover-intents/:id/preparation', async (request) => {
+    const intentId = accessRequestIdSchema.parse(request.params.id);
+    const input = takeoverPreparationRequestSchema.parse(request.body);
+    const { csrfToken, sessionToken } = managementMutationSecrets(
+      request,
+      options.config.webAppOrigin,
+    );
+    const data = await options.service.updateTakeoverPreparation(
+      intentId,
+      input,
+      sessionToken,
+      csrfToken,
+      requestContext(request),
+    );
+    return { data, meta: { requestId: request.id } };
+  });
 }

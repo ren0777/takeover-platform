@@ -35,13 +35,22 @@ export const quoteSnapshotSchema = z
   );
 export type QuoteSnapshot = z.infer<typeof quoteSnapshotSchema>;
 
-export const takeoverPreparationRequestSchema = z.object({
-  territoryExternalRef: territoryExternalRefSchema,
-  intendedBid: moneySchema
-    .refine(({ amountMinor }) => amountMinor > 0, 'bid must be positive')
-    .optional(),
-  quoteSnapshot: quoteSnapshotSchema.optional(),
-});
+export const takeoverPreparationRequestSchema = z
+  .object({
+    territoryExternalRef: territoryExternalRefSchema,
+    intendedBid: moneySchema
+      .refine(({ amountMinor }) => amountMinor > 0, 'bid must be positive')
+      .optional(),
+    quoteSnapshot: quoteSnapshotSchema.optional(),
+  })
+  .refine(({ intendedBid, quoteSnapshot }) => {
+    const currencies = [
+      intendedBid?.currency,
+      quoteSnapshot?.currentWinningAmount?.currency,
+      quoteSnapshot?.minimumTakeoverAmount?.currency,
+    ].filter((currency): currency is string => currency !== undefined);
+    return currencies.every((currency) => currency === currencies[0]);
+  }, 'takeover preparation currencies must match');
 export type TakeoverPreparationRequest = z.infer<typeof takeoverPreparationRequestSchema>;
 
 export const takeoverIntentSchema = z.object({
@@ -60,7 +69,7 @@ export type TakeoverIntent = z.infer<typeof takeoverIntentSchema>;
 export const companyClaimRequestSchema = z.object({
   company: companyInputSchema,
   contactEmail: z.email(),
-  intent: takeoverPreparationRequestSchema.pick({ territoryExternalRef: true }),
+  intent: z.object({ territoryExternalRef: territoryExternalRefSchema }),
 });
 export type CompanyClaimRequest = z.infer<typeof companyClaimRequestSchema>;
 

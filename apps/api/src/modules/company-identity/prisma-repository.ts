@@ -19,8 +19,12 @@ import type {
   ManagementSessionAuthority,
   PrepareAccessRequestNotificationsInput,
   RateLimitInput,
+  RecoveryRecordInput,
+  RecoveryRecordResult,
   RevokeSessionInput,
   SessionRecord,
+  TakeoverIntentPreparationRecord,
+  UpdateTakeoverPreparationInput,
   VerificationExchangeResult,
   AccessDecisionRecordResult,
 } from './repository.js';
@@ -29,7 +33,8 @@ type IdentityPrismaClient = PrismaClient | Prisma.TransactionClient;
 
 export function mapMinorAmountToSafeInteger(amount: bigint): number {
   const value = Number(amount);
-  if (!Number.isSafeInteger(value)) throw new Error('Minor amount exceeds the shared safe integer boundary');
+  if (!Number.isSafeInteger(value))
+    throw new Error('Minor amount exceeds the shared safe integer boundary');
   return value;
 }
 
@@ -588,7 +593,8 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
   async consumeRateLimit(
     input: RateLimitInput,
   ): Promise<{ allowed: boolean; retryAfterSeconds: number }> {
-    if (!Number.isSafeInteger(input.limit) || input.limit < 1) throw new Error('Rate limit must be positive');
+    if (!Number.isSafeInteger(input.limit) || input.limit < 1)
+      throw new Error('Rate limit must be positive');
     const id = randomUUID();
     const rows = await this.prisma.$queryRaw<Array<{ count: number }>>(Prisma.sql`
       INSERT INTO "security_rate_limit_buckets"
@@ -641,9 +647,7 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
     });
   }
 
-  async decideAccessRequest(
-    input: DecideAccessRequestInput,
-  ): Promise<AccessDecisionRecordResult> {
+  async decideAccessRequest(input: DecideAccessRequestInput): Promise<AccessDecisionRecordResult> {
     return this.prisma.$transaction(async (transaction) => {
       await transaction.$queryRaw(Prisma.sql`
         SELECT "id" FROM "company_access_requests"
@@ -875,6 +879,101 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         targetId: accessRequestId,
         targetType: 'company_access_request',
       },
+    });
+  }
+
+  async requestManualRecovery(input: RecoveryRecordInput): Promise<RecoveryRecordResult | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "company_access_requests"
+        WHERE "id" = ${input.accessRequestId}::uuid
+        FOR UPDATE
+      `);
+      const accessRequest = await transaction.companyAccessRequest.findUnique({
+        where: { id: input.accessRequestId },
+        include: {
+          contact: {
+            include: {
+              verifications: {
+                where: { level: 'CONTACT_VERIFIED', status: 'VERIFIED' },
+                select: { companyId: true },
+              },
+            },
+          },
+        },
+      });
+      if (
+        accessRequest === null ||
+        !['PENDING', 'EXPIRED'].includes(accessRequest.status) ||
+        accessRequest.contact.normalizedEmail !== input.normalizedEmail ||
+        accessRequest.contact.emailVerifiedAt === null ||
+        accessRequest.contact.revokedAt !== null ||
+        !accessRequest.contact.verifications.some(
+          (verification) => verification.companyId === accessRequest.companyId,
+        )
+      ) {
+        return null;
+      }
+      const updated = await transaction.companyAccessRequest.update({
+        where: { id: accessRequest.id },
+        data: {
+          recoveryExpiresAt: input.expiresAt,
+          recoveryRequestedAt: input.now,
+          recoveryStatus: 'PENDING',
+        },
+      });
+      await this.writeAudit(transaction, {
+        action: 'company_recovery.requested',
+        actorId: accessRequest.contactId,
+        actorType: 'CONTACT',
+        companyId: accessRequest.companyId,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        targetId: accessRequest.id,
+        targetType: 'company_access_request',
+      });
+      return {
+        expiresAt: updated.recoveryExpiresAt as Date,
+        id: updated.id,
+        status: 'PENDING',
+      };
+    });
+  }
+
+  async updateTakeoverPreparation(
+    input: UpdateTakeoverPreparationInput,
+  ): Promise<TakeoverIntentPreparationRecord | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      const intent = await transaction.takeoverIntent.findFirst({
+        where: {
+          companyId: input.companyId,
+          expiresAt: { gt: input.now },
+          id: input.intentId,
+          status: 'IDENTITY_READY',
+        },
+      });
+      if (intent === null) return null;
+      const updated = await transaction.takeoverIntent.update({
+        where: { id: intent.id },
+        data: {
+          currency: input.currency ?? null,
+          intendedAmountMinor: input.intendedAmountMinor ?? null,
+          quoteObservedAt: input.quoteObservedAt ?? null,
+          quotedMinimumAmountMinor: input.quotedMinimumAmountMinor ?? null,
+          quotedOwnerCompanyId: input.quotedOwnerCompanyId ?? null,
+          quotedTerritoryVersion: input.quotedTerritoryVersion ?? null,
+          quotedWinningAmountMinor: input.quotedWinningAmountMinor ?? null,
+          territoryExternalRef: input.territoryExternalRef,
+        },
+      });
+      await this.writeAudit(transaction, {
+        action: 'takeover_intent.preparation_updated',
+        actorType: 'MANAGEMENT_SESSION',
+        companyId: input.companyId,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        targetId: intent.id,
+        targetType: 'takeover_intent',
+      });
+      return updated;
     });
   }
 

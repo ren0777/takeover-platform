@@ -5,11 +5,18 @@ import {
   normalizeCompanyName,
   normalizeCompanyWebsite,
   normalizeContactEmail,
+  unavailableManualRecoveryOperator,
   validateTerritoryExternalRef,
 } from '../src/modules/company-identity/domain.js';
 import { assertCompanyAuthority } from '../src/modules/company-identity/authorization.js';
 
 describe('company identity normalization', () => {
+  it('keeps manual recovery execution explicitly unavailable without an operator identity', async () => {
+    await expect(
+      unavailableManualRecoveryOperator.resolve('recovery-request'),
+    ).rejects.toMatchObject({ code: 'MANUAL_RECOVERY_UNAVAILABLE', statusCode: 503 });
+  });
+
   it('normalizes a public HTTPS website without collapsing meaningful paths', () => {
     expect(normalizeCompanyWebsite('https://Example.COM:443/Launch/Page/')).toBe(
       'https://example.com/Launch/Page',
@@ -33,9 +40,7 @@ describe('company identity normalization', () => {
   });
 
   it('allows a personal contact email and preserves its local part', () => {
-    expect(normalizeContactEmail(' Founder+Launch@GMAIL.COM ')).toBe(
-      'Founder+Launch@gmail.com',
-    );
+    expect(normalizeContactEmail(' Founder+Launch@GMAIL.COM ')).toBe('Founder+Launch@gmail.com');
   });
 
   it('normalizes names for comparison without losing the display form', () => {
@@ -45,9 +50,12 @@ describe('company identity normalization', () => {
     });
   });
 
-  it.each(['../territory', '', 'space here', ':starts-wrong'])('rejects bad territory refs', (ref) => {
-    expect(() => validateTerritoryExternalRef(ref)).toThrow();
-  });
+  it.each(['../territory', '', 'space here', ':starts-wrong'])(
+    'rejects bad territory refs',
+    (ref) => {
+      expect(() => validateTerritoryExternalRef(ref)).toThrow();
+    },
+  );
 });
 
 describe('company access state rules', () => {
@@ -74,8 +82,8 @@ describe('company access state rules', () => {
       sessionId: '33333333-3333-4333-8333-333333333333',
     };
     expect(() => assertCompanyAuthority(authority, authority.companyId)).not.toThrow();
-    expect(() =>
-      assertCompanyAuthority(authority, '44444444-4444-4444-8444-444444444444'),
-    ).toThrow('company');
+    expect(() => assertCompanyAuthority(authority, '44444444-4444-4444-8444-444444444444')).toThrow(
+      'company',
+    );
   });
 });

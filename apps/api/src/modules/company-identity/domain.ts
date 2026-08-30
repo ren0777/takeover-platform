@@ -41,8 +41,10 @@ function isReservedIp(hostname: string): boolean {
 export function normalizeCompanyWebsite(input: string): string {
   const url = new URL(input.trim());
   if (url.protocol !== 'https:') throw new Error('Company website must use HTTPS');
-  if (url.username !== '' || url.password !== '') throw new Error('Company website cannot contain credentials');
-  if (url.search !== '' || url.hash !== '') throw new Error('Company website cannot contain a query or fragment');
+  if (url.username !== '' || url.password !== '')
+    throw new Error('Company website cannot contain credentials');
+  if (url.search !== '' || url.hash !== '')
+    throw new Error('Company website cannot contain a query or fragment');
 
   const hostname = url.hostname.toLowerCase();
   if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) {
@@ -69,7 +71,8 @@ export function normalizeCompanyName(input: string): {
   normalizedName: string;
 } {
   const displayName = input.normalize('NFC').trim().replace(/\s+/gu, ' ');
-  if (displayName.length < 2 || displayName.length > 120) throw new Error('Company name is invalid');
+  if (displayName.length < 2 || displayName.length > 120)
+    throw new Error('Company name is invalid');
   return { displayName, normalizedName: displayName.toLocaleLowerCase('en-US') };
 }
 
@@ -98,3 +101,29 @@ export function assertAccessRequestTransition(
 export function hasExpired(expiresAt: Date, now: Date): boolean {
   return expiresAt.getTime() <= now.getTime();
 }
+
+export type ManualRecoveryResolution = {
+  operatorReference: string;
+  reason: string;
+  status: 'approved' | 'rejected';
+};
+
+export interface ManualRecoveryOperatorPort {
+  resolve(requestId: string): Promise<ManualRecoveryResolution>;
+}
+
+export class ManualRecoveryUnavailableError extends Error {
+  readonly code = 'MANUAL_RECOVERY_UNAVAILABLE';
+  readonly statusCode = 503;
+
+  constructor() {
+    super('Manual recovery execution is not available');
+    this.name = 'ManualRecoveryUnavailableError';
+  }
+}
+
+export const unavailableManualRecoveryOperator: ManualRecoveryOperatorPort = {
+  async resolve(): Promise<never> {
+    throw new ManualRecoveryUnavailableError();
+  },
+};

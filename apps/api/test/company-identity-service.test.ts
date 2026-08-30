@@ -65,8 +65,10 @@ function createHarness(options: { beginResult?: BeginClaimRecordResult; exchange
   const repository = {
     beginCompanyClaim: vi.fn(async () => beginResult),
     consumeContactVerification: vi.fn(async () => options.exchange ?? { kind: 'invalid' }),
+    consumeManagementChallenge: vi.fn(async () => ({ kind: 'invalid' })),
     consumeRateLimit: vi.fn(async () => ({ allowed: true, retryAfterSeconds: 0 })),
     issueContactVerificationChallenge: vi.fn(async () => null),
+    issueManagementChallenge: vi.fn(async () => null),
     markChallengeDelivery: vi.fn(async () => undefined),
     resolveManagementSession: vi.fn(async () => null),
     revokeManagementSession: vi.fn(async () => undefined),
@@ -306,5 +308,98 @@ describe('verification reissue and scoped session context', () => {
       code: 'AUTHORIZATION_REQUIRED',
     });
     expect(repository.revokeManagementSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('management link lifecycle', () => {
+  it('accepts unknown issuance without sending email', async () => {
+    const { emailProvider, service } = createHarness();
+    await expect(
+      service.requestManagementLink(
+        { companyId: company.id, contactEmail: 'unknown@gmail.com' },
+        { ipAddress: '203.0.113.20', requestId: 'management-1' },
+      ),
+    ).resolves.toEqual({ accepted: true });
+    expect(emailProvider.sendManagementLink).not.toHaveBeenCalled();
+  });
+
+  it('sends a 15-minute link only when the repository finds active authority', async () => {
+    const { emailProvider, repository, service } = createHarness();
+    vi.mocked(repository.issueManagementChallenge).mockResolvedValueOnce({
+      challengeId: '99999999-9999-4999-8999-999999999999',
+      companyName: company.name,
+      toEmail: 'founder@gmail.com',
+    });
+
+    await service.requestManagementLink(
+      { companyId: company.id, contactEmail: 'founder@gmail.com' },
+      { ipAddress: '203.0.113.20', requestId: 'management-2' },
+    );
+
+    expect(repository.issueManagementChallenge).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresAt: new Date('2026-08-30T13:15:00.000Z') }),
+    );
+    expect(emailProvider.sendManagementLink).toHaveBeenCalledWith(
+      expect.objectContaining({ rawToken: expect.any(String), toEmail: 'founder@gmail.com' }),
+    );
+  });
+
+  it('exchanges a single-use link into one company context and an eight-hour session', async () => {
+    const { repository, service } = createHarness();
+    vi.mocked(repository.consumeManagementChallenge).mockResolvedValueOnce({
+      company,
+      kind: 'management_session',
+      session: {
+        companyId: company.id,
+        csrfDigest: digest('csrf'),
+        expiresAt: new Date('2026-08-30T21:00:00.000Z'),
+        grantId: '55555555-5555-4555-8555-555555555555',
+        sessionId: '66666666-6666-4666-8666-666666666666',
+        tokenDigest: digest('session'),
+      },
+      verificationLevels: ['CONTACT_VERIFIED'],
+    });
+    const tokens = createOpaqueTokenService(parseApiConfig({ NODE_ENV: 'test' }).identity.tokenHmacSecret);
+    const link = tokens.issueLinkToken();
+
+    const result = await service.exchangeManagementLink(
+      { token: link.rawToken },
+      { ipAddress: '203.0.113.20', requestId: 'management-exchange' },
+    );
+
+    expect(result.context).toMatchObject({
+      company: { id: company.id },
+      verificationLevels: ['contact_verified'],
+    });
+    expect(result.sessionToken).toEqual(expect.any(String));
+    expect(result.csrfToken).toEqual(expect.any(String));
+    expect(repository.consumeManagementChallenge).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionExpiresAt: new Date('2026-08-30T21:00:00.000Z') }),
+    );
+  });
+
+  it('denies a Company A session when authorizing Company B', async () => {
+    const { repository, service } = createHarness();
+    const tokens = createOpaqueTokenService(parseApiConfig({ NODE_ENV: 'test' }).identity.tokenHmacSecret);
+    const session = tokens.issueSessionToken();
+    const csrf = tokens.issueSessionToken();
+    vi.mocked(repository.resolveManagementSession).mockResolvedValueOnce({
+      company,
+      companyId: company.id,
+      contactId: intent.contactId,
+      csrfDigest: tokens.digestCsrfToken(csrf.rawToken),
+      expiresAt: new Date('2026-08-30T21:00:00.000Z'),
+      grantId: '55555555-5555-4555-8555-555555555555',
+      sessionId: '66666666-6666-4666-8666-666666666666',
+      verificationLevels: ['CONTACT_VERIFIED'],
+    });
+
+    await expect(
+      service.authorizeCompanyMutation(
+        session.rawToken,
+        csrf.rawToken,
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      ),
+    ).rejects.toThrow('company');
   });
 });

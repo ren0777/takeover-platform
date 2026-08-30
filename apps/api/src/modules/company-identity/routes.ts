@@ -2,6 +2,7 @@ import {
   companyClaimRequestSchema,
   emailTokenExchangeRequestSchema,
   emailVerificationRequestSchema,
+  managementLinkRequestSchema,
   type ApiSuccess,
 } from '@takeover/shared';
 import type { FastifyInstance } from 'fastify';
@@ -67,6 +68,28 @@ export async function companyIdentityRoutes(
       );
     }
     return reply.send({ data: exchanged.response, meta: { requestId: request.id } });
+  });
+
+  app.post('/api/company-management-links', async (request, reply) => {
+    const input = managementLinkRequestSchema.parse(request.body);
+    const data = await options.service.requestManagementLink(input, requestContext(request));
+    return reply.status(202).send({ data, meta: { requestId: request.id } });
+  });
+
+  app.post('/api/company-management-links/exchange', async (request, reply) => {
+    const input = emailTokenExchangeRequestSchema.parse(request.body);
+    const exchanged = await options.service.exchangeManagementLink(input, requestContext(request));
+    reply.setCookie(
+      MANAGEMENT_SESSION_COOKIE_NAME,
+      exchanged.sessionToken,
+      managementSessionCookieOptions(options.nodeEnv),
+    );
+    reply.setCookie(
+      MANAGEMENT_CSRF_COOKIE_NAME,
+      exchanged.csrfToken,
+      managementCsrfCookieOptions(options.nodeEnv),
+    );
+    return reply.send({ data: exchanged.context, meta: { requestId: request.id } });
   });
 
   app.get('/api/company-management/context', async (request) => {

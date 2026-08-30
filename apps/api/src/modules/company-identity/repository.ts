@@ -119,6 +119,30 @@ export type ManagementSessionAuthority = ManagementAuthority & {
   verificationLevels: Array<'CONTACT_VERIFIED' | 'DOMAIN_VERIFIED' | 'MANUALLY_VERIFIED'>;
 };
 
+export type IssueManagementChallengeInput = IssueContactVerificationChallengeInput;
+
+export type IssuedManagementChallenge = IssuedContactVerificationChallenge;
+
+export type ConsumeManagementChallengeInput = {
+  candidateDigest: Uint8Array;
+  csrfDigest: Uint8Array;
+  maxFailedAttempts: number;
+  now: Date;
+  requestId?: string;
+  selector: string;
+  sessionExpiresAt: Date;
+  sessionTokenDigest: Uint8Array;
+};
+
+export type ManagementChallengeExchangeResult =
+  | { kind: 'invalid' }
+  | {
+      company: CompanyRecord;
+      kind: 'management_session';
+      session: SessionRecord;
+      verificationLevels: Array<'CONTACT_VERIFIED' | 'DOMAIN_VERIFIED' | 'MANUALLY_VERIFIED'>;
+    };
+
 export type RateLimitInput = {
   expiresAt: Date;
   keyDigest: Uint8Array;
@@ -151,11 +175,17 @@ export type RevokeSessionInput = {
 export interface CompanyIdentityRepository {
   beginCompanyClaim(input: BeginClaimRecord): Promise<BeginClaimRecordResult>;
   consumeContactVerification(input: ConsumeChallengeInput): Promise<VerificationExchangeResult>;
+  consumeManagementChallenge(
+    input: ConsumeManagementChallengeInput,
+  ): Promise<ManagementChallengeExchangeResult>;
   consumeRateLimit(input: RateLimitInput): Promise<{ allowed: boolean; retryAfterSeconds: number }>;
   createManagementSession(input: CreateSessionInput): Promise<SessionRecord>;
   issueContactVerificationChallenge(
     input: IssueContactVerificationChallengeInput,
   ): Promise<IssuedContactVerificationChallenge | null>;
+  issueManagementChallenge(
+    input: IssueManagementChallengeInput,
+  ): Promise<IssuedManagementChallenge | null>;
   markChallengeDelivery(challengeId: string, status: 'SENT' | 'FAILED'): Promise<void>;
   resolveManagementSession(digest: Uint8Array, now: Date): Promise<ManagementSessionAuthority | null>;
   revokeManagementSession(input: RevokeSessionInput): Promise<void>;

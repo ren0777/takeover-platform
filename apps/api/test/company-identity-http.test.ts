@@ -62,6 +62,22 @@ function createService(): CompanyIdentityService {
     })),
     reissueEmailVerification: vi.fn(async () => ({ accepted: true as const })),
     revokeManagementSession: vi.fn(async () => undefined),
+    requestManagementLink: vi.fn(async () => ({ accepted: true as const })),
+    exchangeManagementLink: vi.fn(async () => ({
+      context: {
+        company,
+        csrfToken: 'management-csrf-secret',
+        sessionExpiresAt: '2026-08-30T21:00:00.000Z',
+        verificationLevels: ['contact_verified'] as ['contact_verified'],
+      },
+      csrfToken: 'management-csrf-secret',
+      sessionToken: 'management-session-secret',
+    })),
+    authorizeCompanyMutation: vi.fn(async () => ({
+      companyId: company.id,
+      grantId: '55555555-5555-4555-8555-555555555555',
+      sessionId: '66666666-6666-4666-8666-666666666666',
+    })),
   };
 }
 
@@ -190,6 +206,64 @@ describe('company identity HTTP surface', () => {
     ).toBe(404);
     expect((await harness.app.inject({ method: 'POST', url: '/api/checkout' })).statusCode).toBe(
       404,
+    );
+  });
+
+  it('issues and exchanges management links without exposing the session secret', async () => {
+    const harness = buildIdentityApp();
+    const issued = await harness.app.inject({
+      method: 'POST',
+      url: '/api/company-management-links',
+      payload: { companyId: company.id, contactEmail: 'founder@gmail.com' },
+    });
+    expect(issued.statusCode).toBe(202);
+    expect(issued.json().data).toEqual({ accepted: true });
+
+    const exchanged = await harness.app.inject({
+      method: 'POST',
+      url: '/api/company-management-links/exchange',
+      payload: { token: 'selector-secret.selector-secret-value' },
+    });
+    expect(exchanged.statusCode).toBe(200);
+    expect(exchanged.cookies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'takeover_management', httpOnly: true }),
+        expect.objectContaining({ name: 'takeover_management_csrf' }),
+      ]),
+    );
+    expect(exchanged.body).not.toContain('management-session-secret');
+    expect(exchanged.json().data.company.id).toBe(company.id);
+  });
+
+  it('returns exactly one scoped context and revokes with valid Origin and CSRF', async () => {
+    const harness = buildIdentityApp();
+    const cookie =
+      'takeover_management=session; takeover_management_csrf=management-csrf-secret';
+    const context = await harness.app.inject({
+      method: 'GET',
+      url: '/api/company-management/context',
+      headers: { cookie },
+    });
+    expect(context.statusCode).toBe(200);
+    expect(context.json().data.company.id).toBe(company.id);
+    expect(context.json().data.companies).toBeUndefined();
+
+    const revoked = await harness.app.inject({
+      method: 'DELETE',
+      url: '/api/company-management/session',
+      headers: {
+        cookie,
+        origin: 'http://localhost:3000',
+        'x-csrf-token': 'management-csrf-secret',
+      },
+    });
+    expect(revoked.statusCode).toBe(204);
+    expect(harness.service.revokeManagementSession).toHaveBeenCalledOnce();
+    expect(revoked.cookies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'takeover_management', value: '' }),
+        expect.objectContaining({ name: 'takeover_management_csrf', value: '' }),
+      ]),
     );
   });
 });

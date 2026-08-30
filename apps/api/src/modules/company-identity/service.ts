@@ -2,6 +2,7 @@ import {
   companyClaimRequestSchema,
   emailVerificationRequestSchema,
   emailTokenExchangeRequestSchema,
+  managementLinkRequestSchema,
   type AcceptedDelivery,
   type Company,
   type CompanyClaimRequest,
@@ -10,6 +11,7 @@ import {
   type EmailTokenExchangeResult,
   type EmailVerificationRequest,
   type ManagementContext,
+  type ManagementLinkRequest,
   type TakeoverIntent,
 } from '@takeover/shared';
 import type { IdentityConfig } from '../../config/env.js';
@@ -21,7 +23,11 @@ import type {
   CompanyRecord,
   IntentRecord,
 } from './repository.js';
-import { ManagementAuthorizationRequiredError } from './authorization.js';
+import {
+  assertCompanyAuthority,
+  ManagementAuthorizationRequiredError,
+  type ManagementAuthority,
+} from './authorization.js';
 
 export type Clock = { now(): Date };
 export type IdentityRequestContext = { ipAddress: string; requestId: string };
@@ -370,6 +376,127 @@ export function createCompanyIdentityService(dependencies: CompanyIdentityServic
         requestId: context.requestId,
         sessionId: authority.sessionId,
       });
+    },
+
+    async requestManagementLink(
+      rawRequest: ManagementLinkRequest,
+      context: IdentityRequestContext,
+    ): Promise<AcceptedDelivery> {
+      const request = managementLinkRequestSchema.parse(rawRequest);
+      const now = dependencies.clock.now();
+      const contactEmail = normalizeContactEmail(request.contactEmail);
+      await enforceRateLimit(
+        `management-link-email:${contactEmail}`,
+        dependencies.config.rateLimits.linkIssuancePerEmailPerHour,
+        3_600,
+        now,
+      );
+      await enforceRateLimit(
+        `management-link-ip:${context.ipAddress}`,
+        dependencies.config.rateLimits.linkIssuancePerIpPerHour,
+        3_600,
+        now,
+      );
+      const issued = dependencies.tokens.issueLinkToken();
+      const challenge = await dependencies.repository.issueManagementChallenge({
+        companyId: request.companyId,
+        expiresAt: addSeconds(now, dependencies.config.managementLinkTtlSeconds),
+        normalizedEmail: contactEmail,
+        now,
+        requestId: context.requestId,
+        selector: issued.selector,
+        tokenDigest: issued.digest,
+      });
+      if (challenge === null) return { accepted: true };
+
+      try {
+        await dependencies.emailProvider.sendManagementLink({
+          companyName: challenge.companyName,
+          rawToken: issued.rawToken,
+          toEmail: challenge.toEmail,
+        });
+        await dependencies.repository.markChallengeDelivery(challenge.challengeId, 'SENT');
+      } catch (error) {
+        await dependencies.repository.markChallengeDelivery(challenge.challengeId, 'FAILED');
+        throw error;
+      }
+      return { accepted: true };
+    },
+
+    async exchangeManagementLink(
+      rawRequest: EmailTokenExchangeRequest,
+      context: IdentityRequestContext,
+    ): Promise<{ context: ManagementContext; csrfToken: string; sessionToken: string }> {
+      let request: EmailTokenExchangeRequest;
+      try {
+        request = emailTokenExchangeRequestSchema.parse(rawRequest);
+      } catch {
+        throw new InvalidCapabilityTokenError();
+      }
+      const parsed = parseLinkToken(request.token);
+      if (parsed === null) throw new InvalidCapabilityTokenError();
+      const now = dependencies.clock.now();
+      await enforceRateLimit(
+        `management-exchange-selector:${parsed.selector}`,
+        dependencies.config.rateLimits.tokenExchangeFailuresPerSelector,
+        dependencies.config.managementLinkTtlSeconds,
+        now,
+      );
+      await enforceRateLimit(
+        `management-exchange-ip:${context.ipAddress}`,
+        dependencies.config.rateLimits.tokenExchangeAttemptsPerIpPerHour,
+        3_600,
+        now,
+      );
+
+      const session = dependencies.tokens.issueSessionToken();
+      const csrf = dependencies.tokens.issueSessionToken();
+      const exchange = await dependencies.repository.consumeManagementChallenge({
+        candidateDigest: dependencies.tokens.digestLinkSecret(parsed.selector, parsed.secret),
+        csrfDigest: dependencies.tokens.digestCsrfToken(csrf.rawToken),
+        maxFailedAttempts: dependencies.config.rateLimits.tokenExchangeFailuresPerSelector,
+        now,
+        requestId: context.requestId,
+        selector: parsed.selector,
+        sessionExpiresAt: addSeconds(now, dependencies.config.managementSessionTtlSeconds),
+        sessionTokenDigest: session.digest,
+      });
+      if (exchange.kind === 'invalid') throw new InvalidCapabilityTokenError();
+      const csrfToken = csrf.rawToken;
+      return {
+        context: {
+          company: mapCompany(exchange.company),
+          csrfToken,
+          sessionExpiresAt: exchange.session.expiresAt.toISOString(),
+          verificationLevels: exchange.verificationLevels.map(
+            (level) => level.toLowerCase() as ManagementContext['verificationLevels'][number],
+          ),
+        },
+        csrfToken,
+        sessionToken: session.rawToken,
+      };
+    },
+
+    async authorizeCompanyMutation(
+      sessionToken: string,
+      csrfToken: string,
+      companyId: string,
+    ): Promise<ManagementAuthority> {
+      const authority = await dependencies.repository.resolveManagementSession(
+        dependencies.tokens.digestSessionToken(sessionToken),
+        dependencies.clock.now(),
+      );
+      if (
+        authority === null ||
+        !dependencies.tokens.verifyDigest(
+          dependencies.tokens.digestCsrfToken(csrfToken),
+          authority.csrfDigest,
+        )
+      ) {
+        throw new ManagementAuthorizationRequiredError();
+      }
+      assertCompanyAuthority(authority, companyId);
+      return authority;
     },
   };
 }

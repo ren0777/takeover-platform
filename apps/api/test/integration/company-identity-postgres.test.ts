@@ -281,6 +281,130 @@ describe('Phase 1 PostgreSQL invariants', () => {
     });
   });
 
+  it('issues management links only for active verified same-company grants', async () => {
+    const company = await createCompany('ACTIVE', 'https://acme.example/');
+    const contact = await prisma.companyContact.create({
+      data: {
+        email: 'founder@gmail.com',
+        emailVerifiedAt: new Date('2026-08-30T13:00:00.000Z'),
+        normalizedEmail: 'founder@gmail.com',
+      },
+    });
+    await prisma.companyVerification.create({
+      data: {
+        companyId: company.id,
+        contactId: contact.id,
+        level: 'CONTACT_VERIFIED',
+        source: 'email_challenge',
+        status: 'VERIFIED',
+        verifiedAt: new Date('2026-08-30T13:00:00.000Z'),
+      },
+    });
+    await prisma.companyManagementGrant.create({
+      data: { companyId: company.id, contactId: contact.id, source: 'INITIAL_CONTACT' },
+    });
+    const repository = new PrismaCompanyIdentityRepository(prisma);
+
+    await expect(
+      repository.issueManagementChallenge({
+        companyId: company.id,
+        expiresAt: new Date('2026-08-30T13:15:00.000Z'),
+        normalizedEmail: 'unknown@gmail.com',
+        now: new Date('2026-08-30T13:00:00.000Z'),
+        selector: 'management-unknown',
+        tokenDigest: new Uint8Array(32).fill(1),
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      repository.issueManagementChallenge({
+        companyId: company.id,
+        expiresAt: new Date('2026-08-30T13:15:00.000Z'),
+        normalizedEmail: 'founder@gmail.com',
+        now: new Date('2026-08-30T13:00:00.000Z'),
+        selector: 'management-known',
+        tokenDigest: new Uint8Array(32).fill(2),
+      }),
+    ).resolves.toMatchObject({ companyName: 'Acme', toEmail: 'founder@gmail.com' });
+  });
+
+  it('consumes a management link once and replaces prior sessions for its grant', async () => {
+    const company = await createCompany('ACTIVE', 'https://acme.example/');
+    const contact = await prisma.companyContact.create({
+      data: {
+        email: 'founder@gmail.com',
+        emailVerifiedAt: new Date('2026-08-30T13:00:00.000Z'),
+        normalizedEmail: 'founder@gmail.com',
+      },
+    });
+    await prisma.companyVerification.create({
+      data: {
+        companyId: company.id,
+        contactId: contact.id,
+        level: 'CONTACT_VERIFIED',
+        source: 'email_challenge',
+        status: 'VERIFIED',
+        verifiedAt: new Date('2026-08-30T13:00:00.000Z'),
+      },
+    });
+    const grant = await prisma.companyManagementGrant.create({
+      data: { companyId: company.id, contactId: contact.id, source: 'INITIAL_CONTACT' },
+    });
+    await prisma.companyManagementSession.create({
+      data: {
+        companyId: company.id,
+        csrfDigest: Buffer.alloc(32, 4),
+        expiresAt: new Date('2026-08-30T20:00:00.000Z'),
+        grantId: grant.id,
+        tokenDigest: Buffer.alloc(32, 3),
+      },
+    });
+    const repository = new PrismaCompanyIdentityRepository(prisma);
+    const linkDigest = new Uint8Array(32).fill(5);
+    const issued = await repository.issueManagementChallenge({
+      companyId: company.id,
+      expiresAt: new Date('2026-08-30T13:15:00.000Z'),
+      normalizedEmail: contact.normalizedEmail,
+      now: new Date('2026-08-30T13:00:00.000Z'),
+      selector: 'management-exchange',
+      tokenDigest: linkDigest,
+    });
+    if (issued === null) throw new Error('Expected management challenge');
+    await repository.markChallengeDelivery(issued.challengeId, 'SENT');
+
+    const exchange = await repository.consumeManagementChallenge({
+      candidateDigest: linkDigest,
+      csrfDigest: new Uint8Array(32).fill(7),
+      maxFailedAttempts: 10,
+      now: new Date('2026-08-30T13:05:00.000Z'),
+      selector: 'management-exchange',
+      sessionExpiresAt: new Date('2026-08-30T21:05:00.000Z'),
+      sessionTokenDigest: new Uint8Array(32).fill(6),
+    });
+
+    expect(exchange.kind).toBe('management_session');
+    expect(await prisma.companyManagementSession.count({ where: { revokedAt: null } })).toBe(1);
+    await expect(
+      repository.consumeManagementChallenge({
+        candidateDigest: linkDigest,
+        csrfDigest: new Uint8Array(32).fill(9),
+        maxFailedAttempts: 10,
+        now: new Date('2026-08-30T13:06:00.000Z'),
+        selector: 'management-exchange',
+        sessionExpiresAt: new Date('2026-08-30T21:06:00.000Z'),
+        sessionTokenDigest: new Uint8Array(32).fill(8),
+      }),
+    ).resolves.toEqual({ kind: 'invalid' });
+
+    await prisma.companyManagementGrant.update({
+      where: { id: grant.id },
+      data: { revokedAt: new Date('2026-08-30T13:07:00.000Z'), status: 'REVOKED' },
+    });
+    if (exchange.kind !== 'management_session') throw new Error('Expected session');
+    await expect(
+      repository.resolveManagementSession(exchange.session.tokenDigest, new Date('2026-08-30T13:08:00.000Z')),
+    ).resolves.toBeNull();
+  });
+
   it('rejects persisted minor units outside the shared safe-integer boundary', () => {
     expect(mapMinorAmountToSafeInteger(BigInt(Number.MAX_SAFE_INTEGER))).toBe(
       Number.MAX_SAFE_INTEGER,

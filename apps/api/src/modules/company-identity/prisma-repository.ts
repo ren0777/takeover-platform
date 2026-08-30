@@ -7,10 +7,14 @@ import type {
   ChallengeRecord,
   CompanyRecord,
   ConsumeChallengeInput,
+  ConsumeManagementChallengeInput,
   CreateSessionInput,
   IntentRecord,
   IssueContactVerificationChallengeInput,
+  IssueManagementChallengeInput,
   IssuedContactVerificationChallenge,
+  IssuedManagementChallenge,
+  ManagementChallengeExchangeResult,
   ManagementSessionAuthority,
   RateLimitInput,
   RevokeSessionInput,
@@ -190,6 +194,171 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         challengeId: challenge.id,
         companyName: intent.company.name,
         toEmail: contact.email,
+      };
+    });
+  }
+
+  async issueManagementChallenge(
+    input: IssueManagementChallengeInput,
+  ): Promise<IssuedManagementChallenge | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      const grant = await transaction.companyManagementGrant.findFirst({
+        where: {
+          companyId: input.companyId,
+          revokedAt: null,
+          status: 'ACTIVE',
+          contact: {
+            emailVerifiedAt: { not: null },
+            normalizedEmail: input.normalizedEmail,
+            revokedAt: null,
+            verifications: {
+              some: {
+                companyId: input.companyId,
+                level: 'CONTACT_VERIFIED',
+                status: 'VERIFIED',
+              },
+            },
+          },
+        },
+        include: { company: true, contact: true },
+      });
+      if (grant === null) return null;
+
+      await transaction.emailVerificationChallenge.updateMany({
+        where: {
+          companyId: input.companyId,
+          consumedAt: null,
+          contactId: grant.contactId,
+          purpose: 'MANAGEMENT_LINK',
+          revokedAt: null,
+        },
+        data: { revokedAt: input.now },
+      });
+      const challenge = await transaction.emailVerificationChallenge.create({
+        data: {
+          companyId: input.companyId,
+          contactId: grant.contactId,
+          expiresAt: input.expiresAt,
+          purpose: 'MANAGEMENT_LINK',
+          selector: input.selector,
+          tokenDigest: Buffer.from(input.tokenDigest),
+        },
+      });
+      await this.writeAudit(transaction, {
+        action: 'company_management_link.issued',
+        actorId: grant.contactId,
+        actorType: 'CONTACT',
+        companyId: input.companyId,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        targetId: challenge.id,
+        targetType: 'email_verification_challenge',
+      });
+      return {
+        challengeId: challenge.id,
+        companyName: grant.company.name,
+        toEmail: grant.contact.email,
+      };
+    });
+  }
+
+  async consumeManagementChallenge(
+    input: ConsumeManagementChallengeInput,
+  ): Promise<ManagementChallengeExchangeResult> {
+    return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "email_verification_challenges"
+        WHERE "selector" = ${input.selector}
+        FOR UPDATE
+      `);
+      const challenge = await transaction.emailVerificationChallenge.findUnique({
+        where: { selector: input.selector },
+        include: { company: true },
+      });
+      const digestMatches =
+        challenge !== null &&
+        challenge.tokenDigest.byteLength === input.candidateDigest.byteLength &&
+        timingSafeEqual(challenge.tokenDigest, input.candidateDigest);
+      const valid =
+        challenge !== null &&
+        digestMatches &&
+        challenge.purpose === 'MANAGEMENT_LINK' &&
+        challenge.deliveryStatus === 'SENT' &&
+        challenge.consumedAt === null &&
+        challenge.revokedAt === null &&
+        challenge.failedAttempts < input.maxFailedAttempts &&
+        challenge.expiresAt > input.now;
+      if (!valid || challenge === null) {
+        if (
+          challenge !== null &&
+          challenge.consumedAt === null &&
+          challenge.failedAttempts < input.maxFailedAttempts
+        ) {
+          await transaction.emailVerificationChallenge.update({
+            where: { id: challenge.id },
+            data: { failedAttempts: { increment: 1 } },
+          });
+        }
+        return { kind: 'invalid' };
+      }
+      const grant = await transaction.companyManagementGrant.findUnique({
+        where: {
+          companyId_contactId: {
+            companyId: challenge.companyId,
+            contactId: challenge.contactId,
+          },
+        },
+      });
+      if (grant === null || grant.status !== 'ACTIVE' || grant.revokedAt !== null) {
+        return { kind: 'invalid' };
+      }
+      const consumed = await transaction.emailVerificationChallenge.updateMany({
+        where: { id: challenge.id, consumedAt: null, revokedAt: null },
+        data: { consumedAt: input.now },
+      });
+      if (consumed.count !== 1) return { kind: 'invalid' };
+
+      await transaction.companyManagementSession.updateMany({
+        where: { grantId: grant.id, revokedAt: null },
+        data: { revokedAt: input.now },
+      });
+      const session = await transaction.companyManagementSession.create({
+        data: {
+          companyId: challenge.companyId,
+          csrfDigest: Buffer.from(input.csrfDigest),
+          expiresAt: input.sessionExpiresAt,
+          grantId: grant.id,
+          tokenDigest: Buffer.from(input.sessionTokenDigest),
+        },
+      });
+      const verifications = await transaction.companyVerification.findMany({
+        where: {
+          companyId: challenge.companyId,
+          contactId: challenge.contactId,
+          status: 'VERIFIED',
+        },
+        select: { level: true },
+      });
+      await this.writeAudit(transaction, {
+        action: 'company_management_link.exchanged',
+        actorId: grant.id,
+        actorType: 'MANAGEMENT_GRANT',
+        companyId: challenge.companyId,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        targetId: session.id,
+        targetType: 'company_management_session',
+      });
+      return {
+        company: mapCompany(challenge.company),
+        kind: 'management_session',
+        session: {
+          companyId: session.companyId,
+          csrfDigest: new Uint8Array(session.csrfDigest),
+          expiresAt: session.expiresAt,
+          grantId: session.grantId,
+          sessionId: session.id,
+          tokenDigest: new Uint8Array(session.tokenDigest),
+        },
+        verificationLevels: verifications.map((verification) => verification.level),
       };
     });
   }

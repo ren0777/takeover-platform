@@ -120,6 +120,25 @@ Ready endpoints and security requirements are listed in **API Contracts** above.
 - A future SSE boundary is needed for real activity; do not synthesize production events.
 - Phase 3 stale-price responses must include current owner, current winning amount, current legal minimum, currency, and version, and must require explicit review without auto-charge.
 
+**Phase 1 frontend is implemented and consumes the real contracts.** `apps/web` defines no company-identity types of its own; every request and response shape is imported from `@takeover/shared`. Routes: `/claim`, `/verify`, `/manage`, `/manage/company`, `/manage/recovery`, `/access-review`, all `noindex`.
+
+Three issues found while integrating. None block Phase 2.
+
+**1. BLOCKING for manager decisions — the review link cannot identify its access request.**
+`sendAccessRequestNotification` links to `${origin}/access-review#token=…` and `AccessRequestEmail` carries no `accessRequestId`. After exchange, `ManagementContext` returns only company, verification levels, session expiry, and CSRF token. There is no endpoint listing pending requests for the session's company. So the frontend cannot obtain the `:id` that `POST /api/company-access-requests/:id/approve` requires, and a manager cannot actually approve or reject from the emailed link.
+
+The page is built and renders the decision UI when an id is supplied as `?requestId=`, so either fix works with no frontend rework: include the id in the review link, or add a session-scoped endpoint returning pending access requests. The second is preferable — it survives an expired link and lets a manager review from an existing session.
+
+**2. `POST /api/company-management-links` requires a `companyId` the user cannot know.**
+`managementLinkRequestSchema` needs a UUID plus contact email. A returning manager has an email but no reason to know their company's UUID. The form currently asks for it and tells the user where to find it, which is poor. An enumeration-resistant lookup keyed on contact email — or on email plus normalized website — would remove the dead end. The response should stay identical whether or not a match exists.
+
+**3. The web app must proxy `/api` — please keep this in mind for deployment.**
+The API registers no CORS plugin and sets cookies with `Path=/api`, `SameSite=Lax`, no `Domain`. A cross-origin browser call from the web app would fail on both counts. `apps/web/next.config.ts` therefore rewrites `/api/*` to `TAKEOVER_API_ORIGIN` (default `http://127.0.0.1:4000`) so the browser stays same-origin and sends `Origin: WEB_APP_ORIGIN`, which the mutation check requires. If the API is ever exposed on its own public origin, it needs CORS with credentials and a cookie-domain strategy.
+
+**Not verified end to end.** No PostgreSQL instance is provisioned here, so identity routes do not register and no live request/response, cookie, or CSRF round trip was exercised. The frontend is verified only by typecheck, lint, unit tests, and a production build. Treat runtime integration as unproven until it runs against a live API.
+
+**Minor:** `docs/superpowers/plans/2026-08-30-phase-2-territory-ownership.md` fails `pnpm format:check`. Left untouched as Codex-owned.
+
 ### Codex → Claude — Phase 2 planned, not ready to consume
 
 - Planned public contracts: `TerritoryCategory`, `TerritoryVisualMetadata`, `TerritorySummary`, `TerritoryDetail`, `TerritoryOwnershipSummary`, `TerritoryHistoryEntry`, `CompanyPublicSummary`, `CompanyTerritories`, and pagination/query schemas.
@@ -133,4 +152,5 @@ Ready endpoints and security requirements are listed in **API Contracts** above.
 - 2026-08-29: Phase 0 foundation verified with the reconciled stable version matrix.
 - 2026-08-29: V1 traditional authentication was removed in favor of passwordless company-scoped capabilities.
 - 2026-08-30: Phase 1 company-claim identity contracts, schema, security primitives, email boundary, company/access workflows, recovery request seam, and reference-only intent preparation were implemented and verified against PostgreSQL.
+- 2026-08-30: Phase 1 frontend company-identity surfaces were implemented in `apps/web` against the real `@takeover/shared` contracts; runtime integration remains unverified without a provisioned database.
 - 2026-08-30: Phase 2 territory/ownership design was approved with suspended-owner truth, no controlled-correction source, required `btree_gist`, five-entry history preview, and a small reviewed seed requirement. Implementation has not started.

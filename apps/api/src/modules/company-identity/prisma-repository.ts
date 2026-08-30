@@ -9,6 +9,7 @@ import type {
   ConsumeChallengeInput,
   ConsumeManagementChallengeInput,
   CreateSessionInput,
+  DecideAccessRequestInput,
   IntentRecord,
   IssueContactVerificationChallengeInput,
   IssueManagementChallengeInput,
@@ -16,10 +17,12 @@ import type {
   IssuedManagementChallenge,
   ManagementChallengeExchangeResult,
   ManagementSessionAuthority,
+  PrepareAccessRequestNotificationsInput,
   RateLimitInput,
   RevokeSessionInput,
   SessionRecord,
   VerificationExchangeResult,
+  AccessDecisionRecordResult,
 } from './repository.js';
 
 type IdentityPrismaClient = PrismaClient | Prisma.TransactionClient;
@@ -28,6 +31,26 @@ export function mapMinorAmountToSafeInteger(amount: bigint): number {
   const value = Number(amount);
   if (!Number.isSafeInteger(value)) throw new Error('Minor amount exceeds the shared safe integer boundary');
   return value;
+}
+
+export class CompanyAccessDecisionConflictError extends Error {
+  readonly code = 'CONFLICT';
+  readonly statusCode = 409;
+
+  constructor() {
+    super('Company access request has already been decided or expired');
+    this.name = 'CompanyAccessDecisionConflictError';
+  }
+}
+
+export class CompanyAccessDecisionAuthorizationError extends Error {
+  readonly code = 'AUTHORIZATION_REQUIRED';
+  readonly statusCode = 403;
+
+  constructor() {
+    super('Management grant does not belong to the access request company');
+    this.name = 'CompanyAccessDecisionAuthorizationError';
+  }
 }
 
 function mapCompany(company: {
@@ -272,7 +295,7 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
       `);
       const challenge = await transaction.emailVerificationChallenge.findUnique({
         where: { selector: input.selector },
-        include: { company: true },
+        include: { company: true, contact: true },
       });
       const digestMatches =
         challenge !== null &&
@@ -281,7 +304,9 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
       const valid =
         challenge !== null &&
         digestMatches &&
-        challenge.purpose === 'MANAGEMENT_LINK' &&
+        ['MANAGEMENT_LINK', 'ACCESS_REQUEST_REVIEW', 'ACCESS_DECISION'].includes(
+          challenge.purpose,
+        ) &&
         challenge.deliveryStatus === 'SENT' &&
         challenge.consumedAt === null &&
         challenge.revokedAt === null &&
@@ -374,7 +399,7 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
       `);
       const challenge = await transaction.emailVerificationChallenge.findUnique({
         where: { selector: input.selector },
-        include: { company: true },
+        include: { company: true, contact: true },
       });
       const digestMatches =
         challenge !== null &&
@@ -495,20 +520,49 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         };
       }
 
-      const accessRequest = await transaction.companyAccessRequest.create({
-        data: {
+      const existingAccessRequest = await transaction.companyAccessRequest.findFirst({
+        where: {
           companyId: challenge.companyId,
           contactId: challenge.contactId,
-          expiresAt: input.accessRequestExpiresAt,
-          takeoverIntentId: intent.id,
+          status: 'PENDING',
         },
       });
+      if (
+        existingAccessRequest?.takeoverIntentId !== null &&
+        existingAccessRequest?.takeoverIntentId !== undefined &&
+        existingAccessRequest.takeoverIntentId !== intent.id
+      ) {
+        await transaction.takeoverIntent.update({
+          where: { id: existingAccessRequest.takeoverIntentId },
+          data: { status: 'CANCELLED' },
+        });
+      }
+      const accessRequest =
+        existingAccessRequest === null
+          ? await transaction.companyAccessRequest.create({
+              data: {
+                companyId: challenge.companyId,
+                contactId: challenge.contactId,
+                expiresAt: input.accessRequestExpiresAt,
+                takeoverIntentId: intent.id,
+              },
+            })
+          : await transaction.companyAccessRequest.update({
+              where: { id: existingAccessRequest.id },
+              data: {
+                expiresAt: input.accessRequestExpiresAt,
+                takeoverIntentId: intent.id,
+              },
+            });
       const updatedIntent = await transaction.takeoverIntent.update({
         where: { id: intent.id },
         data: { status: 'AWAITING_COMPANY_ACCESS' },
       });
       await this.writeAudit(transaction, {
-        action: 'company_access_request.created',
+        action:
+          existingAccessRequest === null
+            ? 'company_access_request.created'
+            : 'company_access_request.reused',
         actorId: challenge.contactId,
         actorType: 'CONTACT',
         companyId: challenge.companyId,
@@ -526,6 +580,7 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         company: mapCompany(challenge.company),
         intent: mapIntent(updatedIntent),
         kind: 'access_request',
+        requesterEmail: challenge.contact.email,
       };
     });
   }
@@ -583,6 +638,243 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         sessionId: session.id,
         tokenDigest: new Uint8Array(session.tokenDigest),
       };
+    });
+  }
+
+  async decideAccessRequest(
+    input: DecideAccessRequestInput,
+  ): Promise<AccessDecisionRecordResult> {
+    return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "company_access_requests"
+        WHERE "id" = ${input.accessRequestId}::uuid
+        FOR UPDATE
+      `);
+      const accessRequest = await transaction.companyAccessRequest.findUnique({
+        where: { id: input.accessRequestId },
+        include: { company: true, contact: true, takeoverIntent: true },
+      });
+      if (
+        accessRequest === null ||
+        accessRequest.status !== 'PENDING' ||
+        accessRequest.expiresAt <= input.now
+      ) {
+        throw new CompanyAccessDecisionConflictError();
+      }
+      const decidingGrant = await transaction.companyManagementGrant.findUnique({
+        where: { id: input.decidedByGrantId },
+      });
+      if (
+        decidingGrant === null ||
+        decidingGrant.companyId !== accessRequest.companyId ||
+        decidingGrant.status !== 'ACTIVE' ||
+        decidingGrant.revokedAt !== null
+      ) {
+        throw new CompanyAccessDecisionAuthorizationError();
+      }
+
+      let challengeId: string | undefined;
+      if (input.decision === 'approved') {
+        if (input.managementChallenge === undefined) {
+          throw new Error('Approved access decision requires a management challenge');
+        }
+        await transaction.companyManagementGrant.upsert({
+          where: {
+            companyId_contactId: {
+              companyId: accessRequest.companyId,
+              contactId: accessRequest.contactId,
+            },
+          },
+          create: {
+            accessRequestId: accessRequest.id,
+            companyId: accessRequest.companyId,
+            contactId: accessRequest.contactId,
+            grantedAt: input.now,
+            grantedByGrantId: decidingGrant.id,
+            source: 'ACCESS_REQUEST',
+          },
+          update: {
+            accessRequestId: accessRequest.id,
+            grantedAt: input.now,
+            grantedByGrantId: decidingGrant.id,
+            revokedAt: null,
+            source: 'ACCESS_REQUEST',
+            status: 'ACTIVE',
+          },
+        });
+        const challenge = await transaction.emailVerificationChallenge.create({
+          data: {
+            accessRequestId: accessRequest.id,
+            companyId: accessRequest.companyId,
+            contactId: accessRequest.contactId,
+            expiresAt: input.managementChallenge.expiresAt,
+            purpose: 'ACCESS_DECISION',
+            selector: input.managementChallenge.selector,
+            tokenDigest: Buffer.from(input.managementChallenge.tokenDigest),
+          },
+        });
+        challengeId = challenge.id;
+        if (accessRequest.takeoverIntentId !== null) {
+          await transaction.takeoverIntent.update({
+            where: { id: accessRequest.takeoverIntentId },
+            data: { status: 'IDENTITY_READY' },
+          });
+        }
+      } else if (accessRequest.takeoverIntentId !== null) {
+        await transaction.takeoverIntent.update({
+          where: { id: accessRequest.takeoverIntentId },
+          data: { status: 'CANCELLED' },
+        });
+      }
+
+      const decided = await transaction.companyAccessRequest.update({
+        where: { id: accessRequest.id },
+        data: {
+          decidedAt: input.now,
+          decidedByGrantId: decidingGrant.id,
+          ...(input.reason === undefined ? {} : { decisionReason: input.reason }),
+          status: input.decision === 'approved' ? 'APPROVED' : 'REJECTED',
+        },
+      });
+      await this.writeAudit(transaction, {
+        action: `company_access_request.${input.decision}`,
+        actorId: decidingGrant.id,
+        actorType: 'MANAGEMENT_GRANT',
+        companyId: accessRequest.companyId,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        targetId: accessRequest.id,
+        targetType: 'company_access_request',
+      });
+      return {
+        accessRequest: {
+          companyId: decided.companyId,
+          decidedAt: decided.decidedAt as Date,
+          expiresAt: decided.expiresAt,
+          id: decided.id,
+          requestedAt: decided.requestedAt,
+          status: decided.status as 'APPROVED' | 'REJECTED',
+        },
+        ...(challengeId === undefined ? {} : { challengeId }),
+        companyName: accessRequest.company.name,
+        requesterEmail: accessRequest.contact.email,
+      };
+    });
+  }
+
+  async getAccessRequestCompanyId(accessRequestId: string): Promise<string | null> {
+    const accessRequest = await this.prisma.companyAccessRequest.findUnique({
+      where: { id: accessRequestId },
+      select: { companyId: true },
+    });
+    return accessRequest?.companyId ?? null;
+  }
+
+  async listActiveManagerContacts(companyId: string) {
+    const grants = await this.prisma.companyManagementGrant.findMany({
+      where: {
+        companyId,
+        revokedAt: null,
+        status: 'ACTIVE',
+        contact: { emailVerifiedAt: { not: null }, revokedAt: null },
+      },
+      include: { contact: true },
+    });
+    return grants.map((grant) => ({ contactId: grant.contactId, email: grant.contact.email }));
+  }
+
+  async prepareAccessRequestNotifications(input: PrepareAccessRequestNotificationsInput) {
+    if (input.challenges.length === 0) return [];
+    return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "company_access_requests"
+        WHERE "id" = ${input.accessRequestId}::uuid
+        FOR UPDATE
+      `);
+      const accessRequest = await transaction.companyAccessRequest.findUnique({
+        where: { id: input.accessRequestId },
+      });
+      if (accessRequest === null || accessRequest.status !== 'PENDING') return [];
+      if (
+        accessRequest.lastNotifiedAt !== null &&
+        accessRequest.lastNotifiedAt.getTime() + input.cooldownSeconds * 1_000 > input.now.getTime()
+      ) {
+        return [];
+      }
+      const activeManagers = await transaction.companyManagementGrant.findMany({
+        where: {
+          companyId: accessRequest.companyId,
+          contactId: { in: input.challenges.map((challenge) => challenge.contactId) },
+          revokedAt: null,
+          status: 'ACTIVE',
+          contact: { emailVerifiedAt: { not: null }, revokedAt: null },
+        },
+        include: { contact: true },
+      });
+      const challengeByContact = new Map(
+        input.challenges.map((challenge) => [challenge.contactId, challenge]),
+      );
+      const prepared = [];
+      for (const manager of activeManagers) {
+        const requested = challengeByContact.get(manager.contactId);
+        if (requested === undefined) continue;
+        const challenge = await transaction.emailVerificationChallenge.create({
+          data: {
+            accessRequestId: accessRequest.id,
+            companyId: accessRequest.companyId,
+            contactId: manager.contactId,
+            expiresAt: requested.expiresAt,
+            purpose: 'ACCESS_REQUEST_REVIEW',
+            selector: requested.selector,
+            tokenDigest: Buffer.from(requested.tokenDigest),
+          },
+        });
+        prepared.push({
+          challengeId: challenge.id,
+          contactId: manager.contactId,
+          selector: challenge.selector,
+          toEmail: manager.contact.email,
+        });
+      }
+      if (prepared.length === 0) return [];
+      await transaction.companyAccessRequest.update({
+        where: { id: accessRequest.id },
+        data: {
+          lastNotifiedAt: input.now,
+          notificationCount: { increment: prepared.length },
+        },
+      });
+      await this.writeAudit(transaction, {
+        action: 'company_access_request.managers_notified',
+        actorType: 'SYSTEM',
+        companyId: accessRequest.companyId,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        targetId: accessRequest.id,
+        targetType: 'company_access_request',
+      });
+      return prepared;
+    });
+  }
+
+  async recordAccessDecisionNotificationFailure(
+    accessRequestId: string,
+    reason: string,
+    now: Date,
+  ): Promise<void> {
+    const accessRequest = await this.prisma.companyAccessRequest.findUnique({
+      where: { id: accessRequestId },
+      select: { companyId: true },
+    });
+    if (accessRequest === null) return;
+    await this.prisma.auditLog.create({
+      data: {
+        action: 'company_access_request.decision_notification_failed',
+        actorType: 'SYSTEM',
+        companyId: accessRequest.companyId,
+        metadata: { occurredAt: now.toISOString() },
+        reason: reason.slice(0, 500),
+        targetId: accessRequestId,
+        targetType: 'company_access_request',
+      },
     });
   }
 

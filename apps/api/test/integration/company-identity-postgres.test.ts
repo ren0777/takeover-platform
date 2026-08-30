@@ -195,6 +195,60 @@ describe('Phase 1 PostgreSQL invariants', () => {
     expect(await prisma.companyManagementSession.count()).toBe(0);
   });
 
+  it('reuses a pending access request and preserves the newest prepared intent', async () => {
+    const company = await createCompany('ACTIVE', 'https://reuse.example/');
+    const repository = new PrismaCompanyIdentityRepository(prisma);
+    const createAndExchange = async (selector: string, fill: number) => {
+      const tokenDigest = new Uint8Array(32).fill(fill);
+      const claim = await repository.beginCompanyClaim({
+        challenge: {
+          expiresAt: new Date('2026-08-30T13:15:00.000Z'),
+          selector,
+          tokenDigest,
+        },
+        company: {
+          expiresAt: new Date('2026-08-31T13:00:00.000Z'),
+          name: 'Ignored',
+          normalizedName: 'ignored',
+          normalizedWebsite: company.normalizedWebsite,
+          websiteUrl: company.websiteUrl,
+        },
+        contact: { email: 'requester@gmail.com', normalizedEmail: 'requester@gmail.com' },
+        intent: {
+          expiresAt: new Date('2026-08-31T13:00:00.000Z'),
+          territoryExternalRef: fill === 20 ? 'ai-coding' : 'devtools',
+        },
+        now: new Date('2026-08-30T13:00:00.000Z'),
+      });
+      await repository.markChallengeDelivery(claim.challenge.id, 'SENT');
+      return {
+        claim,
+        exchange: await repository.consumeContactVerification({
+          accessRequestExpiresAt: new Date('2026-09-06T13:05:00.000Z'),
+          candidateDigest: tokenDigest,
+          csrfDigest: new Uint8Array(32).fill(fill + 1),
+          maxFailedAttempts: 10,
+          now: new Date('2026-08-30T13:05:00.000Z'),
+          selector,
+          sessionExpiresAt: new Date('2026-08-30T21:05:00.000Z'),
+          sessionTokenDigest: new Uint8Array(32).fill(fill + 2),
+        }),
+      };
+    };
+
+    const first = await createAndExchange('reuse-first', 20);
+    const second = await createAndExchange('reuse-second', 30);
+
+    expect(first.exchange).toMatchObject({ kind: 'access_request' });
+    expect(second.exchange).toMatchObject({ kind: 'access_request' });
+    expect(await prisma.companyAccessRequest.count()).toBe(1);
+    const pending = await prisma.companyAccessRequest.findFirstOrThrow();
+    expect(pending.takeoverIntentId).toBe(second.claim.intent.id);
+    await expect(
+      prisma.takeoverIntent.findUniqueOrThrow({ where: { id: first.claim.intent.id } }),
+    ).resolves.toMatchObject({ status: 'CANCELLED' });
+  });
+
   it('allows private drafts but only one authoritative normalized website', async () => {
     await createCompany('DRAFT', 'https://acme.example/');
     await createCompany('DRAFT', 'https://acme.example/');
@@ -404,6 +458,58 @@ describe('Phase 1 PostgreSQL invariants', () => {
       repository.resolveManagementSession(exchange.session.tokenDigest, new Date('2026-08-30T13:08:00.000Z')),
     ).resolves.toBeNull();
   });
+
+  it.each(['ACCESS_REQUEST_REVIEW', 'ACCESS_DECISION'] as const)(
+    'accepts the %s continuation purpose through the management exchange',
+    async (purpose) => {
+      const company = await createCompany('ACTIVE', `https://${purpose.toLowerCase()}.example/`);
+      const contact = await prisma.companyContact.create({
+        data: {
+          email: `${purpose.toLowerCase()}@gmail.com`,
+          emailVerifiedAt: new Date('2026-08-30T13:00:00.000Z'),
+          normalizedEmail: `${purpose.toLowerCase()}@gmail.com`,
+        },
+      });
+      await prisma.companyVerification.create({
+        data: {
+          companyId: company.id,
+          contactId: contact.id,
+          level: 'CONTACT_VERIFIED',
+          source: 'email_challenge',
+          status: 'VERIFIED',
+          verifiedAt: new Date('2026-08-30T13:00:00.000Z'),
+        },
+      });
+      await prisma.companyManagementGrant.create({
+        data: { companyId: company.id, contactId: contact.id, source: 'INITIAL_CONTACT' },
+      });
+      const digest = new Uint8Array(32).fill(purpose === 'ACCESS_REQUEST_REVIEW' ? 10 : 11);
+      await prisma.emailVerificationChallenge.create({
+        data: {
+          companyId: company.id,
+          contactId: contact.id,
+          deliveryStatus: 'SENT',
+          expiresAt: new Date('2026-08-30T13:15:00.000Z'),
+          purpose,
+          selector: `continuation-${purpose.toLowerCase()}`,
+          tokenDigest: Buffer.from(digest),
+        },
+      });
+      const repository = new PrismaCompanyIdentityRepository(prisma);
+
+      await expect(
+        repository.consumeManagementChallenge({
+          candidateDigest: digest,
+          csrfDigest: new Uint8Array(32).fill(12),
+          maxFailedAttempts: 10,
+          now: new Date('2026-08-30T13:05:00.000Z'),
+          selector: `continuation-${purpose.toLowerCase()}`,
+          sessionExpiresAt: new Date('2026-08-30T21:05:00.000Z'),
+          sessionTokenDigest: new Uint8Array(32).fill(13),
+        }),
+      ).resolves.toMatchObject({ kind: 'management_session' });
+    },
+  );
 
   it('rejects persisted minor units outside the shared safe-integer boundary', () => {
     expect(mapMinorAmountToSafeInteger(BigInt(Number.MAX_SAFE_INTEGER))).toBe(

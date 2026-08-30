@@ -1,8 +1,11 @@
 import {
+  accessDecisionRequestSchema,
   companyClaimRequestSchema,
   emailVerificationRequestSchema,
   emailTokenExchangeRequestSchema,
   managementLinkRequestSchema,
+  type AccessDecisionRequest,
+  type AccessDecisionResult,
   type AcceptedDelivery,
   type Company,
   type CompanyClaimRequest,
@@ -135,6 +138,83 @@ export function createCompanyIdentityService(dependencies: CompanyIdentityServic
     if (!result.allowed) throw new IdentityRateLimitError(result.retryAfterSeconds);
   };
 
+  const decideAccessRequest = async (
+    accessRequestId: string,
+    rawRequest: AccessDecisionRequest,
+    decision: 'approved' | 'rejected',
+    sessionToken: string,
+    csrfToken: string,
+    context: IdentityRequestContext,
+  ): Promise<AccessDecisionResult> => {
+    const request = accessDecisionRequestSchema.parse(rawRequest);
+    const companyId = await dependencies.repository.getAccessRequestCompanyId(accessRequestId);
+    if (companyId === null) throw new InvalidCapabilityTokenError();
+    const authority = await dependencies.repository.resolveManagementSession(
+      dependencies.tokens.digestSessionToken(sessionToken),
+      dependencies.clock.now(),
+    );
+    if (
+      authority === null ||
+      !dependencies.tokens.verifyDigest(
+        dependencies.tokens.digestCsrfToken(csrfToken),
+        authority.csrfDigest,
+      )
+    ) {
+      throw new ManagementAuthorizationRequiredError();
+    }
+    assertCompanyAuthority(authority, companyId);
+    const now = dependencies.clock.now();
+    const managementToken = decision === 'approved' ? dependencies.tokens.issueLinkToken() : null;
+    const decided = await dependencies.repository.decideAccessRequest({
+      accessRequestId,
+      decidedByGrantId: authority.grantId,
+      decision,
+      ...(managementToken === null
+        ? {}
+        : {
+            managementChallenge: {
+              expiresAt: addSeconds(now, dependencies.config.managementLinkTtlSeconds),
+              selector: managementToken.selector,
+              tokenDigest: managementToken.digest,
+            },
+          }),
+      now,
+      ...(request.reason === undefined ? {} : { reason: request.reason }),
+      requestId: context.requestId,
+    });
+    try {
+      await dependencies.emailProvider.sendAccessDecisionNotification({
+        companyName: decided.companyName,
+        decision,
+        ...(managementToken === null ? {} : { rawManagementToken: managementToken.rawToken }),
+        toEmail: decided.requesterEmail,
+      });
+      if (decided.challengeId !== undefined) {
+        await dependencies.repository.markChallengeDelivery(decided.challengeId, 'SENT');
+      }
+    } catch (error) {
+      if (decided.challengeId !== undefined) {
+        await dependencies.repository.markChallengeDelivery(decided.challengeId, 'FAILED');
+      }
+      await dependencies.repository.recordAccessDecisionNotificationFailure(
+        accessRequestId,
+        error instanceof Error ? error.message : 'Unknown email delivery failure',
+        now,
+      );
+    }
+    return {
+      accessRequest: {
+        companyId: decided.accessRequest.companyId,
+        decidedAt: decided.accessRequest.decidedAt.toISOString(),
+        expiresAt: decided.accessRequest.expiresAt.toISOString(),
+        id: decided.accessRequest.id,
+        requestedAt: decided.accessRequest.requestedAt.toISOString(),
+        status: decision,
+      },
+      checkoutAvailable: false,
+    };
+  };
+
   return {
     async beginCompanyClaim(
       rawRequest: CompanyClaimRequest,
@@ -247,6 +327,43 @@ export function createCompanyIdentityService(dependencies: CompanyIdentityServic
       if (exchange.kind === 'invalid') throw new InvalidCapabilityTokenError();
 
       if (exchange.kind === 'access_request') {
+        const managers = await dependencies.repository.listActiveManagerContacts(
+          exchange.company.id,
+        );
+        const notificationTokens = managers.map((manager) => ({
+          manager,
+          token: dependencies.tokens.issueLinkToken(),
+        }));
+        const prepared = await dependencies.repository.prepareAccessRequestNotifications({
+          accessRequestId: exchange.accessRequest.id,
+          challenges: notificationTokens.map(({ manager, token }) => ({
+            contactId: manager.contactId,
+            expiresAt: addSeconds(now, dependencies.config.managementLinkTtlSeconds),
+            selector: token.selector,
+            tokenDigest: token.digest,
+          })),
+          cooldownSeconds: dependencies.config.rateLimits.managerNotificationCooldownSeconds,
+          now,
+          requestId: context.requestId,
+        });
+        const rawTokenBySelector = new Map(
+          notificationTokens.map(({ token }) => [token.selector, token.rawToken]),
+        );
+        for (const notification of prepared) {
+          const rawReviewToken = rawTokenBySelector.get(notification.selector);
+          if (rawReviewToken === undefined) continue;
+          try {
+            await dependencies.emailProvider.sendAccessRequestNotification({
+              companyName: exchange.company.name,
+              rawReviewToken,
+              requesterEmail: exchange.requesterEmail,
+              toEmail: notification.toEmail,
+            });
+            await dependencies.repository.markChallengeDelivery(notification.challengeId, 'SENT');
+          } catch {
+            await dependencies.repository.markChallengeDelivery(notification.challengeId, 'FAILED');
+          }
+        }
         return {
           response: {
             accessRequest: {
@@ -497,6 +614,40 @@ export function createCompanyIdentityService(dependencies: CompanyIdentityServic
       }
       assertCompanyAuthority(authority, companyId);
       return authority;
+    },
+
+    async approveAccessRequest(
+      accessRequestId: string,
+      request: AccessDecisionRequest,
+      sessionToken: string,
+      csrfToken: string,
+      context: IdentityRequestContext,
+    ): Promise<AccessDecisionResult> {
+      return decideAccessRequest(
+        accessRequestId,
+        request,
+        'approved',
+        sessionToken,
+        csrfToken,
+        context,
+      );
+    },
+
+    async rejectAccessRequest(
+      accessRequestId: string,
+      request: AccessDecisionRequest,
+      sessionToken: string,
+      csrfToken: string,
+      context: IdentityRequestContext,
+    ): Promise<AccessDecisionResult> {
+      return decideAccessRequest(
+        accessRequestId,
+        request,
+        'rejected',
+        sessionToken,
+        csrfToken,
+        context,
+      );
     },
   };
 }

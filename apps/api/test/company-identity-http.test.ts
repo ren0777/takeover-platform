@@ -78,6 +78,28 @@ function createService(): CompanyIdentityService {
       grantId: '55555555-5555-4555-8555-555555555555',
       sessionId: '66666666-6666-4666-8666-666666666666',
     })),
+    approveAccessRequest: vi.fn(async () => ({
+      accessRequest: {
+        companyId: company.id,
+        decidedAt: '2026-08-30T13:00:00.000Z',
+        expiresAt: '2026-09-06T13:00:00.000Z',
+        id: '77777777-7777-4777-8777-777777777777',
+        requestedAt: '2026-08-30T12:00:00.000Z',
+        status: 'approved' as const,
+      },
+      checkoutAvailable: false as const,
+    })),
+    rejectAccessRequest: vi.fn(async () => ({
+      accessRequest: {
+        companyId: company.id,
+        decidedAt: '2026-08-30T13:00:00.000Z',
+        expiresAt: '2026-09-06T13:00:00.000Z',
+        id: '77777777-7777-4777-8777-777777777777',
+        requestedAt: '2026-08-30T12:00:00.000Z',
+        status: 'rejected' as const,
+      },
+      checkoutAvailable: false as const,
+    })),
   };
 }
 
@@ -266,4 +288,35 @@ describe('company identity HTTP surface', () => {
       ]),
     );
   });
+
+  it.each(['approve', 'reject'] as const)(
+    '%s access decisions require the scoped cookie, Origin, and CSRF',
+    async (decision) => {
+      const harness = buildIdentityApp();
+      const response = await harness.app.inject({
+        method: 'POST',
+        url: `/api/company-access-requests/77777777-7777-4777-8777-777777777777/${decision}`,
+        headers: {
+          cookie:
+            'takeover_management=session; takeover_management_csrf=management-csrf-secret',
+          origin: 'http://localhost:3000',
+          'x-csrf-token': 'management-csrf-secret',
+        },
+        payload: decision === 'reject' ? { reason: 'Not recognized' } : {},
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data).toMatchObject({ checkoutAvailable: false });
+      const method =
+        decision === 'approve'
+          ? harness.service.approveAccessRequest
+          : harness.service.rejectAccessRequest;
+      expect(method).toHaveBeenCalledWith(
+        '77777777-7777-4777-8777-777777777777',
+        decision === 'reject' ? { reason: 'Not recognized' } : {},
+        'session',
+        'management-csrf-secret',
+        expect.objectContaining({ requestId: expect.any(String) }),
+      );
+    },
+  );
 });

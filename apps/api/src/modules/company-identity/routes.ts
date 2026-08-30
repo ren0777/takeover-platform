@@ -1,4 +1,5 @@
 import {
+  accessDecisionRequestSchema,
   companyClaimRequestSchema,
   emailTokenExchangeRequestSchema,
   emailVerificationRequestSchema,
@@ -6,6 +7,7 @@ import {
   type ApiSuccess,
 } from '@takeover/shared';
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import type { IdentityConfig } from '../../config/env.js';
 import { ManagementAuthorizationRequiredError } from './authorization.js';
 import type { CompanyIdentityService } from './service.js';
@@ -30,6 +32,30 @@ function requestContext(request: { id: string; ip: string }) {
 function requiredCookie(value: string | undefined): string {
   if (value === undefined || value.length === 0) throw new ManagementAuthorizationRequiredError();
   return value;
+}
+
+const accessRequestIdSchema = z.uuid();
+
+function managementMutationSecrets(
+  request: {
+    cookies: Record<string, string | undefined>;
+    headers: Record<string, string | string[] | undefined>;
+  },
+  trustedOrigin: string,
+): { csrfToken: string; sessionToken: string } {
+  assertTrustedMutationOrigin(
+    typeof request.headers.origin === 'string' ? request.headers.origin : undefined,
+    trustedOrigin,
+  );
+  const sessionToken = requiredCookie(request.cookies[MANAGEMENT_SESSION_COOKIE_NAME]);
+  const csrfCookie = requiredCookie(request.cookies[MANAGEMENT_CSRF_COOKIE_NAME]);
+  const csrfToken = requiredCookie(
+    typeof request.headers['x-csrf-token'] === 'string'
+      ? request.headers['x-csrf-token']
+      : undefined,
+  );
+  if (csrfCookie !== csrfToken) throw new ManagementAuthorizationRequiredError();
+  return { csrfToken, sessionToken };
 }
 
 export async function companyIdentityRoutes(
@@ -100,18 +126,13 @@ export async function companyIdentityRoutes(
   });
 
   app.delete('/api/company-management/session', async (request, reply) => {
-    assertTrustedMutationOrigin(request.headers.origin, options.config.webAppOrigin);
-    const sessionToken = requiredCookie(request.cookies[MANAGEMENT_SESSION_COOKIE_NAME]);
-    const csrfCookie = requiredCookie(request.cookies[MANAGEMENT_CSRF_COOKIE_NAME]);
-    const csrfHeader = requiredCookie(
-      typeof request.headers['x-csrf-token'] === 'string'
-        ? request.headers['x-csrf-token']
-        : undefined,
+    const { csrfToken, sessionToken } = managementMutationSecrets(
+      request,
+      options.config.webAppOrigin,
     );
-    if (csrfCookie !== csrfHeader) throw new ManagementAuthorizationRequiredError();
     await options.service.revokeManagementSession(
       sessionToken,
-      csrfHeader,
+      csrfToken,
       requestContext(request),
     );
     reply.clearCookie(
@@ -124,4 +145,44 @@ export async function companyIdentityRoutes(
     );
     return reply.status(204).send();
   });
+
+  app.post<{ Params: { id: string } }>(
+    '/api/company-access-requests/:id/approve',
+    async (request) => {
+      const accessRequestId = accessRequestIdSchema.parse(request.params.id);
+      const input = accessDecisionRequestSchema.parse(request.body);
+      const { csrfToken, sessionToken } = managementMutationSecrets(
+        request,
+        options.config.webAppOrigin,
+      );
+      const data = await options.service.approveAccessRequest(
+        accessRequestId,
+        input,
+        sessionToken,
+        csrfToken,
+        requestContext(request),
+      );
+      return { data, meta: { requestId: request.id } };
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/company-access-requests/:id/reject',
+    async (request) => {
+      const accessRequestId = accessRequestIdSchema.parse(request.params.id);
+      const input = accessDecisionRequestSchema.parse(request.body);
+      const { csrfToken, sessionToken } = managementMutationSecrets(
+        request,
+        options.config.webAppOrigin,
+      );
+      const data = await options.service.rejectAccessRequest(
+        accessRequestId,
+        input,
+        sessionToken,
+        csrfToken,
+        requestContext(request),
+      );
+      return { data, meta: { requestId: request.id } };
+    },
+  );
 }

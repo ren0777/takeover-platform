@@ -67,9 +67,14 @@ function createHarness(options: { beginResult?: BeginClaimRecordResult; exchange
     consumeContactVerification: vi.fn(async () => options.exchange ?? { kind: 'invalid' }),
     consumeManagementChallenge: vi.fn(async () => ({ kind: 'invalid' })),
     consumeRateLimit: vi.fn(async () => ({ allowed: true, retryAfterSeconds: 0 })),
+    decideAccessRequest: vi.fn(),
+    getAccessRequestCompanyId: vi.fn(async () => null),
     issueContactVerificationChallenge: vi.fn(async () => null),
     issueManagementChallenge: vi.fn(async () => null),
+    listActiveManagerContacts: vi.fn(async () => []),
     markChallengeDelivery: vi.fn(async () => undefined),
+    prepareAccessRequestNotifications: vi.fn(async () => []),
+    recordAccessDecisionNotificationFailure: vi.fn(async () => undefined),
     resolveManagementSession: vi.fn(async () => null),
     revokeManagementSession: vi.fn(async () => undefined),
   } as unknown as CompanyIdentityRepository;
@@ -213,8 +218,20 @@ describe('contact verification exchange service', () => {
       company: { ...company, status: 'ACTIVE' },
       intent: { ...intent, status: 'AWAITING_COMPANY_ACCESS' },
       kind: 'access_request',
+      requesterEmail: 'founder@gmail.com',
     };
-    const { service } = createHarness({ exchange });
+    const { emailProvider, repository, service } = createHarness({ exchange });
+    vi.mocked(repository.listActiveManagerContacts).mockResolvedValueOnce([
+      { contactId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', email: 'manager@gmail.com' },
+    ]);
+    vi.mocked(repository.prepareAccessRequestNotifications).mockImplementationOnce(async (input) => [
+      {
+        challengeId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        contactId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        selector: input.challenges[0]?.selector ?? 'missing-selector',
+        toEmail: 'manager@gmail.com',
+      },
+    ]);
     const issued = createOpaqueTokenService(parseApiConfig({ NODE_ENV: 'test' }).identity.tokenHmacSecret).issueLinkToken();
 
     const result = await service.exchangeEmailVerification(
@@ -228,6 +245,13 @@ describe('contact verification exchange service', () => {
       checkoutAvailable: false,
       nextAction: 'await_company_access',
     });
+    expect(emailProvider.sendAccessRequestNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rawReviewToken: expect.any(String),
+        requesterEmail: 'founder@gmail.com',
+        toEmail: 'manager@gmail.com',
+      }),
+    );
   });
 
   it.each(['malformed', 'selector.secret'])('rejects malformed or invalid token %s generically', async (token) => {
@@ -401,5 +425,110 @@ describe('management link lifecycle', () => {
         'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       ),
     ).rejects.toThrow('company');
+  });
+});
+
+describe('existing-company access decisions', () => {
+  it('approves with same-company authority and sends a continuation management link', async () => {
+    const { emailProvider, repository, service } = createHarness();
+    const tokens = createOpaqueTokenService(parseApiConfig({ NODE_ENV: 'test' }).identity.tokenHmacSecret);
+    const session = tokens.issueSessionToken();
+    const csrf = tokens.issueSessionToken();
+    vi.mocked(repository.getAccessRequestCompanyId).mockResolvedValueOnce(company.id);
+    vi.mocked(repository.resolveManagementSession).mockResolvedValueOnce({
+      company,
+      companyId: company.id,
+      contactId: intent.contactId,
+      csrfDigest: tokens.digestCsrfToken(csrf.rawToken),
+      expiresAt: new Date('2026-08-30T21:00:00.000Z'),
+      grantId: '55555555-5555-4555-8555-555555555555',
+      sessionId: '66666666-6666-4666-8666-666666666666',
+      verificationLevels: ['CONTACT_VERIFIED'],
+    });
+    vi.mocked(repository.decideAccessRequest).mockResolvedValueOnce({
+      accessRequest: {
+        companyId: company.id,
+        decidedAt: now,
+        expiresAt: new Date('2026-09-06T13:00:00.000Z'),
+        id: '77777777-7777-4777-8777-777777777777',
+        requestedAt: now,
+        status: 'APPROVED',
+      },
+      challengeId: '88888888-8888-4888-8888-888888888888',
+      companyName: company.name,
+      requesterEmail: 'requester@gmail.com',
+    });
+
+    const result = await service.approveAccessRequest(
+      '77777777-7777-4777-8777-777777777777',
+      {},
+      session.rawToken,
+      csrf.rawToken,
+      { ipAddress: '203.0.113.20', requestId: 'approve-1' },
+    );
+
+    expect(result).toMatchObject({ accessRequest: { status: 'approved' }, checkoutAvailable: false });
+    expect(repository.decideAccessRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decidedByGrantId: '55555555-5555-4555-8555-555555555555',
+        decision: 'approved',
+        managementChallenge: expect.objectContaining({
+          expiresAt: new Date('2026-08-30T13:15:00.000Z'),
+        }),
+      }),
+    );
+    expect(emailProvider.sendAccessDecisionNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: 'approved',
+        rawManagementToken: expect.any(String),
+        toEmail: 'requester@gmail.com',
+      }),
+    );
+  });
+
+  it('rejects without creating a management token', async () => {
+    const { emailProvider, repository, service } = createHarness();
+    const tokens = createOpaqueTokenService(parseApiConfig({ NODE_ENV: 'test' }).identity.tokenHmacSecret);
+    const session = tokens.issueSessionToken();
+    const csrf = tokens.issueSessionToken();
+    vi.mocked(repository.getAccessRequestCompanyId).mockResolvedValueOnce(company.id);
+    vi.mocked(repository.resolveManagementSession).mockResolvedValueOnce({
+      company,
+      companyId: company.id,
+      csrfDigest: tokens.digestCsrfToken(csrf.rawToken),
+      expiresAt: new Date('2026-08-30T21:00:00.000Z'),
+      grantId: '55555555-5555-4555-8555-555555555555',
+      sessionId: '66666666-6666-4666-8666-666666666666',
+      verificationLevels: ['CONTACT_VERIFIED'],
+    });
+    vi.mocked(repository.decideAccessRequest).mockResolvedValueOnce({
+      accessRequest: {
+        companyId: company.id,
+        decidedAt: now,
+        expiresAt: new Date('2026-09-06T13:00:00.000Z'),
+        id: '77777777-7777-4777-8777-777777777777',
+        requestedAt: now,
+        status: 'REJECTED',
+      },
+      companyName: company.name,
+      requesterEmail: 'requester@gmail.com',
+    });
+
+    await service.rejectAccessRequest(
+      '77777777-7777-4777-8777-777777777777',
+      { reason: 'Not recognized' },
+      session.rawToken,
+      csrf.rawToken,
+      { ipAddress: '203.0.113.20', requestId: 'reject-1' },
+    );
+
+    expect(repository.decideAccessRequest).toHaveBeenCalledWith(
+      expect.not.objectContaining({ managementChallenge: expect.anything() }),
+    );
+    expect(emailProvider.sendAccessDecisionNotification).toHaveBeenCalledWith({
+      companyName: company.name,
+      decision: 'rejected',
+      toEmail: 'requester@gmail.com',
+    });
   });
 });

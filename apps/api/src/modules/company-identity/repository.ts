@@ -87,6 +87,7 @@ export type VerificationExchangeResult =
       company: CompanyRecord;
       intent: IntentRecord;
       kind: 'access_request';
+      requesterEmail: string;
     }
   | {
       company: CompanyRecord;
@@ -143,6 +144,52 @@ export type ManagementChallengeExchangeResult =
       verificationLevels: Array<'CONTACT_VERIFIED' | 'DOMAIN_VERIFIED' | 'MANUALLY_VERIFIED'>;
     };
 
+export type DecideAccessRequestInput = {
+  accessRequestId: string;
+  decidedByGrantId: string;
+  decision: 'approved' | 'rejected';
+  managementChallenge?: { expiresAt: Date; selector: string; tokenDigest: Uint8Array };
+  now: Date;
+  reason?: string;
+  requestId?: string;
+};
+
+export type AccessDecisionRecordResult = {
+  accessRequest: {
+    companyId: string;
+    decidedAt: Date;
+    expiresAt: Date;
+    id: string;
+    requestedAt: Date;
+    status: 'APPROVED' | 'REJECTED';
+  };
+  challengeId?: string;
+  companyName: string;
+  requesterEmail: string;
+};
+
+export type ActiveManagerContact = { contactId: string; email: string };
+
+export type PrepareAccessRequestNotificationsInput = {
+  accessRequestId: string;
+  challenges: Array<{
+    contactId: string;
+    expiresAt: Date;
+    selector: string;
+    tokenDigest: Uint8Array;
+  }>;
+  cooldownSeconds: number;
+  now: Date;
+  requestId?: string;
+};
+
+export type PreparedAccessRequestNotification = {
+  challengeId: string;
+  contactId: string;
+  selector: string;
+  toEmail: string;
+};
+
 export type RateLimitInput = {
   expiresAt: Date;
   keyDigest: Uint8Array;
@@ -180,13 +227,24 @@ export interface CompanyIdentityRepository {
   ): Promise<ManagementChallengeExchangeResult>;
   consumeRateLimit(input: RateLimitInput): Promise<{ allowed: boolean; retryAfterSeconds: number }>;
   createManagementSession(input: CreateSessionInput): Promise<SessionRecord>;
+  decideAccessRequest(input: DecideAccessRequestInput): Promise<AccessDecisionRecordResult>;
+  getAccessRequestCompanyId(accessRequestId: string): Promise<string | null>;
   issueContactVerificationChallenge(
     input: IssueContactVerificationChallengeInput,
   ): Promise<IssuedContactVerificationChallenge | null>;
   issueManagementChallenge(
     input: IssueManagementChallengeInput,
   ): Promise<IssuedManagementChallenge | null>;
+  listActiveManagerContacts(companyId: string): Promise<ActiveManagerContact[]>;
   markChallengeDelivery(challengeId: string, status: 'SENT' | 'FAILED'): Promise<void>;
+  prepareAccessRequestNotifications(
+    input: PrepareAccessRequestNotificationsInput,
+  ): Promise<PreparedAccessRequestNotification[]>;
+  recordAccessDecisionNotificationFailure(
+    accessRequestId: string,
+    reason: string,
+    now: Date,
+  ): Promise<void>;
   resolveManagementSession(digest: Uint8Array, now: Date): Promise<ManagementSessionAuthority | null>;
   revokeManagementSession(input: RevokeSessionInput): Promise<void>;
 }

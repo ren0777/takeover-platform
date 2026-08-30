@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  createDevelopmentEmailProvider,
-} from '../src/integrations/email/development-email-provider.js';
+import { createDevelopmentEmailProvider } from '../src/integrations/email/development-email-provider.js';
 import {
   EmailDeliveryUnavailableError,
   unavailableEmailProvider,

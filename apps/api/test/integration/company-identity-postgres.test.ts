@@ -148,6 +148,9 @@ describe('Phase 1 PostgreSQL invariants', () => {
       }),
     ).resolves.toEqual({ kind: 'invalid' });
     expect(await prisma.companyManagementSession.count()).toBe(1);
+    await expect(
+      prisma.auditLog.count({ where: { action: 'email_challenge.exchange_failed' } }),
+    ).resolves.toBe(1);
   });
 
   it('routes a verified contact for an authoritative company into pending access', async () => {
@@ -195,10 +198,63 @@ describe('Phase 1 PostgreSQL invariants', () => {
     expect(await prisma.companyManagementSession.count()).toBe(0);
   });
 
-  it('reuses a pending access request and preserves the newest prepared intent', async () => {
+  it('rejects a contact-verification challenge after the contact is revoked', async () => {
+    const company = await createCompany('ACTIVE', 'https://revoked-contact.example/');
+    const repository = new PrismaCompanyIdentityRepository(prisma);
+    const tokenDigest = new Uint8Array(32).fill(18);
+    const claim = await repository.beginCompanyClaim({
+      challenge: {
+        expiresAt: new Date('2026-08-30T13:15:00.000Z'),
+        selector: 'selector-revoked-contact',
+        tokenDigest,
+      },
+      company: {
+        expiresAt: new Date('2026-08-31T13:00:00.000Z'),
+        name: 'Ignored',
+        normalizedName: 'ignored',
+        normalizedWebsite: company.normalizedWebsite,
+        websiteUrl: company.websiteUrl,
+      },
+      contact: { email: 'revoked@gmail.com', normalizedEmail: 'revoked@gmail.com' },
+      intent: {
+        expiresAt: new Date('2026-08-31T13:00:00.000Z'),
+        territoryExternalRef: 'ai-coding',
+      },
+      now: new Date('2026-08-30T13:00:00.000Z'),
+    });
+    await repository.markChallengeDelivery(claim.challenge.id, 'SENT');
+    await prisma.companyContact.update({
+      where: { id: claim.contact.id },
+      data: { revokedAt: new Date('2026-08-30T13:01:00.000Z') },
+    });
+
+    await expect(
+      repository.getContactVerificationAccessScope({
+        candidateDigest: tokenDigest,
+        maxFailedAttempts: 10,
+        now: new Date('2026-08-30T13:05:00.000Z'),
+        selector: 'selector-revoked-contact',
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      repository.consumeContactVerification({
+        accessRequestExpiresAt: new Date('2026-09-06T13:05:00.000Z'),
+        candidateDigest: tokenDigest,
+        csrfDigest: new Uint8Array(32).fill(19),
+        maxFailedAttempts: 10,
+        now: new Date('2026-08-30T13:05:00.000Z'),
+        selector: 'selector-revoked-contact',
+        sessionExpiresAt: new Date('2026-08-30T21:05:00.000Z'),
+        sessionTokenDigest: new Uint8Array(32).fill(20),
+      }),
+    ).resolves.toEqual({ kind: 'invalid' });
+    await expect(prisma.companyAccessRequest.count()).resolves.toBe(0);
+  });
+
+  it('deduplicates concurrent pending access requests and preserves one prepared intent', async () => {
     const company = await createCompany('ACTIVE', 'https://reuse.example/');
     const repository = new PrismaCompanyIdentityRepository(prisma);
-    const createAndExchange = async (selector: string, fill: number) => {
+    const createClaim = async (selector: string, fill: number) => {
       const tokenDigest = new Uint8Array(32).fill(fill);
       const claim = await repository.beginCompanyClaim({
         challenge: {
@@ -223,30 +279,37 @@ describe('Phase 1 PostgreSQL invariants', () => {
       await repository.markChallengeDelivery(claim.challenge.id, 'SENT');
       return {
         claim,
-        exchange: await repository.consumeContactVerification({
-          accessRequestExpiresAt: new Date('2026-09-06T13:05:00.000Z'),
-          candidateDigest: tokenDigest,
-          csrfDigest: new Uint8Array(32).fill(fill + 1),
-          maxFailedAttempts: 10,
-          now: new Date('2026-08-30T13:05:00.000Z'),
-          selector,
-          sessionExpiresAt: new Date('2026-08-30T21:05:00.000Z'),
-          sessionTokenDigest: new Uint8Array(32).fill(fill + 2),
-        }),
+        exchange: () =>
+          repository.consumeContactVerification({
+            accessRequestExpiresAt: new Date('2026-09-06T13:05:00.000Z'),
+            candidateDigest: tokenDigest,
+            csrfDigest: new Uint8Array(32).fill(fill + 1),
+            maxFailedAttempts: 10,
+            now: new Date('2026-08-30T13:05:00.000Z'),
+            selector,
+            sessionExpiresAt: new Date('2026-08-30T21:05:00.000Z'),
+            sessionTokenDigest: new Uint8Array(32).fill(fill + 2),
+          }),
       };
     };
 
-    const first = await createAndExchange('reuse-first', 20);
-    const second = await createAndExchange('reuse-second', 30);
+    const first = await createClaim('reuse-first', 20);
+    const second = await createClaim('reuse-second', 30);
+    const [firstExchange, secondExchange] = await Promise.all([
+      first.exchange(),
+      second.exchange(),
+    ]);
 
-    expect(first.exchange).toMatchObject({ kind: 'access_request' });
-    expect(second.exchange).toMatchObject({ kind: 'access_request' });
+    expect(firstExchange).toMatchObject({ kind: 'access_request' });
+    expect(secondExchange).toMatchObject({ kind: 'access_request' });
     expect(await prisma.companyAccessRequest.count()).toBe(1);
     const pending = await prisma.companyAccessRequest.findFirstOrThrow();
-    expect(pending.takeoverIntentId).toBe(second.claim.intent.id);
-    await expect(
-      prisma.takeoverIntent.findUniqueOrThrow({ where: { id: first.claim.intent.id } }),
-    ).resolves.toMatchObject({ status: 'CANCELLED' });
+    expect([first.claim.intent.id, second.claim.intent.id]).toContain(pending.takeoverIntentId);
+    const intents = await prisma.takeoverIntent.findMany({
+      where: { id: { in: [first.claim.intent.id, second.claim.intent.id] } },
+    });
+    expect(intents.filter(({ status }) => status === 'CANCELLED')).toHaveLength(1);
+    expect(intents.filter(({ status }) => status === 'AWAITING_COMPANY_ACCESS')).toHaveLength(1);
   });
 
   it('allows private drafts but only one authoritative normalized website', async () => {
@@ -438,6 +501,9 @@ describe('Phase 1 PostgreSQL invariants', () => {
     expect(exchange.kind).toBe('management_session');
     expect(await prisma.companyManagementSession.count({ where: { revokedAt: null } })).toBe(1);
     await expect(
+      prisma.auditLog.count({ where: { action: 'company_management_session.revoked' } }),
+    ).resolves.toBe(1);
+    await expect(
       repository.consumeManagementChallenge({
         candidateDigest: linkDigest,
         csrfDigest: new Uint8Array(32).fill(9),
@@ -589,6 +655,18 @@ describe('Phase 1 PostgreSQL invariants', () => {
         territoryExternalRef: 'old-reference',
       },
     });
+    const grant = await prisma.companyManagementGrant.create({
+      data: { companyId: company.id, contactId: contact.id, source: 'INITIAL_CONTACT' },
+    });
+    const session = await prisma.companyManagementSession.create({
+      data: {
+        companyId: company.id,
+        csrfDigest: Buffer.alloc(32, 14),
+        expiresAt: new Date('2026-08-30T21:00:00.000Z'),
+        grantId: grant.id,
+        tokenDigest: Buffer.alloc(32, 15),
+      },
+    });
     const repository = new PrismaCompanyIdentityRepository(prisma);
 
     await expect(
@@ -596,6 +674,7 @@ describe('Phase 1 PostgreSQL invariants', () => {
         companyId: otherCompany.id,
         intentId: intent.id,
         now: new Date('2026-08-30T13:00:00.000Z'),
+        sessionId: session.id,
         territoryExternalRef: 'ai-coding',
       }),
     ).resolves.toBeNull();
@@ -610,6 +689,7 @@ describe('Phase 1 PostgreSQL invariants', () => {
         quotedMinimumAmountMinor: 26_000n,
         quotedTerritoryVersion: 'version-7',
         quotedWinningAmountMinor: 25_000n,
+        sessionId: session.id,
         territoryExternalRef: 'ai-coding',
       }),
     ).resolves.toMatchObject({
@@ -621,6 +701,41 @@ describe('Phase 1 PostgreSQL invariants', () => {
     await expect(
       prisma.auditLog.count({ where: { action: 'takeover_intent.preparation_updated' } }),
     ).resolves.toBe(1);
+    await expect(
+      prisma.auditLog.findFirstOrThrow({
+        where: { action: 'takeover_intent.preparation_updated' },
+      }),
+    ).resolves.toMatchObject({ actorId: session.id, actorType: 'MANAGEMENT_SESSION' });
+    await prisma.companyManagementGrant.update({
+      where: { id: grant.id },
+      data: { revokedAt: new Date('2026-08-30T13:01:00.000Z'), status: 'REVOKED' },
+    });
+    await expect(
+      repository.updateTakeoverPreparation({
+        companyId: company.id,
+        intentId: intent.id,
+        now: new Date('2026-08-30T13:02:00.000Z'),
+        sessionId: session.id,
+        territoryExternalRef: 'devtools',
+      }),
+    ).resolves.toBeNull();
+    await prisma.companyManagementGrant.update({
+      where: { id: grant.id },
+      data: { revokedAt: null, status: 'ACTIVE' },
+    });
+    await prisma.companyManagementSession.update({
+      where: { id: session.id },
+      data: { revokedAt: new Date('2026-08-30T13:03:00.000Z') },
+    });
+    await expect(
+      repository.updateTakeoverPreparation({
+        companyId: company.id,
+        intentId: intent.id,
+        now: new Date('2026-08-30T13:04:00.000Z'),
+        sessionId: session.id,
+        territoryExternalRef: 'devtools',
+      }),
+    ).resolves.toBeNull();
   });
 
   it('rejects persisted minor units outside the shared safe-integer boundary', () => {

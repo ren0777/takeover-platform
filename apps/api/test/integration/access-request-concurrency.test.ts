@@ -29,11 +29,15 @@ async function createAccessFixture() {
     },
   });
   const [requester, firstManager, secondManager, wrongCompanyManager] = await Promise.all(
-    ['requester@gmail.com', 'manager-one@gmail.com', 'manager-two@gmail.com', 'outsider@gmail.com'].map(
-      (email) =>
-        prisma.companyContact.create({
-          data: { email, emailVerifiedAt: new Date(), normalizedEmail: email },
-        }),
+    [
+      'requester@gmail.com',
+      'manager-one@gmail.com',
+      'manager-two@gmail.com',
+      'outsider@gmail.com',
+    ].map((email) =>
+      prisma.companyContact.create({
+        data: { email, emailVerifiedAt: new Date(), normalizedEmail: email },
+      }),
     ),
   );
   if (
@@ -69,6 +73,19 @@ async function createAccessFixture() {
       },
     }),
   ]);
+  const [firstSession, secondSession, wrongSession] = await Promise.all(
+    [firstGrant, secondGrant, wrongGrant].map((grant, index) =>
+      prisma.companyManagementSession.create({
+        data: {
+          companyId: grant.companyId,
+          csrfDigest: Buffer.alloc(32, index + 1),
+          expiresAt: new Date('2026-08-30T21:00:00.000Z'),
+          grantId: grant.id,
+          tokenDigest: Buffer.alloc(32, index + 4),
+        },
+      }),
+    ),
+  );
   const intent = await prisma.takeoverIntent.create({
     data: {
       companyId: company.id,
@@ -86,10 +103,62 @@ async function createAccessFixture() {
       takeoverIntentId: intent.id,
     },
   });
-  return { accessRequest, company, firstGrant, intent, requester, secondGrant, wrongGrant };
+  if (firstSession === undefined || secondSession === undefined || wrongSession === undefined) {
+    throw new Error('Expected all management sessions');
+  }
+  return {
+    accessRequest,
+    company,
+    firstGrant,
+    firstSession,
+    intent,
+    requester,
+    secondGrant,
+    secondSession,
+    wrongGrant,
+    wrongSession,
+  };
 }
 
 describe('access request decision concurrency', () => {
+  it('rejects a session revoked after service-level resolution', async () => {
+    const fixture = await createAccessFixture();
+    const repository = new PrismaCompanyIdentityRepository(prisma);
+    await prisma.companyManagementSession.update({
+      where: { id: fixture.firstSession.id },
+      data: { revokedAt: new Date('2026-08-30T12:59:00.000Z') },
+    });
+
+    await expect(
+      repository.decideAccessRequest({
+        accessRequestId: fixture.accessRequest.id,
+        decidedByGrantId: fixture.firstGrant.id,
+        decision: 'rejected',
+        now: new Date('2026-08-30T13:00:00.000Z'),
+        sessionId: fixture.firstSession.id,
+      }),
+    ).rejects.toThrow('company');
+  });
+
+  it('rejects a grant revoked after service-level resolution', async () => {
+    const fixture = await createAccessFixture();
+    const repository = new PrismaCompanyIdentityRepository(prisma);
+    await prisma.companyManagementGrant.update({
+      where: { id: fixture.firstGrant.id },
+      data: { revokedAt: new Date('2026-08-30T12:59:00.000Z'), status: 'REVOKED' },
+    });
+
+    await expect(
+      repository.decideAccessRequest({
+        accessRequestId: fixture.accessRequest.id,
+        decidedByGrantId: fixture.firstGrant.id,
+        decision: 'rejected',
+        now: new Date('2026-08-30T13:00:00.000Z'),
+        sessionId: fixture.firstSession.id,
+      }),
+    ).rejects.toThrow('company');
+  });
+
   it('denies a manager grant belonging to another company', async () => {
     const fixture = await createAccessFixture();
     const repository = new PrismaCompanyIdentityRepository(prisma);
@@ -105,6 +174,7 @@ describe('access request decision concurrency', () => {
           tokenDigest: new Uint8Array(32).fill(1),
         },
         now: new Date('2026-08-30T13:00:00.000Z'),
+        sessionId: fixture.wrongSession.id,
       }),
     ).rejects.toThrow('company');
     await expect(
@@ -128,6 +198,7 @@ describe('access request decision concurrency', () => {
           tokenDigest: new Uint8Array(32).fill(2),
         },
         now,
+        sessionId: fixture.firstSession.id,
       }),
       repository.decideAccessRequest({
         accessRequestId: fixture.accessRequest.id,
@@ -135,6 +206,7 @@ describe('access request decision concurrency', () => {
         decision: 'rejected',
         now,
         reason: 'Not recognized',
+        sessionId: fixture.secondSession.id,
       }),
     ]);
 
@@ -143,7 +215,8 @@ describe('access request decision concurrency', () => {
     expect(
       results.some(
         (result) =>
-          result.status === 'rejected' && result.reason instanceof CompanyAccessDecisionConflictError,
+          result.status === 'rejected' &&
+          result.reason instanceof CompanyAccessDecisionConflictError,
       ),
     ).toBe(true);
     const decided = await prisma.companyAccessRequest.findUniqueOrThrow({
@@ -151,9 +224,9 @@ describe('access request decision concurrency', () => {
     });
     expect(['APPROVED', 'REJECTED']).toContain(decided.status);
     expect(decided.decidedAt).toEqual(now);
-    expect(await prisma.auditLog.count({ where: { action: { startsWith: 'company_access_request.' } } })).toBe(
-      1,
-    );
+    expect(
+      await prisma.auditLog.count({ where: { action: { startsWith: 'company_access_request.' } } }),
+    ).toBe(1);
     if (decided.status === 'APPROVED') {
       expect(
         await prisma.companyManagementGrant.count({

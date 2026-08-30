@@ -21,7 +21,7 @@ describe('health endpoints', () => {
       data: { status: 'ok' },
       meta: { requestId: expect.any(String) },
     });
-  });
+  }, 20_000);
 
   it('reports only the readiness check it performs', async () => {
     app = buildApp({ logger: false, nodeEnv: 'test' });

@@ -97,6 +97,18 @@ export type VerificationExchangeResult =
       verificationLevels: ['CONTACT_VERIFIED'];
     };
 
+export type ContactVerificationAccessScope = {
+  companyId: string;
+  normalizedEmail: string;
+};
+
+export type ContactVerificationAccessScopeInput = {
+  candidateDigest: Uint8Array;
+  maxFailedAttempts: number;
+  now: Date;
+  selector: string;
+};
+
 export type IssueContactVerificationChallengeInput = {
   companyId: string;
   expiresAt: Date;
@@ -152,6 +164,7 @@ export type DecideAccessRequestInput = {
   now: Date;
   reason?: string;
   requestId?: string;
+  sessionId: string;
 };
 
 export type AccessDecisionRecordResult = {
@@ -207,6 +220,7 @@ export type UpdateTakeoverPreparationInput = {
   intentId: string;
   now: Date;
   requestId?: string;
+  sessionId: string;
   quotedMinimumAmountMinor?: bigint;
   quotedOwnerCompanyId?: string;
   quotedTerritoryVersion?: string;
@@ -263,6 +277,9 @@ export interface CompanyIdentityRepository {
   consumeRateLimit(input: RateLimitInput): Promise<{ allowed: boolean; retryAfterSeconds: number }>;
   createManagementSession(input: CreateSessionInput): Promise<SessionRecord>;
   decideAccessRequest(input: DecideAccessRequestInput): Promise<AccessDecisionRecordResult>;
+  getContactVerificationAccessScope(
+    input: ContactVerificationAccessScopeInput,
+  ): Promise<ContactVerificationAccessScope | null>;
   getAccessRequestCompanyId(accessRequestId: string): Promise<string | null>;
   issueContactVerificationChallenge(
     input: IssueContactVerificationChallengeInput,

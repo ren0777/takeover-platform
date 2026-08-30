@@ -33,10 +33,27 @@ describe('company identity normalization', () => {
     'https://10.0.0.4',
     'https://169.254.1.2',
     'https://[::1]',
+    'https://[::ffff:127.0.0.1]',
+    'https://[::ffff:0:127.0.0.1]',
+    'https://[64:ff9b::127.0.0.1]',
+    'https://[::127.0.0.1]',
+    'https://[100::1]',
+    'https://[2001:1::1]',
+    'https://[2001:11::1]',
+    'https://[2001:21::1]',
     'https://example.com/path?claim=true',
     'https://example.com/#claim',
   ])('rejects a non-public or ambiguous website: %s', (website) => {
     expect(() => normalizeCompanyWebsite(website)).toThrow();
+  });
+
+  it('accepts a global-unicast IPv6 website literal', () => {
+    expect(normalizeCompanyWebsite('https://[2606:4700:4700::1111]/')).toBe(
+      'https://[2606:4700:4700::1111]/',
+    );
+    expect(normalizeCompanyWebsite('https://[2001:4860:4860::8888]/')).toBe(
+      'https://[2001:4860:4860::8888]/',
+    );
   });
 
   it('allows a personal contact email and preserves its local part', () => {

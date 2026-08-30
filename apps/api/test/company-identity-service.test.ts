@@ -71,6 +71,11 @@ function createHarness(
     consumeRateLimit: vi.fn(async () => ({ allowed: true, retryAfterSeconds: 0 })),
     decideAccessRequest: vi.fn(),
     getAccessRequestCompanyId: vi.fn(async () => null),
+    getContactVerificationAccessScope: vi.fn(async () =>
+      options.exchange?.kind === 'access_request'
+        ? { companyId: company.id, normalizedEmail: 'founder@gmail.com' }
+        : null,
+    ),
     issueContactVerificationChallenge: vi.fn(async () => null),
     issueManagementChallenge: vi.fn(async () => null),
     listActiveManagerContacts: vi.fn(async () => []),
@@ -258,6 +263,11 @@ describe('contact verification exchange service', () => {
       checkoutAvailable: false,
       nextAction: 'await_company_access',
     });
+    const appliedLimits = vi
+      .mocked(repository.consumeRateLimit)
+      .mock.calls.map(([input]) => input.limit);
+    expect(appliedLimits).toContain(3);
+    expect(appliedLimits.filter((limit) => limit === 10)).toHaveLength(2);
     expect(emailProvider.sendAccessRequestNotification).toHaveBeenCalledWith(
       expect.objectContaining({
         rawReviewToken: expect.any(String),
@@ -265,6 +275,37 @@ describe('contact verification exchange service', () => {
         toEmail: 'manager@gmail.com',
       }),
     );
+  });
+
+  it('enforces existing-company access limits before consuming the verification challenge', async () => {
+    const exchange: VerificationExchangeResult = {
+      accessRequest: {
+        expiresAt: new Date('2026-09-06T13:00:00.000Z'),
+        id: '77777777-7777-4777-8777-777777777777',
+        requestedAt: now,
+        status: 'PENDING',
+      },
+      company: { ...company, status: 'ACTIVE' },
+      intent: { ...intent, status: 'AWAITING_COMPANY_ACCESS' },
+      kind: 'access_request',
+      requesterEmail: 'founder@gmail.com',
+    };
+    const { repository, service } = createHarness({ exchange });
+    vi.mocked(repository.consumeRateLimit).mockImplementation(async (input) => ({
+      allowed: input.limit !== 3,
+      retryAfterSeconds: input.limit === 3 ? 86_400 : 0,
+    }));
+    const issued = createOpaqueTokenService(
+      parseApiConfig({ NODE_ENV: 'test' }).identity.tokenHmacSecret,
+    ).issueLinkToken();
+
+    await expect(
+      service.exchangeEmailVerification(
+        { token: issued.rawToken },
+        { ipAddress: '203.0.113.20', requestId: 'exchange-rate-limited' },
+      ),
+    ).rejects.toMatchObject({ code: 'RATE_LIMITED', retryAfterSeconds: 86_400 });
+    expect(repository.consumeContactVerification).not.toHaveBeenCalled();
   });
 
   it.each(['malformed', 'selector.secret'])(

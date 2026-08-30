@@ -28,14 +28,17 @@ function isReservedIp(hostname: string): boolean {
   const version = isIP(bareHostname);
   if (version === 4) return isReservedIpv4(bareHostname);
   if (version !== 6) return false;
-  return (
-    bareHostname === '::' ||
-    bareHostname === '::1' ||
-    bareHostname.startsWith('fc') ||
-    bareHostname.startsWith('fd') ||
-    /^fe[89ab]/.test(bareHostname) ||
-    bareHostname.startsWith('2001:db8:')
+  const leadingHextet = bareHostname.split(':')[0];
+  const firstHextet = Number.parseInt(
+    leadingHextet === undefined || leadingHextet === '' ? '0' : leadingHextet,
+    16,
   );
+  if (firstHextet < 0x2000 || firstHextet > 0x3fff) return true;
+  const secondHextet = Number.parseInt(bareHostname.split(':')[1] ?? '0', 16);
+  if (firstHextet === 0x2001 && (secondHextet <= 0x003f || secondHextet === 0x0db8)) {
+    return true;
+  }
+  return bareHostname.startsWith('2002:') || bareHostname.startsWith('3fff:');
 }
 
 export function normalizeCompanyWebsite(input: string): string {

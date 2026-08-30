@@ -230,6 +230,7 @@ export function createCompanyIdentityService(dependencies: CompanyIdentityServic
       now,
       ...(request.reason === undefined ? {} : { reason: request.reason }),
       requestId: context.requestId,
+      sessionId: authority.sessionId,
     });
     try {
       await dependencies.emailProvider.sendAccessDecisionNotification({
@@ -359,6 +360,26 @@ export function createCompanyIdentityService(dependencies: CompanyIdentityServic
         3_600,
         now,
       );
+      const accessScope = await dependencies.repository.getContactVerificationAccessScope({
+        candidateDigest: dependencies.tokens.digestLinkSecret(parsed.selector, parsed.secret),
+        maxFailedAttempts: dependencies.config.rateLimits.tokenExchangeFailuresPerSelector,
+        now,
+        selector: parsed.selector,
+      });
+      if (accessScope !== null) {
+        await enforceRateLimit(
+          `access-request-contact-company:${accessScope.companyId}:${accessScope.normalizedEmail}`,
+          dependencies.config.rateLimits.accessRequestsPerContactCompanyPerDay,
+          86_400,
+          now,
+        );
+        await enforceRateLimit(
+          `access-request-ip:${context.ipAddress}`,
+          dependencies.config.rateLimits.accessRequestsPerIpPerHour,
+          3_600,
+          now,
+        );
+      }
 
       const session = dependencies.tokens.issueSessionToken();
       const csrf = dependencies.tokens.issueSessionToken();
@@ -764,6 +785,7 @@ export function createCompanyIdentityService(dependencies: CompanyIdentityServic
         intentId,
         now,
         requestId: context.requestId,
+        sessionId: authority.sessionId,
         ...(request.quoteSnapshot?.minimumTakeoverAmount === undefined
           ? {}
           : {

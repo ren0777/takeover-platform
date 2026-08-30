@@ -15,9 +15,7 @@ export function managementSessionCookieOptions(
   };
 }
 
-export function managementCsrfCookieOptions(
-  nodeEnv: ApiConfig['nodeEnv'],
-): CookieSerializeOptions {
+export function managementCsrfCookieOptions(nodeEnv: ApiConfig['nodeEnv']): CookieSerializeOptions {
   return {
     httpOnly: false,
     path: '/api',

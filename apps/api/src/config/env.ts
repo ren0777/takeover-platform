@@ -132,8 +132,7 @@ export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
   if (tokenHmacSecret === null) throw new Error('Invalid API configuration: TOKEN_HMAC_SECRET');
 
   const rateLimits = Object.freeze({
-    accessRequestsPerContactCompanyPerDay:
-      result.data.ACCESS_REQUESTS_PER_CONTACT_COMPANY_PER_DAY,
+    accessRequestsPerContactCompanyPerDay: result.data.ACCESS_REQUESTS_PER_CONTACT_COMPANY_PER_DAY,
     accessRequestsPerIpPerHour: result.data.ACCESS_REQUESTS_PER_IP_PER_HOUR,
     linkIssuancePerEmailPerHour: result.data.LINK_ISSUANCE_PER_EMAIL_PER_HOUR,
     linkIssuancePerIpPerHour: result.data.LINK_ISSUANCE_PER_IP_PER_HOUR,

@@ -4,6 +4,7 @@ import { ZodError } from 'zod';
 import type { ApiConfig } from './config/env.js';
 import {
   createCompanyIdentityService,
+  IdentityRateLimitError,
   type CompanyIdentityService,
 } from './modules/company-identity/service.js';
 import { PrismaCompanyIdentityRepository } from './modules/company-identity/prisma-repository.js';
@@ -83,7 +84,9 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       error !== null &&
       'code' in error &&
       typeof error.code === 'string' &&
-      Object.values(ERROR_CODES).includes(error.code as (typeof ERROR_CODES)[keyof typeof ERROR_CODES])
+      Object.values(ERROR_CODES).includes(
+        error.code as (typeof ERROR_CODES)[keyof typeof ERROR_CODES],
+      )
         ? error.code
         : undefined;
     const code =
@@ -103,8 +106,14 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
             ? 'Internal server error'
             : normalizedError.message,
         requestId: request.id,
+        ...(normalizedError instanceof IdentityRateLimitError
+          ? { details: { retryAfterSeconds: normalizedError.retryAfterSeconds } }
+          : {}),
       },
     };
+    if (normalizedError instanceof IdentityRateLimitError) {
+      reply.header('retry-after', String(normalizedError.retryAfterSeconds));
+    }
     return reply.status(statusCode).send(body);
   });
 

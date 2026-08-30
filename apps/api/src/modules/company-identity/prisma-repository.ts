@@ -6,6 +6,8 @@ import type {
   BeginClaimRecordResult,
   ChallengeRecord,
   CompanyRecord,
+  ContactVerificationAccessScope,
+  ContactVerificationAccessScopeInput,
   ConsumeChallengeInput,
   ConsumeManagementChallengeInput,
   CreateSessionInput,
@@ -161,6 +163,37 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         kind: authoritativeCompany === null ? 'new_company' : 'existing_company',
       };
     });
+  }
+
+  async getContactVerificationAccessScope(
+    input: ContactVerificationAccessScopeInput,
+  ): Promise<ContactVerificationAccessScope | null> {
+    const challenge = await this.prisma.emailVerificationChallenge.findUnique({
+      where: { selector: input.selector },
+      include: { company: true, contact: true },
+    });
+    const digestMatches =
+      challenge !== null &&
+      challenge.tokenDigest.byteLength === input.candidateDigest.byteLength &&
+      timingSafeEqual(challenge.tokenDigest, input.candidateDigest);
+    if (
+      challenge === null ||
+      !digestMatches ||
+      challenge.company.status === 'DRAFT' ||
+      challenge.contact.revokedAt !== null ||
+      challenge.purpose !== 'CONTACT_VERIFICATION' ||
+      challenge.deliveryStatus !== 'SENT' ||
+      challenge.consumedAt !== null ||
+      challenge.revokedAt !== null ||
+      challenge.failedAttempts >= input.maxFailedAttempts ||
+      challenge.expiresAt <= input.now
+    ) {
+      return null;
+    }
+    return {
+      companyId: challenge.companyId,
+      normalizedEmail: challenge.contact.normalizedEmail,
+    };
   }
 
   async markChallengeDelivery(challengeId: string, status: 'SENT' | 'FAILED'): Promise<void> {
@@ -328,6 +361,16 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
             data: { failedAttempts: { increment: 1 } },
           });
         }
+        if (challenge !== null) {
+          await this.writeAudit(transaction, {
+            action: 'email_challenge.exchange_failed',
+            actorType: 'SYSTEM',
+            companyId: challenge.companyId,
+            ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+            targetId: challenge.id,
+            targetType: 'email_verification_challenge',
+          });
+        }
         return { kind: 'invalid' };
       }
       const grant = await transaction.companyManagementGrant.findUnique({
@@ -339,6 +382,14 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         },
       });
       if (grant === null || grant.status !== 'ACTIVE' || grant.revokedAt !== null) {
+        await this.writeAudit(transaction, {
+          action: 'email_challenge.exchange_failed',
+          actorType: 'SYSTEM',
+          companyId: challenge.companyId,
+          ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+          targetId: challenge.id,
+          targetType: 'email_verification_challenge',
+        });
         return { kind: 'invalid' };
       }
       const consumed = await transaction.emailVerificationChallenge.updateMany({
@@ -347,10 +398,25 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
       });
       if (consumed.count !== 1) return { kind: 'invalid' };
 
+      const replacedSessions = await transaction.companyManagementSession.findMany({
+        where: { grantId: grant.id, revokedAt: null },
+        select: { id: true },
+      });
       await transaction.companyManagementSession.updateMany({
         where: { grantId: grant.id, revokedAt: null },
         data: { revokedAt: input.now },
       });
+      for (const replacedSession of replacedSessions) {
+        await this.writeAudit(transaction, {
+          action: 'company_management_session.revoked',
+          actorId: grant.id,
+          actorType: 'MANAGEMENT_GRANT',
+          companyId: challenge.companyId,
+          ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+          targetId: replacedSession.id,
+          targetType: 'company_management_session',
+        });
+      }
       const session = await transaction.companyManagementSession.create({
         data: {
           companyId: challenge.companyId,
@@ -414,6 +480,7 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         challenge !== null &&
         digestMatches &&
         challenge.purpose === 'CONTACT_VERIFICATION' &&
+        challenge.contact.revokedAt === null &&
         challenge.deliveryStatus === 'SENT' &&
         challenge.consumedAt === null &&
         challenge.revokedAt === null &&
@@ -428,6 +495,16 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
           await transaction.emailVerificationChallenge.update({
             where: { id: challenge.id },
             data: { failedAttempts: { increment: 1 } },
+          });
+        }
+        if (challenge !== null) {
+          await this.writeAudit(transaction, {
+            action: 'email_challenge.exchange_failed',
+            actorType: 'SYSTEM',
+            companyId: challenge.companyId,
+            ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+            targetId: challenge.id,
+            targetType: 'email_verification_challenge',
           });
         }
         return { kind: 'invalid' };
@@ -524,6 +601,12 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
           verificationLevels: ['CONTACT_VERIFIED'],
         };
       }
+
+      await transaction.$queryRaw<Array<{ locked: string }>>(Prisma.sql`
+        SELECT pg_advisory_xact_lock(
+          hashtextextended(${`${challenge.companyId}:${challenge.contactId}`}, 0)
+        )::text AS "locked"
+      `);
 
       const existingAccessRequest = await transaction.companyAccessRequest.findFirst({
         where: {
@@ -654,6 +737,16 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         WHERE "id" = ${input.accessRequestId}::uuid
         FOR UPDATE
       `);
+      await transaction.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "company_management_sessions"
+        WHERE "id" = ${input.sessionId}::uuid
+        FOR UPDATE
+      `);
+      await transaction.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "company_management_grants"
+        WHERE "id" = ${input.decidedByGrantId}::uuid
+        FOR UPDATE
+      `);
       const accessRequest = await transaction.companyAccessRequest.findUnique({
         where: { id: input.accessRequestId },
         include: { company: true, contact: true, takeoverIntent: true },
@@ -665,17 +758,22 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
       ) {
         throw new CompanyAccessDecisionConflictError();
       }
-      const decidingGrant = await transaction.companyManagementGrant.findUnique({
-        where: { id: input.decidedByGrantId },
+      const decidingSession = await transaction.companyManagementSession.findUnique({
+        where: { id: input.sessionId },
+        include: { grant: true },
       });
       if (
-        decidingGrant === null ||
-        decidingGrant.companyId !== accessRequest.companyId ||
-        decidingGrant.status !== 'ACTIVE' ||
-        decidingGrant.revokedAt !== null
+        decidingSession === null ||
+        decidingSession.revokedAt !== null ||
+        decidingSession.expiresAt <= input.now ||
+        decidingSession.companyId !== accessRequest.companyId ||
+        decidingSession.grantId !== input.decidedByGrantId ||
+        decidingSession.grant.status !== 'ACTIVE' ||
+        decidingSession.grant.revokedAt !== null
       ) {
         throw new CompanyAccessDecisionAuthorizationError();
       }
+      const decidingGrant = decidingSession.grant;
 
       let challengeId: string | undefined;
       if (input.decision === 'approved') {
@@ -943,6 +1041,33 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
     input: UpdateTakeoverPreparationInput,
   ): Promise<TakeoverIntentPreparationRecord | null> {
     return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "company_management_sessions"
+        WHERE "id" = ${input.sessionId}::uuid
+        FOR UPDATE
+      `);
+      const session = await transaction.companyManagementSession.findUnique({
+        where: { id: input.sessionId },
+      });
+      if (session === null) return null;
+      await transaction.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "company_management_grants"
+        WHERE "id" = ${session.grantId}::uuid
+        FOR UPDATE
+      `);
+      const grant = await transaction.companyManagementGrant.findUnique({
+        where: { id: session.grantId },
+      });
+      if (
+        session.revokedAt !== null ||
+        session.expiresAt <= input.now ||
+        session.companyId !== input.companyId ||
+        grant === null ||
+        grant.status !== 'ACTIVE' ||
+        grant.revokedAt !== null
+      ) {
+        return null;
+      }
       const intent = await transaction.takeoverIntent.findFirst({
         where: {
           companyId: input.companyId,
@@ -968,6 +1093,7 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
       await this.writeAudit(transaction, {
         action: 'takeover_intent.preparation_updated',
         actorType: 'MANAGEMENT_SESSION',
+        actorId: input.sessionId,
         companyId: input.companyId,
         ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
         targetId: intent.id,

@@ -81,9 +81,7 @@ describe('trusted mutation origin', () => {
     expect(() =>
       assertTrustedMutationOrigin('https://takeover.com', 'https://takeover.com'),
     ).not.toThrow();
-    expect(() => assertTrustedMutationOrigin(undefined, 'https://takeover.com')).toThrow(
-      'origin',
-    );
+    expect(() => assertTrustedMutationOrigin(undefined, 'https://takeover.com')).toThrow('origin');
     expect(() =>
       assertTrustedMutationOrigin('https://evil.example', 'https://takeover.com'),
     ).toThrow('origin');

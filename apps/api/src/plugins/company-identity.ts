@@ -1,5 +1,8 @@
 import type { FastifyInstance } from 'fastify';
-import { companyIdentityRoutes, type CompanyIdentityRoutesOptions } from '../modules/company-identity/routes.js';
+import {
+  companyIdentityRoutes,
+  type CompanyIdentityRoutesOptions,
+} from '../modules/company-identity/routes.js';
 import { cookiesPlugin } from './cookies.js';
 
 export async function companyIdentityPlugin(

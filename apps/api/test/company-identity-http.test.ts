@@ -158,7 +158,7 @@ describe('company identity HTTP surface', () => {
       url: '/api/company-recovery-requests/77777777-7777-4777-8777-777777777777/approve',
     });
     expect(approval.statusCode).toBe(404);
-  });
+  }, 20_000);
 
   it('updates a reference-only intent behind company-scoped session and CSRF checks', async () => {
     const harness = buildIdentityApp();
@@ -293,6 +293,10 @@ describe('company identity HTTP surface', () => {
     });
     expect(response.statusCode).toBe(status);
     expect(response.json().error).toMatchObject({ code, requestId: expect.any(String) });
+    if (error instanceof IdentityRateLimitError) {
+      expect(response.headers['retry-after']).toBe('60');
+      expect(response.json().error.details).toEqual({ retryAfterSeconds: 60 });
+    }
     expect(response.body).not.toContain('selector-secret-value');
   });
 

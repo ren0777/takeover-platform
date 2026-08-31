@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { type CompanyClaimResult } from '@takeover/shared';
 import { Notice } from '@/components/ui/notice';
 import { Button } from '@/components/ui/button';

@@ -1,14 +1,26 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useState } from 'react';
-import { type AccessDecisionResult, type ManagementContext } from '@takeover/shared';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  type AccessDecisionResult,
+  type CompanyAccessReviewItem,
+  type ManagementContext,
+} from '@takeover/shared';
 import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
+import { LoadingRegion, LoadingSkeleton } from '@/components/ui/loading-skeleton';
 import { Notice } from '@/components/ui/notice';
 import { ApiRequestError } from '@/lib/api/client';
-import { approveAccessRequest, rejectAccessRequest } from '@/lib/api/identity';
+import {
+  approveAccessRequest,
+  exchangeManagementLink,
+  listPendingAccessRequests,
+  rejectAccessRequest,
+} from '@/lib/api/identity';
+import { formatAbsoluteDateTime } from '@/lib/format/datetime';
 import { describeIdentityError } from '@/lib/identity/error-copy';
-import { exchangeManagementLink } from '@/lib/api/identity';
 import { useFragmentExchange } from '@/lib/identity/use-fragment-exchange';
 
 type DecisionState =
@@ -18,26 +30,26 @@ type DecisionState =
   | { status: 'failed'; code: string; requestId: string | undefined };
 
 /**
- * Explicit approve/reject controls.
+ * Explicit approve/reject controls for one pending request.
  *
- * Reaching this screen only established a session — no security state changed on
- * GET. A decision happens solely through this submit, which is what keeps email
- * prefetchers and link scanners from granting access.
+ * Reaching this screen only established a session — no security state changed
+ * on GET. A decision happens solely through these buttons, which is what keeps
+ * email prefetchers and link scanners from granting access.
  */
-function DecisionForm({ accessRequestId }: { accessRequestId: string }) {
+function RequestDecision({ request }: { request: CompanyAccessReviewItem }) {
   const [state, setState] = useState<DecisionState>({ status: 'idle' });
   const [reason, setReason] = useState('');
 
   async function decide(decision: 'approve' | 'reject') {
-    const reasonValue = reason.trim();
-    const input = reasonValue.length > 0 ? { reason: reasonValue } : {};
+    const trimmed = reason.trim();
+    const input = trimmed.length > 0 ? { reason: trimmed } : {};
 
     setState({ status: 'submitting', decision });
     try {
       const result =
         decision === 'approve'
-          ? await approveAccessRequest(accessRequestId, input)
-          : await rejectAccessRequest(accessRequestId, input);
+          ? await approveAccessRequest(request.id, input)
+          : await rejectAccessRequest(request.id, input);
       setState({ status: 'decided', result });
     } catch (error: unknown) {
       if (error instanceof ApiRequestError) {
@@ -48,71 +60,164 @@ function DecisionForm({ accessRequestId }: { accessRequestId: string }) {
     }
   }
 
-  if (state.status === 'decided') {
-    return (
-      <Notice variant="info" title={`Request ${state.result.accessRequest.status}`}>
-        <p>The requester has been notified. Checkout remains unavailable.</p>
-      </Notice>
-    );
-  }
-
+  const reasonId = `reason-${request.id}`;
   const busy = state.status === 'submitting';
 
   return (
-    <div className="space-y-4">
-      <div className="space-y-3">
-        <label htmlFor="reason" className="block text-sm font-medium">
-          Reason <span className="text-[var(--color-muted)]">(optional)</span>
-        </label>
-        <textarea
-          id="reason"
-          name="reason"
-          rows={2}
-          maxLength={500}
-          value={reason}
-          onChange={(event) => setReason(event.target.value)}
-          disabled={busy}
-          className="w-full rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-background)] p-3 text-sm disabled:opacity-60"
-        />
-
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <Button
-            variant="affirmative"
-            busy={busy && state.decision === 'approve'}
-            busyLabel="Approving…"
-            disabled={busy}
-            onClick={() => void decide('approve')}
-            fullWidth
-          >
-            Approve access
-          </Button>
-          <Button
-            variant="destructive"
-            busy={busy && state.decision === 'reject'}
-            busyLabel="Rejecting…"
-            disabled={busy}
-            onClick={() => void decide('reject')}
-            fullWidth
-          >
-            Reject
-          </Button>
+    <li className="rounded-[var(--radius-tile)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+      <dl className="space-y-1 text-sm">
+        <div className="flex flex-wrap justify-between gap-2">
+          <dt className="text-[var(--color-muted)]">Requested by</dt>
+          <dd className="font-medium break-all">{request.requesterEmail}</dd>
         </div>
-      </div>
+        <div className="flex flex-wrap justify-between gap-2">
+          <dt className="text-[var(--color-muted)]">Requested</dt>
+          <dd className="font-[family-name:var(--font-mono)] text-xs">
+            {formatAbsoluteDateTime(request.requestedAt)}
+          </dd>
+        </div>
+        <div className="flex flex-wrap justify-between gap-2">
+          <dt className="text-[var(--color-muted)]">Expires</dt>
+          <dd className="font-[family-name:var(--font-mono)] text-xs">
+            {formatAbsoluteDateTime(request.expiresAt)}
+          </dd>
+        </div>
+        {request.intent !== undefined && (
+          <div className="flex flex-wrap justify-between gap-2">
+            <dt className="text-[var(--color-muted)]">Territory reference</dt>
+            <dd className="font-[family-name:var(--font-mono)] text-xs break-all">
+              {request.intent.territoryExternalRef}
+            </dd>
+          </div>
+        )}
+      </dl>
 
-      {state.status === 'failed' && (
-        <Notice
-          variant="error"
-          title={describeIdentityError(state.code).title}
-          {...(state.requestId === undefined ? {} : { requestId: state.requestId })}
-        >
-          <p>{describeIdentityError(state.code).message}</p>
-        </Notice>
+      {state.status === 'decided' ? (
+        <div className="mt-4">
+          <Notice variant="info" title={`Request ${state.result.accessRequest.status}`}>
+            <p>The requester has been notified. Checkout remains unavailable.</p>
+          </Notice>
+        </div>
+      ) : (
+        <div className="mt-4 space-y-3">
+          <label htmlFor={reasonId} className="block text-sm font-medium">
+            Reason <span className="text-[var(--color-muted)]">(optional)</span>
+          </label>
+          <textarea
+            id={reasonId}
+            rows={2}
+            maxLength={500}
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            disabled={busy}
+            className="w-full rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-background)] p-3 text-base disabled:opacity-60 sm:text-sm"
+          />
+
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Button
+              variant="affirmative"
+              fullWidth
+              disabled={busy}
+              busy={busy && state.decision === 'approve'}
+              busyLabel="Approving…"
+              onClick={() => void decide('approve')}
+            >
+              Approve access
+            </Button>
+            <Button
+              variant="destructive"
+              fullWidth
+              disabled={busy}
+              busy={busy && state.decision === 'reject'}
+              busyLabel="Rejecting…"
+              onClick={() => void decide('reject')}
+            >
+              Reject
+            </Button>
+          </div>
+
+          {state.status === 'failed' && (
+            <ErrorState
+              title={describeIdentityError(state.code).title}
+              description={<p>{describeIdentityError(state.code).message}</p>}
+              {...(state.requestId === undefined ? {} : { requestId: state.requestId })}
+            />
+          )}
+        </div>
       )}
-    </div>
+    </li>
   );
 }
 
-export function AccessReview({ accessRequestId }: { accessRequestId: string | null }) {
+type ListState =
+  | { status: 'loading' }
+  | { status: 'ready'; items: CompanyAccessReviewItem[] }
+  | { status: 'failed'; code: string; requestId: string | undefined };
+
+function PendingRequests() {
+  const [state, setState] = useState<ListState>({ status: 'loading' });
+
+  useEffect(() => {
+    let active = true;
+
+    void listPendingAccessRequests()
+      .then((page) => {
+        if (active) setState({ status: 'ready', items: page.items });
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        if (error instanceof ApiRequestError) {
+          setState({ status: 'failed', code: error.code, requestId: error.requestId });
+          return;
+        }
+        setState({ status: 'failed', code: 'INTERNAL_ERROR', requestId: undefined });
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  if (state.status === 'loading') {
+    return (
+      <LoadingRegion label="Loading pending requests…">
+        <div className="mt-4">
+          <LoadingSkeleton className="h-24 w-full" />
+        </div>
+      </LoadingRegion>
+    );
+  }
+
+  if (state.status === 'failed') {
+    const copy = describeIdentityError(state.code);
+    return (
+      <ErrorState
+        title={copy.title}
+        description={<p>{copy.message} No decision was recorded.</p>}
+        {...(state.requestId === undefined ? {} : { requestId: state.requestId })}
+      />
+    );
+  }
+
+  if (state.items.length === 0) {
+    return (
+      <EmptyState
+        title="No pending requests"
+        description={<p>Nobody is currently waiting for access to this company.</p>}
+      />
+    );
+  }
+
+  return (
+    <ul className="space-y-4">
+      {state.items.map((request) => (
+        <RequestDecision key={request.id} request={request} />
+      ))}
+    </ul>
+  );
+}
+
+export function AccessReview() {
   const exchange = useCallback(
     (token: string): Promise<ManagementContext> => exchangeManagementLink(token),
     [],
@@ -120,7 +225,7 @@ export function AccessReview({ accessRequestId }: { accessRequestId: string | nu
   const state = useFragmentExchange(exchange);
 
   if (state.status === 'reading' || state.status === 'exchanging') {
-    return <Notice variant="info" title="Opening your manager session…" />;
+    return <LoadingRegion label="Opening your manager session…" />;
   }
 
   if (state.status === 'no-token') {
@@ -134,14 +239,11 @@ export function AccessReview({ accessRequestId }: { accessRequestId: string | nu
   if (state.status === 'failed') {
     const copy = describeIdentityError(state.code);
     return (
-      <Notice
-        variant="error"
+      <ErrorState
         title={copy.title}
+        description={<p>{copy.message} No decision was recorded.</p>}
         {...(state.requestId === undefined ? {} : { requestId: state.requestId })}
-      >
-        <p>{copy.message}</p>
-        <p className="mt-2">No decision was recorded.</p>
-      </Notice>
+      />
     );
   }
 
@@ -149,27 +251,24 @@ export function AccessReview({ accessRequestId }: { accessRequestId: string | nu
     <div className="space-y-6">
       <Notice variant="info" title={`Reviewing access to ${state.result.company.name}`}>
         <p>
-          Someone with a verified email asked to manage this company. Approving grants them
-          management authority; it does not transfer ownership or move money.
+          Approving grants management authority for this company. It does not transfer ownership or
+          move money.
         </p>
       </Notice>
 
-      {accessRequestId === null ? (
-        <Notice variant="warning" title="The request cannot be identified yet">
-          <p>
-            Your manager session is open, but this link does not carry the access request
-            identifier, and there is no endpoint to list pending requests. The decision cannot be
-            made from here yet.
-          </p>
-          <p className="mt-2">
-            This is a known gap recorded for the backend team. Nothing was approved or rejected.
-          </p>
-        </Notice>
-      ) : (
-        <DecisionForm accessRequestId={accessRequestId} />
-      )}
+      <section aria-labelledby="pending-heading">
+        <h2
+          id="pending-heading"
+          className="font-[family-name:var(--font-display)] text-lg font-bold"
+        >
+          Pending requests
+        </h2>
+        <div className="mt-3">
+          <PendingRequests />
+        </div>
+      </section>
 
-      <Link href="/manage/company" className="text-sm underline">
+      <Link href="/manage/company" className="inline-block text-sm underline">
         Go to company management
       </Link>
     </div>

@@ -1,5 +1,6 @@
 import {
   accessDecisionResultSchema,
+  companyAccessReviewPageSchema,
   acceptedDeliverySchema,
   companyClaimResultSchema,
   emailTokenExchangeResultSchema,
@@ -9,6 +10,8 @@ import {
   type AccessDecisionRequest,
   type AccessDecisionResult,
   type AcceptedDelivery,
+  type CompanyAccessReviewListQuery,
+  type CompanyAccessReviewPage,
   type CompanyClaimRequest,
   type CompanyClaimResult,
   type EmailTokenExchangeResult,
@@ -81,6 +84,25 @@ export function getManagementContext(): Promise<ManagementContext> {
     method: 'GET',
     path: '/api/company-management/context',
     schema: managementContextSchema,
+  });
+}
+
+/**
+ * Pending access requests for the session's company.
+ *
+ * This is how a manager discovers which request to decide on: the review link
+ * carries only a token, so the request id cannot come from the URL.
+ */
+export function listPendingAccessRequests(
+  query: CompanyAccessReviewListQuery = { limit: 50 },
+): Promise<CompanyAccessReviewPage> {
+  const params = new URLSearchParams({ limit: String(query.limit) });
+  if (query.cursor !== undefined) params.set('cursor', query.cursor);
+
+  return apiRequest({
+    method: 'GET',
+    path: `/api/company-management/access-requests?${params.toString()}`,
+    schema: companyAccessReviewPageSchema,
   });
 }
 

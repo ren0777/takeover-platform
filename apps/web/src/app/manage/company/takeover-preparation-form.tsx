@@ -2,8 +2,9 @@
 
 import { useState, type FormEvent } from 'react';
 import { type TakeoverIntent, type TakeoverPreparationRequest } from '@takeover/shared';
-import { Notice } from '@/components/identity/notice';
-import { TextField } from '@/components/identity/text-field';
+import { Notice } from '@/components/ui/notice';
+import { Button } from '@/components/ui/button';
+import { FormField } from '@/components/ui/form-field';
 import { ApiRequestError } from '@/lib/api/client';
 import { updateTakeoverPreparation } from '@/lib/api/identity';
 import { describeIdentityError } from '@/lib/identity/error-copy';
@@ -60,7 +61,7 @@ export function TakeoverPreparationForm({
 
   return (
     <form onSubmit={onSubmit} className="mt-3 max-w-md space-y-4">
-      <TextField
+      <FormField
         id="territoryExternalRef"
         name="territoryExternalRef"
         label="Territory reference"
@@ -68,7 +69,7 @@ export function TakeoverPreparationForm({
         disabled={state.status === 'submitting'}
         hint="Territories are not modelled yet, so this is an opaque reference only."
       />
-      <TextField
+      <FormField
         id="intendedBid"
         name="intendedBid"
         label={`Intended bid (${currency})`}
@@ -76,13 +77,15 @@ export function TakeoverPreparationForm({
         hint="Recorded for reference. It does not reserve a price or create a charge."
       />
 
-      <button
+      <Button
         type="submit"
-        disabled={state.status === 'submitting'}
-        className="min-h-11 w-full rounded-[var(--radius-control)] border border-[var(--color-border)] font-medium disabled:opacity-60"
+        variant="secondary"
+        fullWidth
+        busy={state.status === 'submitting'}
+        busyLabel="Saving…"
       >
-        {state.status === 'submitting' ? 'Saving…' : 'Save preparation'}
-      </button>
+        Save preparation
+      </Button>
 
       {state.status === 'invalid' && (
         <Notice variant="error" title="Check the amount">

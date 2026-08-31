@@ -3,8 +3,9 @@
 import Link from 'next/link';
 import { useCallback } from 'react';
 import { type EmailTokenExchangeResult } from '@takeover/shared';
-import { Notice } from '@/components/identity/notice';
+import { Notice } from '@/components/ui/notice';
 import { exchangeEmailVerification } from '@/lib/api/identity';
+import { formatAbsoluteDateTime } from '@/lib/format/datetime';
 import { describeIdentityError } from '@/lib/identity/error-copy';
 import { useFragmentExchange } from '@/lib/identity/use-fragment-exchange';
 
@@ -74,7 +75,7 @@ export function VerifyExchange() {
             <div>
               <dt className="text-[var(--color-muted)]">Request expires</dt>
               <dd className="font-[family-name:var(--font-mono)]">
-                {new Date(accessRequest.expiresAt).toLocaleString()}
+                {formatAbsoluteDateTime(accessRequest.expiresAt)}
               </dd>
             </div>
           </dl>

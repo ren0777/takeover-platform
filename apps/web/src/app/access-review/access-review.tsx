@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { useCallback, useState } from 'react';
 import { type AccessDecisionResult, type ManagementContext } from '@takeover/shared';
-import { Notice } from '@/components/identity/notice';
+import { Button } from '@/components/ui/button';
+import { Notice } from '@/components/ui/notice';
 import { ApiRequestError } from '@/lib/api/client';
 import { approveAccessRequest, rejectAccessRequest } from '@/lib/api/identity';
 import { describeIdentityError } from '@/lib/identity/error-copy';
@@ -75,22 +76,26 @@ function DecisionForm({ accessRequestId }: { accessRequestId: string }) {
         />
 
         <div className="flex flex-col gap-2 sm:flex-row">
-          <button
-            type="button"
+          <Button
+            variant="affirmative"
+            busy={busy && state.decision === 'approve'}
+            busyLabel="Approving…"
             disabled={busy}
             onClick={() => void decide('approve')}
-            className="min-h-11 flex-1 rounded-[var(--radius-control)] bg-[var(--color-owner)] font-semibold text-[#09090b] disabled:opacity-60"
+            fullWidth
           >
-            {busy && state.decision === 'approve' ? 'Approving…' : 'Approve access'}
-          </button>
-          <button
-            type="button"
+            Approve access
+          </Button>
+          <Button
+            variant="destructive"
+            busy={busy && state.decision === 'reject'}
+            busyLabel="Rejecting…"
             disabled={busy}
             onClick={() => void decide('reject')}
-            className="min-h-11 flex-1 rounded-[var(--radius-control)] border border-[var(--color-destructive)] font-semibold disabled:opacity-60"
+            fullWidth
           >
-            {busy && state.decision === 'reject' ? 'Rejecting…' : 'Reject'}
-          </button>
+            Reject
+          </Button>
         </div>
       </div>
 

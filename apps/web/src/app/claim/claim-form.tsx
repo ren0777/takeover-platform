@@ -2,8 +2,9 @@
 
 import { useState, type FormEvent } from 'react';
 import { type CompanyClaimResult } from '@takeover/shared';
-import { Notice } from '@/components/identity/notice';
-import { TextField } from '@/components/identity/text-field';
+import { Notice } from '@/components/ui/notice';
+import { Button } from '@/components/ui/button';
+import { FormField } from '@/components/ui/form-field';
 import { ApiRequestError } from '@/lib/api/client';
 import { beginCompanyClaim } from '@/lib/api/identity';
 import { describeIdentityError } from '@/lib/identity/error-copy';
@@ -87,7 +88,7 @@ export function ClaimForm({ territoryExternalRef }: { territoryExternalRef: stri
 
   return (
     <form onSubmit={onSubmit} className="max-w-md space-y-4">
-      <TextField
+      <FormField
         id="name"
         name="name"
         label="Company name"
@@ -95,7 +96,7 @@ export function ClaimForm({ territoryExternalRef }: { territoryExternalRef: stri
         disabled={busy}
         autoComplete="organization"
       />
-      <TextField
+      <FormField
         id="websiteUrl"
         name="websiteUrl"
         label="Website"
@@ -105,7 +106,7 @@ export function ClaimForm({ territoryExternalRef }: { territoryExternalRef: stri
         placeholder="https://example.com"
         hint="Must be HTTPS. One company per website."
       />
-      <TextField
+      <FormField
         id="logoUrl"
         name="logoUrl"
         label="Logo URL"
@@ -113,7 +114,7 @@ export function ClaimForm({ territoryExternalRef }: { territoryExternalRef: stri
         disabled={busy}
         placeholder="https://example.com/logo.png"
       />
-      <TextField
+      <FormField
         id="contactEmail"
         name="contactEmail"
         label="Contact email"
@@ -123,7 +124,7 @@ export function ClaimForm({ territoryExternalRef }: { territoryExternalRef: stri
         autoComplete="email"
         hint="Any address works, including a personal one. Management links are sent here."
       />
-      <TextField
+      <FormField
         id="territoryExternalRef"
         name="territoryExternalRef"
         label="Territory reference"
@@ -133,13 +134,9 @@ export function ClaimForm({ territoryExternalRef }: { territoryExternalRef: stri
         hint="Territories are not modelled yet, so this is an opaque reference."
       />
 
-      <button
-        type="submit"
-        disabled={busy}
-        className="min-h-11 w-full rounded-[var(--radius-control)] bg-[var(--color-foreground)] font-semibold text-[#09090b] disabled:opacity-60"
-      >
-        {busy ? 'Submitting…' : 'Claim this company'}
-      </button>
+      <Button type="submit" fullWidth busy={busy} busyLabel="Submitting…">
+        Claim this company
+      </Button>
 
       {state.status === 'failed' && (
         <Notice

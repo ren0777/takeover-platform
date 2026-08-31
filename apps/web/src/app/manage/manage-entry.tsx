@@ -3,8 +3,9 @@
 import Link from 'next/link';
 import { useCallback, useState, type FormEvent } from 'react';
 import { type ManagementContext } from '@takeover/shared';
-import { Notice } from '@/components/identity/notice';
-import { TextField } from '@/components/identity/text-field';
+import { Button } from '@/components/ui/button';
+import { Notice } from '@/components/ui/notice';
+import { FormField } from '@/components/ui/form-field';
 import { ApiRequestError } from '@/lib/api/client';
 import { exchangeManagementLink, requestManagementLink } from '@/lib/api/identity';
 import { describeIdentityError } from '@/lib/identity/error-copy';
@@ -52,7 +53,7 @@ function ManagementLinkForm() {
 
   return (
     <form onSubmit={onSubmit} className="max-w-md space-y-4">
-      <TextField
+      <FormField
         id="companyId"
         name="companyId"
         label="Company ID"
@@ -60,7 +61,7 @@ function ManagementLinkForm() {
         disabled={state.status === 'submitting'}
         hint="Shown on your company management page."
       />
-      <TextField
+      <FormField
         id="contactEmail"
         name="contactEmail"
         label="Contact email"
@@ -70,13 +71,9 @@ function ManagementLinkForm() {
         disabled={state.status === 'submitting'}
       />
 
-      <button
-        type="submit"
-        disabled={state.status === 'submitting'}
-        className="min-h-11 w-full rounded-[var(--radius-control)] bg-[var(--color-foreground)] font-semibold text-[#09090b] disabled:opacity-60"
-      >
-        {state.status === 'submitting' ? 'Sending…' : 'Email me a management link'}
-      </button>
+      <Button type="submit" fullWidth busy={state.status === 'submitting'} busyLabel="Sending…">
+        Email me a management link
+      </Button>
 
       {state.status === 'failed' && (
         <Notice

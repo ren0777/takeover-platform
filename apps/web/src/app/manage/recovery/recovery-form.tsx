@@ -2,10 +2,12 @@
 
 import { useState, type FormEvent } from 'react';
 import { type RecoveryRequestResult } from '@takeover/shared';
-import { Notice } from '@/components/identity/notice';
-import { TextField } from '@/components/identity/text-field';
+import { Notice } from '@/components/ui/notice';
+import { Button } from '@/components/ui/button';
+import { FormField } from '@/components/ui/form-field';
 import { ApiRequestError } from '@/lib/api/client';
 import { requestManualRecovery } from '@/lib/api/identity';
+import { formatAbsoluteDate } from '@/lib/format/datetime';
 import { describeIdentityError } from '@/lib/identity/error-copy';
 
 type RecoveryState =
@@ -46,7 +48,7 @@ export function RecoveryForm() {
         </p>
         <p className="mt-2">
           There is no review process yet, so do not expect a decision from this step. It expires on{' '}
-          {new Date(state.result.expiresAt).toLocaleDateString()}.
+          {formatAbsoluteDate(state.result.expiresAt)}.
         </p>
       </Notice>
     );
@@ -56,7 +58,7 @@ export function RecoveryForm() {
 
   return (
     <form onSubmit={onSubmit} className="max-w-md space-y-4">
-      <TextField
+      <FormField
         id="accessRequestId"
         name="accessRequestId"
         label="Access request ID"
@@ -64,7 +66,7 @@ export function RecoveryForm() {
         disabled={busy}
         hint="Shown when your access request was created."
       />
-      <TextField
+      <FormField
         id="contactEmail"
         name="contactEmail"
         label="Verified contact email"
@@ -74,13 +76,9 @@ export function RecoveryForm() {
         autoComplete="email"
       />
 
-      <button
-        type="submit"
-        disabled={busy}
-        className="min-h-11 w-full rounded-[var(--radius-control)] border border-[var(--color-border)] font-medium disabled:opacity-60"
-      >
-        {busy ? 'Recording…' : 'Record a recovery request'}
-      </button>
+      <Button type="submit" variant="secondary" fullWidth busy={busy} busyLabel="Recording…">
+        Record a recovery request
+      </Button>
 
       {state.status === 'failed' && (
         <Notice

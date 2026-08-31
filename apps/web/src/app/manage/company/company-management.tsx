@@ -3,11 +3,19 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { DEFAULT_CURRENCY, type ManagementContext } from '@takeover/shared';
-import { Notice } from '@/components/identity/notice';
+import { Button } from '@/components/ui/button';
+import { ErrorState } from '@/components/ui/error-state';
+import { Notice } from '@/components/ui/notice';
 import { ApiRequestError } from '@/lib/api/client';
 import { getManagementContext, revokeManagementSession } from '@/lib/api/identity';
+import { formatAbsoluteDateTime } from '@/lib/format/datetime';
 import { describeIdentityError } from '@/lib/identity/error-copy';
 import { TakeoverPreparationForm } from './takeover-preparation-form';
+
+type SignOutState =
+  | { status: 'idle' }
+  | { status: 'revoking' }
+  | { status: 'failed'; code: string; requestId: string | undefined };
 
 type ContextState =
   | { status: 'loading' }
@@ -16,7 +24,7 @@ type ContextState =
 
 export function CompanyManagement({ intentId }: { intentId: string | null }) {
   const [state, setState] = useState<ContextState>({ status: 'loading' });
-  const [signingOut, setSigningOut] = useState(false);
+  const [signOut, setSignOut] = useState<SignOutState>({ status: 'idle' });
 
   useEffect(() => {
     let active = true;
@@ -40,13 +48,17 @@ export function CompanyManagement({ intentId }: { intentId: string | null }) {
   }, []);
 
   async function onSignOut() {
-    setSigningOut(true);
+    setSignOut({ status: 'revoking' });
     try {
       await revokeManagementSession();
       window.location.assign('/manage');
-    } catch {
-      // Revocation failed server-side; do not pretend the session ended.
-      setSigningOut(false);
+    } catch (error: unknown) {
+      // Revocation failed server-side. Never imply the session ended.
+      if (error instanceof ApiRequestError) {
+        setSignOut({ status: 'failed', code: error.code, requestId: error.requestId });
+        return;
+      }
+      setSignOut({ status: 'failed', code: 'INTERNAL_ERROR', requestId: undefined });
     }
   }
 
@@ -101,7 +113,7 @@ export function CompanyManagement({ intentId }: { intentId: string | null }) {
           <div>
             <dt className="text-[var(--color-muted)]">Session expires</dt>
             <dd className="font-[family-name:var(--font-mono)]">
-              {new Date(sessionExpiresAt).toLocaleString()}
+              {formatAbsoluteDateTime(sessionExpiresAt)}
             </dd>
           </div>
         </dl>
@@ -137,14 +149,29 @@ export function CompanyManagement({ intentId }: { intentId: string | null }) {
         </p>
       </Notice>
 
-      <button
-        type="button"
-        onClick={onSignOut}
-        disabled={signingOut}
-        className="min-h-11 rounded-[var(--radius-control)] border border-[var(--color-border)] px-4 text-sm font-medium disabled:opacity-60"
-      >
-        {signingOut ? 'Ending session…' : 'End management session'}
-      </button>
+      <div className="space-y-3">
+        <Button
+          variant="secondary"
+          onClick={onSignOut}
+          busy={signOut.status === 'revoking'}
+          busyLabel="Ending session…"
+        >
+          End management session
+        </Button>
+
+        {signOut.status === 'failed' && (
+          <ErrorState
+            title={describeIdentityError(signOut.code).title}
+            description={
+              <p>
+                Your session was not ended. {describeIdentityError(signOut.code).message} Close this
+                browser if you need to stop using it immediately.
+              </p>
+            }
+            {...(signOut.requestId === undefined ? {} : { requestId: signOut.requestId })}
+          />
+        )}
+      </div>
     </div>
   );
 }

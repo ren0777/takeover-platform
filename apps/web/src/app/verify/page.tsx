@@ -1,19 +1,14 @@
 import type { Metadata } from 'next';
-import { buildPageTitle } from '@/lib/site';
+import { PageHeader } from '@/components/ui/page-header';
+import { privatePageMetadata } from '@/lib/metadata';
 import { VerifyExchange } from './verify-exchange';
 
-export const metadata: Metadata = {
-  title: buildPageTitle('Verify your email'),
-  // Capability landing, not public content.
-  robots: { index: false, follow: false },
-};
+export const metadata: Metadata = privatePageMetadata('Verify your email');
 
 export default function VerifyPage() {
   return (
     <div className="mx-auto max-w-2xl px-4 py-10 sm:px-6">
-      <h1 className="font-[family-name:var(--font-display)] text-2xl font-bold tracking-tight">
-        Verify your contact email
-      </h1>
+      <PageHeader title="Verify your contact email" />
       <div className="mt-6">
         <VerifyExchange />
       </div>

@@ -12,18 +12,24 @@
     }
   },
   "scripts": {
+    "build:workspace-deps": "pnpm --filter @takeover/shared build",
+    "prebuild": "pnpm run build:workspace-deps",
     "build": "tsc -p tsconfig.json",
+    "pretypecheck": "pnpm run build:workspace-deps",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
+    "pretest": "pnpm run build:workspace-deps",
     "test": "vitest run",
     "db:generate": "prisma generate",
     "db:test:prepare": "node scripts/prepare-integration-database.mjs",
     "db:validate": "prisma validate",
-    "db:migrate:deploy": "prisma migrate deploy"
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:seed:territories": "pnpm build && node dist/territory-seed-cli.js"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.0",
     "@prisma/client": "7.10.0",
+    "@takeover/shared": "workspace:*",
     "pg": "8.23.0"
   },
   "devDependencies": {

@@ -30,3 +30,9 @@ export const TAKEOVER_INTENT_STATUSES = [
 ] as const;
 
 export const QUOTE_AUTHORITY = 'reference_only' as const;
+
+export const TERRITORY_PUBLIC_STATUSES = ['unclaimed', 'claimed', 'disabled'] as const;
+
+export const TERRITORY_AVAILABILITY_STATUSES = ['active', 'disabled'] as const;
+
+export const OWNERSHIP_SOURCES = ['initial_seed', 'paid_capture'] as const;

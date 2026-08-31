@@ -7,6 +7,13 @@ import {
 
 const prisma = getDatabaseClient();
 
+const legacyFixtureEpoch = Date.parse('2026-08-30T00:00:00.000Z');
+const fixtureEpoch = Date.now() + 86_400_000;
+
+function fixtureDate(legacyIso: string): Date {
+  return new Date(fixtureEpoch + (Date.parse(legacyIso) - legacyFixtureEpoch));
+}
+
 async function resetIdentityTables(): Promise<void> {
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE
     "security_rate_limit_buckets", "audit_logs", "email_verification_challenges",
@@ -20,7 +27,7 @@ beforeEach(resetIdentityTables);
 async function createAccessFixture() {
   const company = await prisma.company.create({
     data: {
-      activatedAt: new Date('2026-08-01T00:00:00.000Z'),
+      activatedAt: fixtureDate('2026-08-01T00:00:00.000Z'),
       name: 'Acme',
       normalizedName: 'acme',
       normalizedWebsite: 'https://acme.example/',
@@ -50,7 +57,7 @@ async function createAccessFixture() {
   }
   const otherCompany = await prisma.company.create({
     data: {
-      activatedAt: new Date('2026-08-01T00:00:00.000Z'),
+      activatedAt: fixtureDate('2026-08-01T00:00:00.000Z'),
       name: 'Other',
       normalizedName: 'other',
       normalizedWebsite: 'https://other.example/',
@@ -79,7 +86,7 @@ async function createAccessFixture() {
         data: {
           companyId: grant.companyId,
           csrfDigest: Buffer.alloc(32, index + 1),
-          expiresAt: new Date('2026-08-30T21:00:00.000Z'),
+          expiresAt: fixtureDate('2026-08-30T21:00:00.000Z'),
           grantId: grant.id,
           tokenDigest: Buffer.alloc(32, index + 4),
         },
@@ -90,7 +97,7 @@ async function createAccessFixture() {
     data: {
       companyId: company.id,
       contactId: requester.id,
-      expiresAt: new Date('2026-09-01T00:00:00.000Z'),
+      expiresAt: fixtureDate('2026-09-01T00:00:00.000Z'),
       status: 'AWAITING_COMPANY_ACCESS',
       territoryExternalRef: 'ai-coding',
     },
@@ -99,7 +106,7 @@ async function createAccessFixture() {
     data: {
       companyId: company.id,
       contactId: requester.id,
-      expiresAt: new Date('2026-09-06T13:00:00.000Z'),
+      expiresAt: fixtureDate('2026-09-06T13:00:00.000Z'),
       takeoverIntentId: intent.id,
     },
   });
@@ -126,7 +133,7 @@ describe('access request decision concurrency', () => {
     const repository = new PrismaCompanyIdentityRepository(prisma);
     await prisma.companyManagementSession.update({
       where: { id: fixture.firstSession.id },
-      data: { revokedAt: new Date('2026-08-30T12:59:00.000Z') },
+      data: { revokedAt: fixtureDate('2026-08-30T12:59:00.000Z') },
     });
 
     await expect(
@@ -134,7 +141,7 @@ describe('access request decision concurrency', () => {
         accessRequestId: fixture.accessRequest.id,
         decidedByGrantId: fixture.firstGrant.id,
         decision: 'rejected',
-        now: new Date('2026-08-30T13:00:00.000Z'),
+        now: fixtureDate('2026-08-30T13:00:00.000Z'),
         sessionId: fixture.firstSession.id,
       }),
     ).rejects.toThrow('company');
@@ -145,7 +152,7 @@ describe('access request decision concurrency', () => {
     const repository = new PrismaCompanyIdentityRepository(prisma);
     await prisma.companyManagementGrant.update({
       where: { id: fixture.firstGrant.id },
-      data: { revokedAt: new Date('2026-08-30T12:59:00.000Z'), status: 'REVOKED' },
+      data: { revokedAt: fixtureDate('2026-08-30T12:59:00.000Z'), status: 'REVOKED' },
     });
 
     await expect(
@@ -153,7 +160,7 @@ describe('access request decision concurrency', () => {
         accessRequestId: fixture.accessRequest.id,
         decidedByGrantId: fixture.firstGrant.id,
         decision: 'rejected',
-        now: new Date('2026-08-30T13:00:00.000Z'),
+        now: fixtureDate('2026-08-30T13:00:00.000Z'),
         sessionId: fixture.firstSession.id,
       }),
     ).rejects.toThrow('company');
@@ -169,11 +176,11 @@ describe('access request decision concurrency', () => {
         decidedByGrantId: fixture.wrongGrant.id,
         decision: 'approved',
         managementChallenge: {
-          expiresAt: new Date('2026-08-30T13:15:00.000Z'),
+          expiresAt: fixtureDate('2026-08-30T13:15:00.000Z'),
           selector: 'wrong-company-decision',
           tokenDigest: new Uint8Array(32).fill(1),
         },
-        now: new Date('2026-08-30T13:00:00.000Z'),
+        now: fixtureDate('2026-08-30T13:00:00.000Z'),
         sessionId: fixture.wrongSession.id,
       }),
     ).rejects.toThrow('company');
@@ -185,7 +192,7 @@ describe('access request decision concurrency', () => {
   it('commits exactly one terminal approve/reject decision', async () => {
     const fixture = await createAccessFixture();
     const repository = new PrismaCompanyIdentityRepository(prisma);
-    const now = new Date('2026-08-30T13:00:00.000Z');
+    const now = fixtureDate('2026-08-30T13:00:00.000Z');
 
     const results = await Promise.allSettled([
       repository.decideAccessRequest({
@@ -193,7 +200,7 @@ describe('access request decision concurrency', () => {
         decidedByGrantId: fixture.firstGrant.id,
         decision: 'approved',
         managementChallenge: {
-          expiresAt: new Date('2026-08-30T13:15:00.000Z'),
+          expiresAt: fixtureDate('2026-08-30T13:15:00.000Z'),
           selector: 'approved-decision-link',
           tokenDigest: new Uint8Array(32).fill(2),
         },

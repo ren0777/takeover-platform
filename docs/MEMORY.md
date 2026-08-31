@@ -4,7 +4,7 @@
 
 **Phase 0 — Foundation: IMPLEMENTED NOW / VERIFIED. Phase 1 — Company + Claim Identity: IMPLEMENTED NOW / VERIFIED in local development and a dedicated PostgreSQL 17 test database.**
 
-**Phase 2 — Territories + Authoritative Ownership: APPROVED DESIGN / IMPLEMENTATION PLAN IN REVIEW.** Do not implement Phase 2 until its exact seed proposal and implementation plan are approved.
+**Phase 2 — Territories + Authoritative Ownership: IN PROGRESS.** Task 1 shared contracts are implemented; database schema, repositories, ownership transitions, seed data, and public APIs remain PLANNED.
 
 ## What Works
 
@@ -15,7 +15,7 @@
 - Opaque link/session tokens use at least 256 bits of randomness; raw tokens are not persisted or written to normal logs.
 - Identity-side `TakeoverIntent` preparation stores reference-only quote snapshots and always returns `checkoutAvailable: false`.
 - Development/test email provider and loopback-only opt-in capture endpoint.
-- Both Prisma migrations apply cleanly to the dedicated PostgreSQL test database; 21 live integration/concurrency tests pass.
+- Both Prisma migrations apply cleanly to the dedicated PostgreSQL test database; 24 live integration/concurrency tests pass.
 
 ## Partially Implemented
 
@@ -100,6 +100,13 @@ Phase 1 models: `Company`, `CompanyContact`, `CompanyVerification`, `EmailVerifi
 
 ## Agent Handoffs
 
+### Interim Codex → Claude — manager access-request discovery
+
+- New shared exports: `companyAccessReviewListQuerySchema`, `CompanyAccessReviewListQuery`, `companyAccessReviewItemSchema`, `CompanyAccessReviewItem`, `companyAccessReviewPageSchema`, and `CompanyAccessReviewPage`.
+- `GET /api/company-management/access-requests` accepts optional opaque `cursor` and `limit` (default `50`, maximum `100`), and returns `{ items, nextCursor }` in the standard success envelope.
+- The endpoint resolves the company only from the opaque management-session cookie. It needs no CSRF cookie/header because it is read-only, but rejects missing, expired, revoked, or cross-company session authority.
+- Each item contains only `id`, `companyId`, `requesterEmail`, `status: 'pending'`, `requestedAt`, `expiresAt`, and optional `intent: { id, territoryExternalRef }`; it excludes contact IDs, grants, sessions, verification evidence, and quote amounts.
+
 ### Codex → Claude
 
 Authoritative `@takeover/shared` exports safe to consume now:
@@ -129,23 +136,33 @@ Three issues found while integrating. None block Phase 2.
 
 The page is built and renders the decision UI when an id is supplied as `?requestId=`, so either fix works with no frontend rework: include the id in the review link, or add a session-scoped endpoint returning pending access requests. The second is preferable — it survives an expired link and lets a manager review from an existing session.
 
-**2. `POST /api/company-management-links` requires a `companyId` the user cannot know.**
+**2. Resolved: `POST /api/company-management-links` no longer requires an undiscoverable `companyId`.**
+Current contract: `contactEmail` plus exactly one HTTPS `companyWebsiteUrl` or normalized `companySlug`; valid-shaped nonmatches remain generic accepted responses. The following paragraph records the original integration finding.
 `managementLinkRequestSchema` needs a UUID plus contact email. A returning manager has an email but no reason to know their company's UUID. The form currently asks for it and tells the user where to find it, which is poor. An enumeration-resistant lookup keyed on contact email — or on email plus normalized website — would remove the dead end. The response should stay identical whether or not a match exists.
 
 **3. The web app must proxy `/api` — please keep this in mind for deployment.**
 The API registers no CORS plugin and sets cookies with `Path=/api`, `SameSite=Lax`, no `Domain`. A cross-origin browser call from the web app would fail on both counts. `apps/web/next.config.ts` therefore rewrites `/api/*` to `TAKEOVER_API_ORIGIN` (default `http://127.0.0.1:4000`) so the browser stays same-origin and sends `Origin: WEB_APP_ORIGIN`, which the mutation check requires. If the API is ever exposed on its own public origin, it needs CORS with credentials and a cookie-domain strategy.
 
-**Not verified end to end.** No PostgreSQL instance is provisioned here, so identity routes do not register and no live request/response, cookie, or CSRF round trip was exercised. The frontend is verified only by typecheck, lint, unit tests, and a production build. Treat runtime integration as unproven until it runs against a live API.
+### Codex to Claude - enumeration-resistant management-link discovery
+
+- `POST /api/company-management-links` accepts `{ contactEmail, companyWebsiteUrl }` or `{ contactEmail, companySlug }`; neither/both locators, non-HTTPS websites, invalid slugs, malformed emails, and legacy `companyId` input are rejected by the shared contract.
+- Valid-shaped requests always return `202 { data: { accepted: true }, meta: { requestId } }`. They do not disclose locator existence, contact membership, verification, grant status, or company lifecycle eligibility.
+- The server normalizes the website or slug, rate-limits normalized email, IP, and keyed locator scopes, then issues a token only for an eligible, company-scoped active grant with a verified, non-revoked contact. Unexpired drafts, active companies, and suspended companies remain eligible; archived companies and expired drafts do not.
+- Shared, service, Fastify, and PostgreSQL integration tests are verified locally against the guarded dedicated test database.
+
+**Runtime smoke verified on 2026-08-31.** After `pnpm db:test:prepare` accepted the dedicated loopback PostgreSQL `takeover_test` URL (database name contains `test` and reset required `TAKEOVER_ALLOW_TEST_DATABASE_RESET=true`), `company-identity-runtime-smoke.test.ts` started Fastify on `127.0.0.1` with an ephemeral port and exercised real `fetch` requests. Its one scenario covered a new-company claim, in-memory development-email fragment capture and exchange, scoped management cookies/CSRF/context, locator-based management-link issuance and single-use exchange, generic unmatched discovery, two existing-company access requests, session-scoped listing, and approved/rejected decisions after rejected Origin/CSRF attempts. Raw capability values stayed in test-local memory only and captures were cleared between exchanges. The result remains limited to development/test transport and dedicated PostgreSQL: no production email delivery, ownership, payment, or checkout was tested or made available.
 
 **Minor:** `docs/superpowers/plans/2026-08-30-phase-2-territory-ownership.md` fails `pnpm format:check`. Left untouched as Codex-owned.
 
-### Codex → Claude — Phase 2 planned, not ready to consume
+### Codex → Claude — Phase 2 contracts ready; APIs remain planned
 
-- Planned public contracts: `TerritoryCategory`, `TerritoryVisualMetadata`, `TerritorySummary`, `TerritoryDetail`, `TerritoryOwnershipSummary`, `TerritoryHistoryEntry`, `CompanyPublicSummary`, `CompanyTerritories`, and pagination/query schemas.
-- Planned public reads: territory categories/list/detail/history and public company/detail/territory holdings.
-- Bigint territory versions will be decimal strings over JSON.
-- `displayWeight` will be authoritative only after implementation and verification. Until then, keep fixture tiers development-only and do not present them as backend truth.
-- No contested, pricing, payment, checkout, ownership mutation, leaderboard, or live-event contract is available from Phase 2 planning.
+- Authoritative constants safe to consume: `TERRITORY_PUBLIC_STATUSES`, `TERRITORY_AVAILABILITY_STATUSES`, and `OWNERSHIP_SOURCES`.
+- Authoritative schemas safe to consume: `territoryCategorySchema`, `territoryVisualMetadataSchema`, `companyPublicSummarySchema`, `territoryOwnershipSummarySchema`, `territoryHistoryEntrySchema`, `territorySummarySchema`, `territoryDetailSchema`, `companyTerritoriesSchema`, `territoryVersionSchema`, `displayWeightSchema`, `territoryStatusSchema`, `territoryAvailabilityStatusSchema`, `ownershipSourceSchema`, `paginationQuerySchema`, `pageMetaSchema`, `territoryListQuerySchema`, `territoryPageSchema`, and `territoryHistoryPageSchema`.
+- Authoritative inferred types safe to consume: `TerritoryCategory`, `TerritoryVisualMetadata`, `CompanyPublicSummary`, `TerritoryOwnershipSummary`, `TerritoryHistoryEntry`, `TerritorySummary`, `TerritoryDetail`, `CompanyTerritories`, `PaginationQuery`, `PageMeta`, `TerritoryListQuery`, `TerritoryPage`, and `TerritoryHistoryPage`.
+- Stable error codes now include `TERRITORY_NOT_FOUND`, `TERRITORY_CATEGORY_NOT_FOUND`, `INVALID_CURSOR`, `STALE_TERRITORY_VERSION`, `TERRITORY_DISABLED`, `OWNERSHIP_CONFLICT`, and `OWNERSHIP_HISTORY_INVALID`.
+- `displayWeight` is an authoritative integer contract constrained to `1..100`; the frontend may map it to presentation tiers, but mosaic position and physical adjacency have no gameplay meaning.
+- `version` and `territoryVersion` are positive decimal strings over JSON. `CompanyPublicSummary` is a privacy-safe projection and does not replace the existing Phase 1 `Company` aggregate.
+- These are contracts only. Public territory APIs and database-backed ownership are not implemented yet; fixtures must remain development-only. No contested, pricing, bid, payment, checkout, ownership mutation route, leaderboard, or live-event contract is available.
 
 ## Recent Important Changes
 
@@ -153,4 +170,6 @@ The API registers no CORS plugin and sets cookies with `Path=/api`, `SameSite=La
 - 2026-08-29: V1 traditional authentication was removed in favor of passwordless company-scoped capabilities.
 - 2026-08-30: Phase 1 company-claim identity contracts, schema, security primitives, email boundary, company/access workflows, recovery request seam, and reference-only intent preparation were implemented and verified against PostgreSQL.
 - 2026-08-30: Phase 1 frontend company-identity surfaces were implemented in `apps/web` against the real `@takeover/shared` contracts; runtime integration remains unverified without a provisioned database.
-- 2026-08-30: Phase 2 territory/ownership design was approved with suspended-owner truth, no controlled-correction source, required `btree_gist`, five-entry history preview, and a small reviewed seed requirement. Implementation has not started.
+- 2026-08-31: Phase 1 loopback runtime identity smoke verified the real Fastify/passwordless flow against the dedicated PostgreSQL test database and development-only in-memory email capture. Production email delivery remains explicitly unavailable.
+- 2026-08-31: Phase 2 Task 1 published framework-neutral territory and ownership contracts in `@takeover/shared`; database-backed territory APIs and ownership remain planned.
+- 2026-08-30: Phase 2 territory/ownership design was approved with suspended-owner truth, no controlled-correction source, required `btree_gist`, five-entry history preview, and a small reviewed seed requirement.

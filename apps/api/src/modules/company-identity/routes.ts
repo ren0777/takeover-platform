@@ -1,5 +1,6 @@
 import {
   accessDecisionRequestSchema,
+  companyAccessReviewListQuerySchema,
   companyClaimRequestSchema,
   emailTokenExchangeRequestSchema,
   emailVerificationRequestSchema,
@@ -124,6 +125,13 @@ export async function companyIdentityRoutes(
     const sessionToken = requiredCookie(request.cookies[MANAGEMENT_SESSION_COOKIE_NAME]);
     const csrfToken = requiredCookie(request.cookies[MANAGEMENT_CSRF_COOKIE_NAME]);
     const data = await options.service.getManagementContext(sessionToken, csrfToken);
+    return { data, meta: { requestId: request.id } };
+  });
+
+  app.get('/api/company-management/access-requests', async (request) => {
+    const query = companyAccessReviewListQuerySchema.parse(request.query);
+    const sessionToken = requiredCookie(request.cookies[MANAGEMENT_SESSION_COOKIE_NAME]);
+    const data = await options.service.listAccessRequests(query, sessionToken);
     return { data, meta: { requestId: request.id } };
   });
 

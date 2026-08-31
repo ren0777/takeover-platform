@@ -23,12 +23,12 @@ function ManagementLinkForm() {
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const companyId = String(form.get('companyId') ?? '').trim();
+    const companyWebsiteUrl = String(form.get('companyWebsiteUrl') ?? '').trim();
     const contactEmail = String(form.get('contactEmail') ?? '').trim();
 
     setState({ status: 'submitting' });
     try {
-      await requestManagementLink({ companyId, contactEmail });
+      await requestManagementLink({ companyWebsiteUrl, contactEmail });
       setState({ status: 'accepted' });
     } catch (error: unknown) {
       if (error instanceof ApiRequestError) {
@@ -54,12 +54,13 @@ function ManagementLinkForm() {
   return (
     <form onSubmit={onSubmit} className="max-w-md space-y-4">
       <FormField
-        id="companyId"
-        name="companyId"
-        label="Company ID"
+        id="companyWebsiteUrl"
+        name="companyWebsiteUrl"
+        label="Company website"
+        type="url"
         required
         disabled={state.status === 'submitting'}
-        hint="Shown on your company management page."
+        hint="Use the public HTTPS website for your company."
       />
       <FormField
         id="contactEmail"

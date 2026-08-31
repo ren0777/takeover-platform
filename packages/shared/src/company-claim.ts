@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { ACCESS_REQUEST_STATUSES, QUOTE_AUTHORITY, TAKEOVER_INTENT_STATUSES } from './constants.js';
-import { companyInputSchema, companySchema, verificationLevelSchema } from './company.js';
+import {
+  companyInputSchema,
+  companySchema,
+  httpsUrlSchema,
+  verificationLevelSchema,
+} from './company.js';
 import { moneySchema } from './money.js';
 
 const isoDateTimeSchema = z.string().datetime({ offset: true });
@@ -17,6 +22,40 @@ export const territoryExternalRefSchema = z
   .min(1)
   .max(128)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
+
+const opaqueCursorSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .regex(/^[A-Za-z0-9_-]+$/);
+
+export const companyAccessReviewListQuerySchema = z.object({
+  cursor: opaqueCursorSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+export type CompanyAccessReviewListQuery = z.infer<typeof companyAccessReviewListQuerySchema>;
+
+export const companyAccessReviewItemSchema = z.object({
+  id: opaqueIdSchema,
+  companyId: opaqueIdSchema,
+  requesterEmail: z.email(),
+  status: z.literal('pending'),
+  requestedAt: isoDateTimeSchema,
+  expiresAt: isoDateTimeSchema,
+  intent: z
+    .object({
+      id: opaqueIdSchema,
+      territoryExternalRef: territoryExternalRefSchema,
+    })
+    .optional(),
+});
+export type CompanyAccessReviewItem = z.infer<typeof companyAccessReviewItemSchema>;
+
+export const companyAccessReviewPageSchema = z.object({
+  items: z.array(companyAccessReviewItemSchema),
+  nextCursor: opaqueCursorSchema.nullable(),
+});
+export type CompanyAccessReviewPage = z.infer<typeof companyAccessReviewPageSchema>;
 
 export const quoteSnapshotSchema = z
   .object({
@@ -129,10 +168,79 @@ export const emailTokenExchangeResultSchema = z.object({
 });
 export type EmailTokenExchangeResult = z.infer<typeof emailTokenExchangeResultSchema>;
 
-export const managementLinkRequestSchema = z.object({
-  companyId: opaqueIdSchema,
-  contactEmail: z.email(),
-});
+const companySlugLocatorSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(1)
+  .max(140)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+
+function isReservedManagementLinkIpv4(hostname: string): boolean {
+  const octets = hostname.split('.').map(Number);
+  const [first = 0, second = 0] = octets;
+  return (
+    first === 0 ||
+    first === 10 ||
+    first === 127 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && [0, 2, 168].includes(second)) ||
+    (first === 198 && (second === 18 || second === 19 || second === 51)) ||
+    (first === 203 && second === 0) ||
+    first >= 224
+  );
+}
+
+function isReservedManagementLinkIp(hostname: string): boolean {
+  const bareHostname = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(bareHostname)) {
+    return isReservedManagementLinkIpv4(bareHostname);
+  }
+  if (!bareHostname.includes(':')) return false;
+  const leadingHextet = bareHostname.split(':')[0];
+  const firstHextet = Number.parseInt(
+    leadingHextet === undefined || leadingHextet === '' ? '0' : leadingHextet,
+    16,
+  );
+  if (firstHextet < 0x2000 || firstHextet > 0x3fff) return true;
+  const secondHextet = Number.parseInt(bareHostname.split(':')[1] ?? '0', 16);
+  if (firstHextet === 0x2001 && (secondHextet <= 0x003f || secondHextet === 0x0db8)) {
+    return true;
+  }
+  return bareHostname.startsWith('2002:') || bareHostname.startsWith('3fff:');
+}
+
+const managementLinkWebsiteUrlSchema = httpsUrlSchema.refine((value) => {
+  const url = new URL(value);
+  const hostname = url.hostname.toLowerCase();
+  return (
+    url.username === '' &&
+    url.password === '' &&
+    url.search === '' &&
+    url.hash === '' &&
+    hostname !== 'localhost' &&
+    !hostname.endsWith('.localhost') &&
+    !hostname.endsWith('.local') &&
+    !isReservedManagementLinkIp(hostname)
+  );
+}, 'Management-link website must be a public HTTPS URL without credentials, query, or fragment');
+
+export const managementLinkRequestSchema = z.union([
+  z
+    .object({
+      companyWebsiteUrl: managementLinkWebsiteUrlSchema,
+      contactEmail: z.email(),
+    })
+    .strict(),
+  z
+    .object({
+      companySlug: companySlugLocatorSchema,
+      contactEmail: z.email(),
+    })
+    .strict(),
+]);
 export type ManagementLinkRequest = z.infer<typeof managementLinkRequestSchema>;
 
 export const accessDecisionRequestSchema = z.object({

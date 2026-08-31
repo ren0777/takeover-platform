@@ -86,6 +86,16 @@ enum TakeoverIntentStatus {
   CANCELLED
 }
 
+enum TerritoryAvailabilityStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum TerritoryOwnershipSource {
+  INITIAL_SEED
+  PAID_CAPTURE
+}
+
 enum AuditActorType {
   CONTACT
   MANAGEMENT_GRANT
@@ -95,25 +105,26 @@ enum AuditActorType {
 }
 
 model Company {
-  id                 String                       @id @default(uuid()) @db.Uuid
-  name               String                       @db.VarChar(120)
-  normalizedName     String                       @map("normalized_name") @db.VarChar(120)
-  slug               String?                      @unique @db.VarChar(140)
-  websiteUrl         String                       @map("website_url") @db.VarChar(2048)
-  normalizedWebsite  String                       @map("normalized_website") @db.VarChar(2048)
-  logoUrl            String?                      @map("logo_url") @db.VarChar(2048)
-  status             CompanyStatus                @default(DRAFT)
-  expiresAt          DateTime?                    @map("expires_at") @db.Timestamptz(3)
-  activatedAt        DateTime?                    @map("activated_at") @db.Timestamptz(3)
-  createdAt          DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt          DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(3)
-  verifications      CompanyVerification[]
-  challenges         EmailVerificationChallenge[]
-  managementGrants   CompanyManagementGrant[]
-  managementSessions CompanyManagementSession[]
-  accessRequests     CompanyAccessRequest[]
-  takeoverIntents    TakeoverIntent[]
-  auditLogs          AuditLog[]
+  id                  String                       @id @default(uuid()) @db.Uuid
+  name                String                       @db.VarChar(120)
+  normalizedName      String                       @map("normalized_name") @db.VarChar(120)
+  slug                String?                      @unique @db.VarChar(140)
+  websiteUrl          String                       @map("website_url") @db.VarChar(2048)
+  normalizedWebsite   String                       @map("normalized_website") @db.VarChar(2048)
+  logoUrl             String?                      @map("logo_url") @db.VarChar(2048)
+  status              CompanyStatus                @default(DRAFT)
+  expiresAt           DateTime?                    @map("expires_at") @db.Timestamptz(3)
+  activatedAt         DateTime?                    @map("activated_at") @db.Timestamptz(3)
+  createdAt           DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  verifications       CompanyVerification[]
+  challenges          EmailVerificationChallenge[]
+  managementGrants    CompanyManagementGrant[]
+  managementSessions  CompanyManagementSession[]
+  accessRequests      CompanyAccessRequest[]
+  takeoverIntents     TakeoverIntent[]
+  territoryOwnerships TerritoryOwnership[]
+  auditLogs           AuditLog[]
 
   @@index([normalizedWebsite])
   @@index([status, expiresAt])
@@ -258,6 +269,7 @@ model TakeoverIntent {
   id                       String                @id @default(uuid()) @db.Uuid
   companyId                String                @map("company_id") @db.Uuid
   contactId                String                @map("contact_id") @db.Uuid
+  territoryId              String?               @map("territory_id") @db.Uuid
   territoryExternalRef     String                @map("territory_external_ref") @db.VarChar(128)
   intendedAmountMinor      BigInt?               @map("intended_amount_minor")
   currency                 String?               @db.Char(3)
@@ -272,12 +284,66 @@ model TakeoverIntent {
   updatedAt                DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
   company                  Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
   contact                  CompanyContact        @relation(fields: [contactId], references: [id], onDelete: Restrict)
+  territory                Territory?            @relation(fields: [territoryId], references: [id], onDelete: Restrict)
   accessRequest            CompanyAccessRequest?
 
   @@index([companyId, status])
   @@index([contactId, createdAt])
+  @@index([territoryId])
   @@index([expiresAt])
   @@map("takeover_intents")
+}
+
+model TerritoryCategory {
+  id           String      @id @default(uuid()) @db.Uuid
+  slug         String      @unique @db.VarChar(100)
+  name         String      @db.VarChar(100)
+  description  String?     @db.VarChar(500)
+  displayOrder Int         @map("display_order")
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  territories  Territory[]
+
+  @@map("territory_categories")
+}
+
+model Territory {
+  id                 String                      @id @default(uuid()) @db.Uuid
+  slug               String                      @unique @db.VarChar(120)
+  name               String                      @db.VarChar(120)
+  description        String                      @db.VarChar(1000)
+  categoryId         String                      @map("category_id") @db.Uuid
+  displayWeight      Int                         @map("display_weight")
+  availabilityStatus TerritoryAvailabilityStatus @default(ACTIVE) @map("availability_status")
+  visualMetadata     Json                        @default("{}") @map("visual_metadata")
+  version            BigInt                      @default(1)
+  createdAt          DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  category           TerritoryCategory           @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  ownershipHistory   TerritoryOwnership[]
+  takeoverIntents    TakeoverIntent[]
+
+  @@index([categoryId, displayWeight, name, id])
+  @@map("territories")
+}
+
+model TerritoryOwnership {
+  id               String                   @id @default(uuid()) @db.Uuid
+  territoryId      String                   @map("territory_id") @db.Uuid
+  companyId        String                   @map("company_id") @db.Uuid
+  capturedAt       DateTime                 @map("captured_at") @db.Timestamptz(3)
+  endedAt          DateTime?                @map("ended_at") @db.Timestamptz(3)
+  source           TerritoryOwnershipSource
+  reason           String?                  @db.VarChar(500)
+  territoryVersion BigInt                   @map("territory_version")
+  createdAt        DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  territory        Territory                @relation(fields: [territoryId], references: [id], onDelete: Restrict)
+  company          Company                  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([territoryId, territoryVersion])
+  @@index([companyId, endedAt])
+  @@index([territoryId, capturedAt])
+  @@map("territory_ownerships")
 }
 
 model AuditLog {

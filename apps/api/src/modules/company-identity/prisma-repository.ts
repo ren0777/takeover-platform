@@ -29,6 +29,8 @@ import type {
   UpdateTakeoverPreparationInput,
   VerificationExchangeResult,
   AccessDecisionRecordResult,
+  ListPendingAccessRequestsInput,
+  PendingAccessRequestReviewPage,
 } from './repository.js';
 
 type IdentityPrismaClient = PrismaClient | Prisma.TransactionClient;
@@ -265,16 +267,24 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
     return this.prisma.$transaction(async (transaction) => {
       const grant = await transaction.companyManagementGrant.findFirst({
         where: {
-          companyId: input.companyId,
           revokedAt: null,
           status: 'ACTIVE',
+          company: {
+            ...('normalizedWebsite' in input.locator
+              ? { normalizedWebsite: input.locator.normalizedWebsite }
+              : { slug: input.locator.normalizedSlug }),
+            OR: [
+              { status: 'ACTIVE' },
+              { status: 'SUSPENDED' },
+              { expiresAt: { gt: input.now }, status: 'DRAFT' },
+            ],
+          },
           contact: {
             emailVerifiedAt: { not: null },
             normalizedEmail: input.normalizedEmail,
             revokedAt: null,
             verifications: {
               some: {
-                companyId: input.companyId,
                 level: 'CONTACT_VERIFIED',
                 status: 'VERIFIED',
               },
@@ -284,10 +294,19 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         include: { company: true, contact: true },
       });
       if (grant === null) return null;
+      const verification = await transaction.companyVerification.findFirst({
+        where: {
+          companyId: grant.companyId,
+          contactId: grant.contactId,
+          level: 'CONTACT_VERIFIED',
+          status: 'VERIFIED',
+        },
+      });
+      if (verification === null) return null;
 
       await transaction.emailVerificationChallenge.updateMany({
         where: {
-          companyId: input.companyId,
+          companyId: grant.companyId,
           consumedAt: null,
           contactId: grant.contactId,
           purpose: 'MANAGEMENT_LINK',
@@ -297,7 +316,7 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
       });
       const challenge = await transaction.emailVerificationChallenge.create({
         data: {
-          companyId: input.companyId,
+          companyId: grant.companyId,
           contactId: grant.contactId,
           expiresAt: input.expiresAt,
           purpose: 'MANAGEMENT_LINK',
@@ -309,7 +328,7 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         action: 'company_management_link.issued',
         actorId: grant.contactId,
         actorType: 'CONTACT',
-        companyId: input.companyId,
+        companyId: grant.companyId,
         ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
         targetId: challenge.id,
         targetType: 'email_verification_challenge',
@@ -882,6 +901,55 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
       include: { contact: true },
     });
     return grants.map((grant) => ({ contactId: grant.contactId, email: grant.contact.email }));
+  }
+
+  async listPendingAccessRequests(
+    input: ListPendingAccessRequestsInput,
+  ): Promise<PendingAccessRequestReviewPage> {
+    const records = await this.prisma.companyAccessRequest.findMany({
+      where: {
+        companyId: input.companyId,
+        expiresAt: { gt: input.now },
+        status: 'PENDING',
+        ...(input.cursor === undefined
+          ? {}
+          : {
+              OR: [
+                { requestedAt: { gt: input.cursor.requestedAt } },
+                {
+                  id: { gt: input.cursor.id },
+                  requestedAt: input.cursor.requestedAt,
+                },
+              ],
+            }),
+      },
+      orderBy: [{ requestedAt: 'asc' }, { id: 'asc' }],
+      select: {
+        companyId: true,
+        contact: { select: { email: true } },
+        expiresAt: true,
+        id: true,
+        requestedAt: true,
+        takeoverIntent: { select: { id: true, territoryExternalRef: true } },
+      },
+      take: input.limit + 1,
+    });
+    const items = records.slice(0, input.limit).map((record) => ({
+      companyId: record.companyId,
+      contactEmail: record.contact.email,
+      expiresAt: record.expiresAt,
+      id: record.id,
+      ...(record.takeoverIntent === null ? {} : { intent: record.takeoverIntent }),
+      requestedAt: record.requestedAt,
+    }));
+    const last = items.at(-1);
+    return {
+      items,
+      nextCursor:
+        records.length > input.limit && last !== undefined
+          ? { id: last.id, requestedAt: last.requestedAt }
+          : null,
+    };
   }
 
   async prepareAccessRequestNotifications(input: PrepareAccessRequestNotificationsInput) {

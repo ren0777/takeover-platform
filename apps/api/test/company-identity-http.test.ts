@@ -60,6 +60,20 @@ function createService(): CompanyIdentityService {
       sessionExpiresAt: '2026-08-30T21:00:00.000Z',
       verificationLevels: ['contact_verified'] as ['contact_verified'],
     })),
+    listAccessRequests: vi.fn(async () => ({
+      items: [
+        {
+          companyId: company.id,
+          expiresAt: '2026-09-06T13:00:00.000Z',
+          id: '77777777-7777-4777-8777-777777777777',
+          intent: { id: intent.id, territoryExternalRef: 'ai-coding' },
+          requestedAt: '2026-08-30T12:00:00.000Z',
+          requesterEmail: 'requester@example.com',
+          status: 'pending' as const,
+        },
+      ],
+      nextCursor: null,
+    })),
     reissueEmailVerification: vi.fn(async () => ({ accepted: true as const })),
     revokeManagementSession: vi.fn(async () => undefined),
     requestManagementLink: vi.fn(async () => ({ accepted: true as const })),
@@ -311,15 +325,27 @@ describe('company identity HTTP surface', () => {
     );
   });
 
-  it('issues and exchanges management links without exposing the session secret', async () => {
+  it('accepts website and slug management-link locators without exposing a match', async () => {
     const harness = buildIdentityApp();
-    const issued = await harness.app.inject({
+    const matched = await harness.app.inject({
       method: 'POST',
       url: '/api/company-management-links',
-      payload: { companyId: company.id, contactEmail: 'founder@gmail.com' },
+      payload: { companyWebsiteUrl: company.websiteUrl, contactEmail: 'founder@gmail.com' },
     });
-    expect(issued.statusCode).toBe(202);
-    expect(issued.json().data).toEqual({ accepted: true });
+    const unmatched = await harness.app.inject({
+      method: 'POST',
+      url: '/api/company-management-links',
+      payload: { companySlug: 'does-not-exist', contactEmail: 'unknown@gmail.com' },
+    });
+    expect(matched.statusCode).toBe(unmatched.statusCode);
+    expect(matched.json().data).toEqual({ accepted: true });
+    expect(unmatched.json().data).toEqual(matched.json().data);
+    expect(matched.json().meta).toEqual({ requestId: expect.any(String) });
+    expect(unmatched.json().meta).toEqual({ requestId: expect.any(String) });
+    expect(harness.service.requestManagementLink).toHaveBeenCalledWith(
+      { companyWebsiteUrl: company.websiteUrl, contactEmail: 'founder@gmail.com' },
+      expect.objectContaining({ requestId: expect.any(String) }),
+    );
 
     const exchanged = await harness.app.inject({
       method: 'POST',
@@ -366,6 +392,41 @@ describe('company identity HTTP surface', () => {
         expect.objectContaining({ name: 'takeover_management_csrf', value: '' }),
       ]),
     );
+  });
+
+  it('lists pending access requests with the management session alone', async () => {
+    const harness = buildIdentityApp();
+    const response = await harness.app.inject({
+      method: 'GET',
+      url: '/api/company-management/access-requests?limit=1',
+      headers: { cookie: 'takeover_management=session' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toEqual({
+      items: [
+        expect.objectContaining({
+          id: '77777777-7777-4777-8777-777777777777',
+          requesterEmail: 'requester@example.com',
+          status: 'pending',
+        }),
+      ],
+      nextCursor: null,
+    });
+    expect(harness.service.listAccessRequests).toHaveBeenCalledWith({ limit: 1 }, 'session');
+  });
+
+  it('returns the validation envelope for a malformed access-request cursor', async () => {
+    const harness = buildIdentityApp();
+    const response = await harness.app.inject({
+      method: 'GET',
+      url: '/api/company-management/access-requests?cursor=not%21a%21cursor',
+      headers: { cookie: 'takeover_management=session' },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe('VALIDATION_ERROR');
+    expect(harness.service.listAccessRequests).not.toHaveBeenCalled();
   });
 
   it.each(['approve', 'reject'] as const)(

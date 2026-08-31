@@ -101,12 +101,28 @@ Owner brand accents are decorative only. They may tint a border or corner bleed;
 The board is a tessellated mosaic in which tile size encodes territory importance, so high-value territories physically dominate the screen and hierarchy is legible within seconds.
 
 - Tile tiers: `flagship` 2×2, `major` 2×1, `standard` 1×1.
-- In-tile hierarchy, in priority order: territory name → current owner and logo → current ownership/bid value → minimum takeover price → primary `TAKE OVER` action → reign and competition metadata.
 - Throne Room energy is reserved for genuinely important authoritative moments — crowns for dominant companies, newly captured animation, future server-confirmed competition, #1 empire, and season winners. Every card must not become a battle poster.
 - Exchange Terminal density is explicitly rejected as the default board experience.
 - The mosaic must stay understandable at 10, 50, and 100+ territories, including when positioning is algorithmic rather than gameplay-derived.
 
-**`tierOf()` is a temporary presentation heuristic only.** Phase 2 will provide backend-authoritative `displayWeight: number` on a `1..100` scale. Suggested frontend bands are `80..100` flagship, `50..79` major, and `1..49` standard; these remain presentation guidance, not backend enums. `displayWeight` is never derived from price, ownership, bid volume, or company size.
+### In-tile hierarchy — corrected 2026-08-30 against the Phase 2 contracts
+
+The earlier hierarchy placed current value and a minimum takeover price above the primary action. **Phase 2 publishes no money field of any kind** — `territorySummarySchema` has no current amount, no minimum, and no currency — so that hierarchy was not buildable and has been replaced.
+
+Phase 2 in-tile hierarchy, in priority order:
+
+1. Territory name
+2. Status — `unclaimed`, `claimed`, or `disabled`, always as text or a badge, never colour alone
+3. Current owner and logo, from `currentOwnership.owner`
+4. Reign, derived from `currentOwnership.capturedAt`
+5. Category
+6. Primary action
+
+**The primary action must not imply a price it cannot show.** Until Phase 3 publishes pricing, an `unclaimed` tile invites a claim and a `claimed` tile leads to detail; neither renders an amount. Reintroduce price and a `TAKE OVER $X` call to action only when Phase 3 makes an authoritative amount available — and then the amount comes from the server, never from the client.
+
+`initial_seed` and `paid_capture` are both valid `currentOwnership.source` values. A seeded owner is a real owner and must not be styled as provisional.
+
+**Tier assignment is authoritative, not heuristic.** Phase 2 provides `displayWeight` as an integer `1..100`. It is the only input to tile size; any price-derived fallback is deleted rather than kept as a secondary path. Suggested frontend bands are `80..100` flagship, `50..79` major, `1..49` standard — presentation guidance, not backend enums. `displayWeight` is never derived from price, ownership, volume, company size, or adjacency.
 
 ## Liveness Direction — APPROVED, NOT IMPLEMENTED
 

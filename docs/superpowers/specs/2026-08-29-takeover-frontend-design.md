@@ -278,11 +278,19 @@ At the 2-column base this collapses naturally into the approved **ranked variabl
 
 `tierOf()` is a **temporary presentation heuristic**. It prefers an authoritative `displayWeight` when present and falls back to current price only while that field does not exist. It is pure, unit tested, and documented as non-authoritative. Requested from Codex in `MEMORY.md`.
 
-### 8.3 Tile content
+### 8.3 Tile content — corrected 2026-08-30 against the Phase 2 contracts
 
-In priority order: territory name → owner and logo → current value → minimum takeover price → `TAKE OVER` → reign and competition metadata. Tiles stay readable in seconds; extra detail belongs on hover and the detail page.
+The original hierarchy led with current value and a minimum takeover price. **Phase 2 publishes no money field**, so it has been replaced.
 
-States: unclaimed, owned, contested, recently captured, premium, viewer-owned (`DEFEND`). Every state is conveyed by text or badge in addition to color.
+In priority order: territory name → status → owner and logo → reign → category → primary action. Tiles stay readable in seconds; extra detail belongs on the detail page.
+
+**The primary action must not imply a price it cannot show.** No amount is rendered until Phase 3 publishes an authoritative one, and that amount will come from the server.
+
+States: `unclaimed`, `claimed`, `disabled` — the only three the contract defines. Each is conveyed by text or badge, never colour alone.
+
+Deliberately absent until later phases: `contested` (Phase 3 bidding must define it), recently-captured highlighting (needs the event stream), and viewer-owned `DEFEND` (needs a session-to-territory link that does not exist). A `disabled` territory suppresses its action entirely rather than offering a dead control.
+
+An owner whose `currentOwnership.source` is `initial_seed` is a real owner and is styled identically to `paid_capture`. A `suspended` company remains publicly named with its status shown.
 
 ### 8.4 Scale
 

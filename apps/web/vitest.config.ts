@@ -6,6 +6,10 @@ import { defineConfig } from 'vitest/config';
  * testable. Next resolves the alias through tsconfig paths; Vitest does not.
  */
 export default defineConfig({
+  // Next compiles JSX with the automatic runtime. Vitest's esbuild defaults to
+  // the classic transform, which emits React.createElement and fails with
+  // "React is not defined" when a component is rendered in a test.
+  esbuild: { jsx: 'automatic' },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

@@ -68,6 +68,28 @@ Recorded from `MEMORY.md` on 2026-08-30, before Phase 2 contracts exist. Each co
 - **Territory detail previews five history entries** through one server constant, with full history cursor-paginated. Do not invent a different preview count.
 - **Territory versions are bigint as decimal strings over JSON.** Treat them as opaque strings; never parse to `number`.
 
+### Verified against the real contracts (read from `f20fdf7`, 2026-08-30)
+
+The Phase 2 contracts were inspected read-only on branch `codex/phase2-territory-ownership` before they reached `main`. Confirmed details, and the two design decisions they invalidate:
+
+- **There is no price anywhere in Phase 2.** `territorySummarySchema` has no `minimumTakeoverAmount`, no current winning amount, no money field at all. The territory card design in the frontend spec makes "Takeover $X" the dominant element and puts current value above it in the hierarchy — **that is not buildable and must be redesigned** around name, owner, status, and reign. The primary CTA cannot display a price, so it should not imply one. Revisit when Phase 3 publishes pricing.
+- **Every schema is `.strict()`.** Unknown keys are rejected, so development fixtures must match the contract exactly and must be parsed through the real schemas rather than merely typed by them.
+- `displayWeight` is `int` `1..100`. It is the only authoritative input to tile sizing; the price-derived fallback in `tierOf` must be deleted, not demoted.
+- `version` and `territoryVersion` are strings matching `/^[1-9][0-9]*$/`. Keep them opaque; never `Number()` them.
+- `status` is `unclaimed | claimed | disabled`. Derive claimed state from `status`, never from the presence of `currentOwnership`.
+- `currentOwnership` is optional and carries `owner`, optional `previousOwner`, `capturedAt`, `territoryVersion`, and `source` (`initial_seed | paid_capture`). `previousOwner.logoUrl` is present, closing that earlier request.
+- `companyPublicSummary.status` is `active | suspended | archived` — **`draft` is deliberately absent**, so drafts never surface publicly and the card needs no draft state.
+- `territoryPageSchema` and `territoryHistoryPageSchema` `.extend` the envelope so `meta` is **required**, unlike the optional `meta` on other responses. The API client's generic path treats `meta` as optional, so page responses need their own parse against these schemas.
+- `territoryDetailSchema` adds `ownershipHistoryPreview`; deeper history uses the cursor pagination contract.
+- New error codes to add to `describeIdentityError`, which would otherwise fall through to the generic fallback: `TERRITORY_NOT_FOUND`, `TERRITORY_DISABLED`, `INVALID_CURSOR`, `STALE_TERRITORY_VERSION`, `OWNERSHIP_CONFLICT`, `OWNERSHIP_HISTORY_INVALID`, `TERRITORY_CATEGORY_NOT_FOUND`.
+
+### Phase 1 corrective work also waiting on the merge
+
+Branch `codex/phase2-territory-ownership` additionally carries `c0b0f44` (list company access requests), `169d349` (management-link discovery by locator), and `d78d745` (live identity smoke). When these reach `main`:
+
+- Rework `/access-review` to fetch pending requests for the session's company, demoting `?requestId=` to a deep link.
+- Rework the `/manage` link-request form to use locator-based discovery instead of asking for a company UUID.
+
 ### Blocked beyond Phase 2
 
 Even once territory contracts land, these stay out of scope until later authoritative phases: leaderboard, activity rail, contested UI, price display, takeover bid, Dodo/payment, and capture success.

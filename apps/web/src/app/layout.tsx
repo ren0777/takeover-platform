@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Inter, JetBrains_Mono, Space_Grotesk } from 'next/font/google';
 import type { ReactNode } from 'react';
+import { SiteHeader } from '@/components/ui/site-header';
 import { buildPageTitle, SITE } from '@/lib/site';
 import './globals.css';
 
@@ -37,7 +38,14 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
         <a className="skip-link" href="#main-content">
           Skip to content
         </a>
-        {children}
+        <div className="flex min-h-screen flex-col">
+          <SiteHeader />
+          {/* The single main landmark for every route, so the skip link always
+              has a target. Pages must not render their own <main>. */}
+          <main id="main-content" className="flex-1">
+            {children}
+          </main>
+        </div>
       </body>
     </html>
   );

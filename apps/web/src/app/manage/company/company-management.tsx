@@ -5,10 +5,13 @@ import { useEffect, useState } from 'react';
 import { DEFAULT_CURRENCY, type ManagementContext } from '@takeover/shared';
 import { Button } from '@/components/ui/button';
 import { ErrorState } from '@/components/ui/error-state';
+import { LoadingRegion, LoadingSkeleton } from '@/components/ui/loading-skeleton';
 import { Notice } from '@/components/ui/notice';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { ApiRequestError } from '@/lib/api/client';
 import { getManagementContext, revokeManagementSession } from '@/lib/api/identity';
 import { formatAbsoluteDateTime } from '@/lib/format/datetime';
+import { describeCompanyStatus } from '@/lib/identity/company-status';
 import { describeIdentityError } from '@/lib/identity/error-copy';
 import { TakeoverPreparationForm } from './takeover-preparation-form';
 
@@ -63,7 +66,15 @@ export function CompanyManagement({ intentId }: { intentId: string | null }) {
   }
 
   if (state.status === 'loading') {
-    return <Notice variant="info" title="Loading your company…" />;
+    return (
+      <LoadingRegion label="Loading your company…">
+        <div className="mt-4 space-y-3">
+          <LoadingSkeleton className="h-6 w-1/2" />
+          <LoadingSkeleton className="h-4 w-full" />
+          <LoadingSkeleton className="h-4 w-2/3" />
+        </div>
+      </LoadingRegion>
+    );
   }
 
   if (state.status === 'failed') {
@@ -96,7 +107,12 @@ export function CompanyManagement({ intentId }: { intentId: string | null }) {
         <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
           <div>
             <dt className="text-[var(--color-muted)]">Status</dt>
-            <dd className="font-[family-name:var(--font-mono)]">{company.status}</dd>
+            <dd className="mt-1">
+              <StatusBadge
+                tone={describeCompanyStatus(company.status).tone}
+                label={describeCompanyStatus(company.status).label}
+              />
+            </dd>
           </div>
           <div>
             <dt className="text-[var(--color-muted)]">Website</dt>

@@ -15,7 +15,7 @@
 - Opaque link/session tokens use at least 256 bits of randomness; raw tokens are not persisted or written to normal logs.
 - Identity-side `TakeoverIntent` preparation stores reference-only quote snapshots and always returns `checkoutAvailable: false`.
 - Development/test email provider and loopback-only opt-in capture endpoint.
-- Both Prisma migrations apply cleanly to the dedicated PostgreSQL test database; 21 live integration/concurrency tests pass.
+- Both Prisma migrations apply cleanly to the dedicated PostgreSQL test database; 24 live integration/concurrency tests pass.
 
 ## Partially Implemented
 
@@ -148,9 +148,9 @@ The API registers no CORS plugin and sets cookies with `Path=/api`, `SameSite=La
 - `POST /api/company-management-links` accepts `{ contactEmail, companyWebsiteUrl }` or `{ contactEmail, companySlug }`; neither/both locators, non-HTTPS websites, invalid slugs, malformed emails, and legacy `companyId` input are rejected by the shared contract.
 - Valid-shaped requests always return `202 { data: { accepted: true }, meta: { requestId } }`. They do not disclose locator existence, contact membership, verification, grant status, or company lifecycle eligibility.
 - The server normalizes the website or slug, rate-limits normalized email, IP, and keyed locator scopes, then issues a token only for an eligible, company-scoped active grant with a verified, non-revoked contact. Unexpired drafts, active companies, and suspended companies remain eligible; archived companies and expired drafts do not.
-- Shared, service, and Fastify tests are verified locally. PostgreSQL assertions require a dedicated `TEST_DATABASE_URL` and remain unvalidated in this checkout.
+- Shared, service, Fastify, and PostgreSQL integration tests are verified locally against the guarded dedicated test database.
 
-**Not verified end to end.** No PostgreSQL instance is provisioned here, so identity routes do not register and no live request/response, cookie, or CSRF round trip was exercised. The frontend is verified only by typecheck, lint, unit tests, and a production build. Treat runtime integration as unproven until it runs against a live API.
+**Runtime smoke verified on 2026-08-31.** After `pnpm db:test:prepare` accepted the dedicated loopback PostgreSQL `takeover_test` URL (database name contains `test` and reset required `TAKEOVER_ALLOW_TEST_DATABASE_RESET=true`), `company-identity-runtime-smoke.test.ts` started Fastify on `127.0.0.1` with an ephemeral port and exercised real `fetch` requests. Its one scenario covered a new-company claim, in-memory development-email fragment capture and exchange, scoped management cookies/CSRF/context, locator-based management-link issuance and single-use exchange, generic unmatched discovery, two existing-company access requests, session-scoped listing, and approved/rejected decisions after rejected Origin/CSRF attempts. Raw capability values stayed in test-local memory only and captures were cleared between exchanges. The result remains limited to development/test transport and dedicated PostgreSQL: no production email delivery, ownership, payment, or checkout was tested or made available.
 
 **Minor:** `docs/superpowers/plans/2026-08-30-phase-2-territory-ownership.md` fails `pnpm format:check`. Left untouched as Codex-owned.
 
@@ -168,4 +168,5 @@ The API registers no CORS plugin and sets cookies with `Path=/api`, `SameSite=La
 - 2026-08-29: V1 traditional authentication was removed in favor of passwordless company-scoped capabilities.
 - 2026-08-30: Phase 1 company-claim identity contracts, schema, security primitives, email boundary, company/access workflows, recovery request seam, and reference-only intent preparation were implemented and verified against PostgreSQL.
 - 2026-08-30: Phase 1 frontend company-identity surfaces were implemented in `apps/web` against the real `@takeover/shared` contracts; runtime integration remains unverified without a provisioned database.
+- 2026-08-31: Phase 1 loopback runtime identity smoke verified the real Fastify/passwordless flow against the dedicated PostgreSQL test database and development-only in-memory email capture. Production email delivery remains explicitly unavailable.
 - 2026-08-30: Phase 2 territory/ownership design was approved with suspended-owner truth, no controlled-correction source, required `btree_gist`, five-entry history preview, and a small reviewed seed requirement. Implementation has not started.

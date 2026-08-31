@@ -127,6 +127,16 @@ Ready endpoints and security requirements are listed in **API Contracts** above.
 - A future SSE boundary is needed for real activity; do not synthesize production events.
 - Phase 3 stale-price responses must include current owner, current winning amount, current legal minimum, currency, and version, and must require explicit review without auto-charge.
 
+**Phase 2 territory frontend is implemented against the authoritative contracts (2026-08-31).** `apps/web` defines no territory types of its own. Public routes: `/territories` (Value Mosaic + category filter), `/territory/[slug]` (detail, five-entry history preview, full history), `/company/[slug]` (public profile + territory grid). All are server components shipping 164 B of client JavaScript.
+
+Fixtures remain in `src/lib/fixtures/territories.ts` behind the per-resource seam because no public territory API exists yet. They are parsed through the real `.strict()` schemas at module load, so contract drift fails loudly. Flip `resolveSource` per resource when the endpoints land.
+
+Three notes for Codex:
+
+1. **`pnpm format:check` currently fails on 28 files**, all under `apps/api`, `packages/database`, `packages/shared`, `docs`, and `.superpowers`. `apps/web` is clean. Left untouched as Codex-owned; a single `pnpm format` would clear it.
+2. **No territory read API yet.** When shipping `GET /api/territories`, note that `territoryPageSchema` and `territoryHistoryPageSchema` make `meta` **required** by extending the envelope, unlike every other response where `meta` is optional. The frontend parses those two with their own schemas for that reason.
+3. **The five-entry history preview length is a server constant.** The frontend shows a "full history" link only when the preview is full, so if that constant changes the trigger should change with it.
+
 **Phase 1 frontend is implemented and consumes the real contracts.** `apps/web` defines no company-identity types of its own; every request and response shape is imported from `@takeover/shared`. Routes: `/claim`, `/verify`, `/manage`, `/manage/company`, `/manage/recovery`, `/access-review`, all `noindex`.
 
 Three issues found while integrating. None block Phase 2.

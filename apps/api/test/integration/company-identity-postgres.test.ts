@@ -7,6 +7,7 @@ import {
   PrismaCompanyIdentityRepository,
   mapMinorAmountToSafeInteger,
 } from '../../src/modules/company-identity/prisma-repository.js';
+import { createOpaqueTokenService } from '../../src/security/opaque-token.js';
 
 const prisma = getDatabaseClient();
 
@@ -34,6 +35,171 @@ async function createCompany(status: 'DRAFT' | 'ACTIVE', normalizedWebsite: stri
 beforeEach(resetIdentityTables);
 
 describe('Phase 1 PostgreSQL invariants', () => {
+  it("lists only its company's unexpired pending requests in deterministic cursor order", async () => {
+    const companyA = await createCompany('ACTIVE', 'https://company-a-review.example/');
+    const companyB = await createCompany('ACTIVE', 'https://company-b-review.example/');
+    const manager = await prisma.companyContact.create({
+      data: { email: 'manager@company-a.example', normalizedEmail: 'manager@company-a.example' },
+    });
+    const grant = await prisma.companyManagementGrant.create({
+      data: { companyId: companyA.id, contactId: manager.id, source: 'INITIAL_CONTACT' },
+    });
+    const apiConfig = parseApiConfig({
+      DATABASE_URL: process.env.TEST_DATABASE_URL,
+      EMAIL_PROVIDER: 'development',
+      NODE_ENV: 'test',
+    });
+    const tokens = createOpaqueTokenService(apiConfig.identity.tokenHmacSecret);
+    const session = tokens.issueSessionToken();
+    await prisma.companyManagementSession.create({
+      data: {
+        companyId: companyA.id,
+        csrfDigest: Buffer.from(tokens.issueSessionToken().digest),
+        expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+        grantId: grant.id,
+        tokenDigest: Buffer.from(session.digest),
+      },
+    });
+    const [firstRequester, secondRequester, expiredRequester, otherRequester] = await Promise.all(
+      [
+        'first@requester.example',
+        'second@requester.example',
+        'expired@requester.example',
+        'other@requester.example',
+      ].map((email) => prisma.companyContact.create({ data: { email, normalizedEmail: email } })),
+    );
+    if (
+      firstRequester === undefined ||
+      secondRequester === undefined ||
+      expiredRequester === undefined ||
+      otherRequester === undefined
+    ) {
+      throw new Error('Expected four requester contacts');
+    }
+    const [firstIntent, secondIntent, otherIntent] = await Promise.all([
+      prisma.takeoverIntent.create({
+        data: {
+          companyId: companyA.id,
+          contactId: firstRequester.id,
+          expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+          status: 'AWAITING_COMPANY_ACCESS',
+          territoryExternalRef: 'first-territory',
+        },
+      }),
+      prisma.takeoverIntent.create({
+        data: {
+          companyId: companyA.id,
+          contactId: secondRequester.id,
+          expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+          status: 'AWAITING_COMPANY_ACCESS',
+          territoryExternalRef: 'second-territory',
+        },
+      }),
+      prisma.takeoverIntent.create({
+        data: {
+          companyId: companyB.id,
+          contactId: otherRequester.id,
+          expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+          status: 'AWAITING_COMPANY_ACCESS',
+          territoryExternalRef: 'other-company-territory',
+        },
+      }),
+    ]);
+    const requestedAt = new Date('2026-08-30T12:00:00.000Z');
+    await Promise.all([
+      prisma.companyAccessRequest.create({
+        data: {
+          companyId: companyA.id,
+          contactId: firstRequester.id,
+          expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+          id: '10000000-0000-4000-8000-000000000000',
+          requestedAt,
+          takeoverIntentId: firstIntent.id,
+        },
+      }),
+      prisma.companyAccessRequest.create({
+        data: {
+          companyId: companyA.id,
+          contactId: secondRequester.id,
+          expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+          id: '20000000-0000-4000-8000-000000000000',
+          requestedAt,
+          takeoverIntentId: secondIntent.id,
+        },
+      }),
+      prisma.companyAccessRequest.create({
+        data: {
+          companyId: companyA.id,
+          contactId: expiredRequester.id,
+          expiresAt: new Date('2020-01-01T00:00:00.000Z'),
+          id: '30000000-0000-4000-8000-000000000000',
+          requestedAt: new Date('2019-12-31T00:00:00.000Z'),
+        },
+      }),
+      prisma.companyAccessRequest.create({
+        data: {
+          companyId: companyB.id,
+          contactId: otherRequester.id,
+          expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+          id: '40000000-0000-4000-8000-000000000000',
+          requestedAt,
+          takeoverIntentId: otherIntent.id,
+        },
+      }),
+    ]);
+    const app = buildApp({ config: apiConfig, logger: false });
+    try {
+      const firstPage = await app.inject({
+        method: 'GET',
+        url: '/api/company-management/access-requests?limit=1',
+        headers: { cookie: `takeover_management=${session.rawToken}` },
+      });
+      expect(firstPage.statusCode).toBe(200);
+      expect(firstPage.json().data).toEqual({
+        items: [
+          {
+            companyId: companyA.id,
+            expiresAt: '2030-01-01T00:00:00.000Z',
+            id: '10000000-0000-4000-8000-000000000000',
+            intent: { id: firstIntent.id, territoryExternalRef: 'first-territory' },
+            requestedAt: requestedAt.toISOString(),
+            requesterEmail: 'first@requester.example',
+            status: 'pending',
+          },
+        ],
+        nextCursor: expect.any(String),
+      });
+      expect(firstPage.body).not.toContain(companyB.id);
+      expect(firstPage.body).not.toContain('contactId');
+
+      const secondPage = await app.inject({
+        method: 'GET',
+        url: `/api/company-management/access-requests?limit=1&cursor=${firstPage.json().data.nextCursor}`,
+        headers: { cookie: `takeover_management=${session.rawToken}` },
+      });
+      expect(secondPage.statusCode).toBe(200);
+      expect(secondPage.json().data).toMatchObject({
+        items: [
+          expect.objectContaining({
+            id: '20000000-0000-4000-8000-000000000000',
+            intent: { id: secondIntent.id, territoryExternalRef: 'second-territory' },
+          }),
+        ],
+        nextCursor: null,
+      });
+
+      const malformedCursor = await app.inject({
+        method: 'GET',
+        url: '/api/company-management/access-requests?cursor=e30',
+        headers: { cookie: `takeover_management=${session.rawToken}` },
+      });
+      expect(malformedCursor.statusCode).toBe(400);
+      expect(malformedCursor.json().error.code).toBe('VALIDATION_ERROR');
+    } finally {
+      await app.close();
+    }
+  });
+
   it('wires the real claim route when validated database configuration is supplied', async () => {
     const apiConfig = parseApiConfig({
       DATABASE_URL: process.env.TEST_DATABASE_URL,

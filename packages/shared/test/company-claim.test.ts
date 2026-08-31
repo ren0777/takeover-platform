@@ -6,6 +6,9 @@ import {
   TAKEOVER_INTENT_STATUSES,
   companyClaimRequestSchema,
   companyClaimResultSchema,
+  companyAccessReviewItemSchema,
+  companyAccessReviewListQuerySchema,
+  companyAccessReviewPageSchema,
   emailTokenExchangeRequestSchema,
   managementContextSchema,
   recoveryRequestResultSchema,
@@ -18,6 +21,40 @@ const INTENT_ID = '22222222-2222-4222-8222-222222222222';
 const SESSION_EXPIRY = '2026-08-30T08:00:00.000Z';
 
 describe('company claim contracts', () => {
+  it('publishes a bounded access-review query and privacy-safe pending-request page', () => {
+    expect(companyAccessReviewListQuerySchema.parse({})).toEqual({ limit: 50 });
+    expect(
+      companyAccessReviewListQuerySchema.parse({ limit: '100', cursor: 'opaque_cursor' }),
+    ).toEqual({
+      cursor: 'opaque_cursor',
+      limit: 100,
+    });
+    expect(() => companyAccessReviewListQuerySchema.parse({ limit: 101 })).toThrow();
+
+    const item = companyAccessReviewItemSchema.parse({
+      companyId: COMPANY_ID,
+      expiresAt: '2026-09-06T00:00:00.000Z',
+      id: '33333333-3333-4333-8333-333333333333',
+      intent: { id: INTENT_ID, territoryExternalRef: 'ai-coding' },
+      requestedAt: '2026-08-30T00:00:00.000Z',
+      requesterEmail: 'requester@example.com',
+      status: 'pending',
+      contactId: 'not-exposed',
+    });
+    expect(item).toEqual({
+      companyId: COMPANY_ID,
+      expiresAt: '2026-09-06T00:00:00.000Z',
+      id: '33333333-3333-4333-8333-333333333333',
+      intent: { id: INTENT_ID, territoryExternalRef: 'ai-coding' },
+      requestedAt: '2026-08-30T00:00:00.000Z',
+      requesterEmail: 'requester@example.com',
+      status: 'pending',
+    });
+    expect(
+      companyAccessReviewPageSchema.parse({ items: [item], nextCursor: 'next_page_cursor' }),
+    ).toMatchObject({ items: [item], nextCursor: 'next_page_cursor' });
+  });
+
   it('accepts a personal contact email for a different company domain', () => {
     expect(
       companyClaimRequestSchema.parse({

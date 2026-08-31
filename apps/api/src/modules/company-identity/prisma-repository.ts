@@ -29,6 +29,8 @@ import type {
   UpdateTakeoverPreparationInput,
   VerificationExchangeResult,
   AccessDecisionRecordResult,
+  ListPendingAccessRequestsInput,
+  PendingAccessRequestReviewPage,
 } from './repository.js';
 
 type IdentityPrismaClient = PrismaClient | Prisma.TransactionClient;
@@ -882,6 +884,55 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
       include: { contact: true },
     });
     return grants.map((grant) => ({ contactId: grant.contactId, email: grant.contact.email }));
+  }
+
+  async listPendingAccessRequests(
+    input: ListPendingAccessRequestsInput,
+  ): Promise<PendingAccessRequestReviewPage> {
+    const records = await this.prisma.companyAccessRequest.findMany({
+      where: {
+        companyId: input.companyId,
+        expiresAt: { gt: input.now },
+        status: 'PENDING',
+        ...(input.cursor === undefined
+          ? {}
+          : {
+              OR: [
+                { requestedAt: { gt: input.cursor.requestedAt } },
+                {
+                  id: { gt: input.cursor.id },
+                  requestedAt: input.cursor.requestedAt,
+                },
+              ],
+            }),
+      },
+      orderBy: [{ requestedAt: 'asc' }, { id: 'asc' }],
+      select: {
+        companyId: true,
+        contact: { select: { email: true } },
+        expiresAt: true,
+        id: true,
+        requestedAt: true,
+        takeoverIntent: { select: { id: true, territoryExternalRef: true } },
+      },
+      take: input.limit + 1,
+    });
+    const items = records.slice(0, input.limit).map((record) => ({
+      companyId: record.companyId,
+      contactEmail: record.contact.email,
+      expiresAt: record.expiresAt,
+      id: record.id,
+      ...(record.takeoverIntent === null ? {} : { intent: record.takeoverIntent }),
+      requestedAt: record.requestedAt,
+    }));
+    const last = items.at(-1);
+    return {
+      items,
+      nextCursor:
+        records.length > input.limit && last !== undefined
+          ? { id: last.id, requestedAt: last.requestedAt }
+          : null,
+    };
   }
 
   async prepareAccessRequestNotifications(input: PrepareAccessRequestNotificationsInput) {

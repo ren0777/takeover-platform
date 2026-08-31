@@ -183,6 +183,29 @@ export type AccessDecisionRecordResult = {
 
 export type ActiveManagerContact = { contactId: string; email: string };
 
+export type AccessRequestReviewCursor = { id: string; requestedAt: Date };
+
+export type PendingAccessRequestReviewRecord = {
+  companyId: string;
+  contactEmail: string;
+  expiresAt: Date;
+  id: string;
+  intent?: { id: string; territoryExternalRef: string };
+  requestedAt: Date;
+};
+
+export type PendingAccessRequestReviewPage = {
+  items: PendingAccessRequestReviewRecord[];
+  nextCursor: AccessRequestReviewCursor | null;
+};
+
+export type ListPendingAccessRequestsInput = {
+  companyId: string;
+  cursor?: AccessRequestReviewCursor;
+  limit: number;
+  now: Date;
+};
+
 export type PrepareAccessRequestNotificationsInput = {
   accessRequestId: string;
   challenges: Array<{
@@ -288,6 +311,9 @@ export interface CompanyIdentityRepository {
     input: IssueManagementChallengeInput,
   ): Promise<IssuedManagementChallenge | null>;
   listActiveManagerContacts(companyId: string): Promise<ActiveManagerContact[]>;
+  listPendingAccessRequests(
+    input: ListPendingAccessRequestsInput,
+  ): Promise<PendingAccessRequestReviewPage>;
   markChallengeDelivery(challengeId: string, status: 'SENT' | 'FAILED'): Promise<void>;
   prepareAccessRequestNotifications(
     input: PrepareAccessRequestNotificationsInput,

@@ -100,6 +100,13 @@ Phase 1 models: `Company`, `CompanyContact`, `CompanyVerification`, `EmailVerifi
 
 ## Agent Handoffs
 
+### Interim Codex → Claude — manager access-request discovery
+
+- New shared exports: `companyAccessReviewListQuerySchema`, `CompanyAccessReviewListQuery`, `companyAccessReviewItemSchema`, `CompanyAccessReviewItem`, `companyAccessReviewPageSchema`, and `CompanyAccessReviewPage`.
+- `GET /api/company-management/access-requests` accepts optional opaque `cursor` and `limit` (default `50`, maximum `100`), and returns `{ items, nextCursor }` in the standard success envelope.
+- The endpoint resolves the company only from the opaque management-session cookie. It needs no CSRF cookie/header because it is read-only, but rejects missing, expired, revoked, or cross-company session authority.
+- Each item contains only `id`, `companyId`, `requesterEmail`, `status: 'pending'`, `requestedAt`, `expiresAt`, and optional `intent: { id, territoryExternalRef }`; it excludes contact IDs, grants, sessions, verification evidence, and quote amounts.
+
 ### Codex → Claude
 
 Authoritative `@takeover/shared` exports safe to consume now:

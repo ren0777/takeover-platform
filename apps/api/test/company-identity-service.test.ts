@@ -78,6 +78,7 @@ function createHarness(
     ),
     issueContactVerificationChallenge: vi.fn(async () => null),
     issueManagementChallenge: vi.fn(async () => null),
+    listPendingAccessRequests: vi.fn(async () => ({ items: [], nextCursor: null })),
     listActiveManagerContacts: vi.fn(async () => []),
     markChallengeDelivery: vi.fn(async () => undefined),
     prepareAccessRequestNotifications: vi.fn(async () => []),
@@ -323,6 +324,57 @@ describe('contact verification exchange service', () => {
 });
 
 describe('verification reissue and scoped session context', () => {
+  it('lists pending access requests from the session company without requiring CSRF', async () => {
+    const { repository, service } = createHarness();
+    const config = parseApiConfig({ NODE_ENV: 'test' }).identity;
+    const tokens = createOpaqueTokenService(config.tokenHmacSecret);
+    const session = tokens.issueSessionToken();
+    vi.mocked(repository.resolveManagementSession).mockResolvedValueOnce({
+      company,
+      companyId: company.id,
+      contactId: intent.contactId,
+      csrfDigest: digest('unused-csrf-digest'),
+      expiresAt: new Date('2026-08-30T21:00:00.000Z'),
+      grantId: '55555555-5555-4555-8555-555555555555',
+      sessionId: '66666666-6666-4666-8666-666666666666',
+      verificationLevels: ['CONTACT_VERIFIED'],
+    });
+    vi.mocked(repository.listPendingAccessRequests).mockResolvedValueOnce({
+      items: [
+        {
+          companyId: company.id,
+          contactEmail: 'requester@example.com',
+          expiresAt: new Date('2026-09-06T13:00:00.000Z'),
+          id: '77777777-7777-4777-8777-777777777777',
+          intent: { id: intent.id, territoryExternalRef: 'ai-coding' },
+          requestedAt: new Date('2026-08-30T12:00:00.000Z'),
+        },
+      ],
+      nextCursor: null,
+    });
+
+    await expect(service.listAccessRequests({}, session.rawToken)).resolves.toEqual({
+      items: [
+        {
+          companyId: company.id,
+          expiresAt: '2026-09-06T13:00:00.000Z',
+          id: '77777777-7777-4777-8777-777777777777',
+          intent: { id: intent.id, territoryExternalRef: 'ai-coding' },
+          requestedAt: '2026-08-30T12:00:00.000Z',
+          requesterEmail: 'requester@example.com',
+          status: 'pending',
+        },
+      ],
+      nextCursor: null,
+    });
+    expect(repository.listPendingAccessRequests).toHaveBeenCalledWith({
+      companyId: company.id,
+      cursor: undefined,
+      limit: 50,
+      now,
+    });
+  });
+
   it('returns the same accepted result when a claim is unknown', async () => {
     const { emailProvider, service } = createHarness();
 

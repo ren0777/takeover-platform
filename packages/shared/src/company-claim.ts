@@ -18,6 +18,40 @@ export const territoryExternalRefSchema = z
   .max(128)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
 
+const opaqueCursorSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .regex(/^[A-Za-z0-9_-]+$/);
+
+export const companyAccessReviewListQuerySchema = z.object({
+  cursor: opaqueCursorSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+export type CompanyAccessReviewListQuery = z.infer<typeof companyAccessReviewListQuerySchema>;
+
+export const companyAccessReviewItemSchema = z.object({
+  id: opaqueIdSchema,
+  companyId: opaqueIdSchema,
+  requesterEmail: z.email(),
+  status: z.literal('pending'),
+  requestedAt: isoDateTimeSchema,
+  expiresAt: isoDateTimeSchema,
+  intent: z
+    .object({
+      id: opaqueIdSchema,
+      territoryExternalRef: territoryExternalRefSchema,
+    })
+    .optional(),
+});
+export type CompanyAccessReviewItem = z.infer<typeof companyAccessReviewItemSchema>;
+
+export const companyAccessReviewPageSchema = z.object({
+  items: z.array(companyAccessReviewItemSchema),
+  nextCursor: opaqueCursorSchema.nullable(),
+});
+export type CompanyAccessReviewPage = z.infer<typeof companyAccessReviewPageSchema>;
+
 export const quoteSnapshotSchema = z
   .object({
     territoryVersion: z.string().min(1).max(128),

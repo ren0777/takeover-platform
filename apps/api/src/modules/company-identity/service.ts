@@ -1,5 +1,6 @@
 import {
   accessDecisionRequestSchema,
+  companyAccessReviewListQuerySchema,
   companyClaimRequestSchema,
   emailVerificationRequestSchema,
   emailTokenExchangeRequestSchema,
@@ -10,6 +11,7 @@ import {
   type AccessDecisionResult,
   type AcceptedDelivery,
   type Company,
+  type CompanyAccessReviewPage,
   type CompanyClaimRequest,
   type CompanyClaimResult,
   type EmailTokenExchangeRequest,
@@ -22,6 +24,7 @@ import {
   type TakeoverIntent,
   type TakeoverPreparationRequest,
 } from '@takeover/shared';
+import { z } from 'zod';
 import type { IdentityConfig } from '../../config/env.js';
 import type { EmailProvider } from '../../integrations/email/email-provider.js';
 import type { OpaqueTokenService } from '../../security/opaque-token.js';
@@ -167,6 +170,30 @@ function parseLinkToken(rawToken: string): { secret: string; selector: string } 
     return null;
   }
   return { secret, selector };
+}
+
+const accessReviewCursorSchema = z.object({
+  id: z.uuid(),
+  requestedAt: z.string().datetime({ offset: true }),
+});
+
+function decodeAccessReviewCursor(cursor: string): { id: string; requestedAt: Date } {
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const parsed = accessReviewCursorSchema.parse(JSON.parse(decoded));
+    return { id: parsed.id, requestedAt: new Date(parsed.requestedAt) };
+  } catch {
+    const invalidCursor = accessReviewCursorSchema.safeParse(null);
+    if (!invalidCursor.success) throw invalidCursor.error;
+    throw new Error('Unreachable invalid cursor state');
+  }
+}
+
+function encodeAccessReviewCursor(cursor: { id: string; requestedAt: Date }): string {
+  return Buffer.from(
+    JSON.stringify({ id: cursor.id, requestedAt: cursor.requestedAt.toISOString() }),
+    'utf8',
+  ).toString('base64url');
 }
 
 export function createCompanyIdentityService(dependencies: CompanyIdentityServiceDependencies) {
@@ -540,6 +567,36 @@ export function createCompanyIdentityService(dependencies: CompanyIdentityServic
         verificationLevels: authority.verificationLevels.map(
           (level) => level.toLowerCase() as ManagementContext['verificationLevels'][number],
         ),
+      };
+    },
+
+    async listAccessRequests(
+      rawQuery: unknown,
+      sessionToken: string,
+    ): Promise<CompanyAccessReviewPage> {
+      const query = companyAccessReviewListQuerySchema.parse(rawQuery);
+      const authority = await dependencies.repository.resolveManagementSession(
+        dependencies.tokens.digestSessionToken(sessionToken),
+        dependencies.clock.now(),
+      );
+      if (authority === null) throw new ManagementAuthorizationRequiredError();
+      const page = await dependencies.repository.listPendingAccessRequests({
+        companyId: authority.companyId,
+        ...(query.cursor === undefined ? {} : { cursor: decodeAccessReviewCursor(query.cursor) }),
+        limit: query.limit,
+        now: dependencies.clock.now(),
+      });
+      return {
+        items: page.items.map((item) => ({
+          companyId: item.companyId,
+          expiresAt: item.expiresAt.toISOString(),
+          id: item.id,
+          ...(item.intent === undefined ? {} : { intent: item.intent }),
+          requestedAt: item.requestedAt.toISOString(),
+          requesterEmail: item.contactEmail,
+          status: 'pending',
+        })),
+        nextCursor: page.nextCursor === null ? null : encodeAccessReviewCursor(page.nextCursor),
       };
     },
 

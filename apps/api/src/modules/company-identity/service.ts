@@ -28,7 +28,12 @@ import { z } from 'zod';
 import type { IdentityConfig } from '../../config/env.js';
 import type { EmailProvider } from '../../integrations/email/email-provider.js';
 import type { OpaqueTokenService } from '../../security/opaque-token.js';
-import { normalizeCompanyName, normalizeCompanyWebsite, normalizeContactEmail } from './domain.js';
+import {
+  normalizeCompanyName,
+  normalizeCompanyWebsite,
+  normalizeContactEmail,
+  normalizeIpAddress,
+} from './domain.js';
 import type {
   CompanyIdentityRepository,
   CompanyRecord,
@@ -632,6 +637,11 @@ export function createCompanyIdentityService(dependencies: CompanyIdentityServic
       const request = managementLinkRequestSchema.parse(rawRequest);
       const now = dependencies.clock.now();
       const contactEmail = normalizeContactEmail(request.contactEmail);
+      const ipAddress = normalizeIpAddress(context.ipAddress);
+      const locator =
+        'companyWebsiteUrl' in request
+          ? { normalizedWebsite: normalizeCompanyWebsite(request.companyWebsiteUrl) }
+          : { normalizedSlug: request.companySlug };
       await enforceRateLimit(
         `management-link-email:${contactEmail}`,
         dependencies.config.rateLimits.linkIssuancePerEmailPerHour,
@@ -639,15 +649,25 @@ export function createCompanyIdentityService(dependencies: CompanyIdentityServic
         now,
       );
       await enforceRateLimit(
-        `management-link-ip:${context.ipAddress}`,
+        `management-link-ip:${ipAddress}`,
         dependencies.config.rateLimits.linkIssuancePerIpPerHour,
+        3_600,
+        now,
+      );
+      await enforceRateLimit(
+        `management-link-locator:${
+          'normalizedWebsite' in locator
+            ? `website:${locator.normalizedWebsite}`
+            : `slug:${locator.normalizedSlug}`
+        }`,
+        dependencies.config.rateLimits.linkIssuancePerEmailPerHour,
         3_600,
         now,
       );
       const issued = dependencies.tokens.issueLinkToken();
       const challenge = await dependencies.repository.issueManagementChallenge({
-        companyId: request.companyId,
         expiresAt: addSeconds(now, dependencies.config.managementLinkTtlSeconds),
+        locator,
         normalizedEmail: contactEmail,
         now,
         requestId: context.requestId,

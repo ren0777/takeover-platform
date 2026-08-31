@@ -132,7 +132,16 @@ export type ManagementSessionAuthority = ManagementAuthority & {
   verificationLevels: Array<'CONTACT_VERIFIED' | 'DOMAIN_VERIFIED' | 'MANUALLY_VERIFIED'>;
 };
 
-export type IssueManagementChallengeInput = IssueContactVerificationChallengeInput;
+export type ManagementLinkCompanyLocator =
+  | { normalizedSlug: string }
+  | { normalizedWebsite: string };
+
+export type IssueManagementChallengeInput = Omit<
+  IssueContactVerificationChallengeInput,
+  'companyId'
+> & {
+  locator: ManagementLinkCompanyLocator;
+};
 
 export type IssuedManagementChallenge = IssuedContactVerificationChallenge;
 

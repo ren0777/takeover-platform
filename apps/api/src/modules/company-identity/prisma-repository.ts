@@ -267,16 +267,24 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
     return this.prisma.$transaction(async (transaction) => {
       const grant = await transaction.companyManagementGrant.findFirst({
         where: {
-          companyId: input.companyId,
           revokedAt: null,
           status: 'ACTIVE',
+          company: {
+            ...('normalizedWebsite' in input.locator
+              ? { normalizedWebsite: input.locator.normalizedWebsite }
+              : { slug: input.locator.normalizedSlug }),
+            OR: [
+              { status: 'ACTIVE' },
+              { status: 'SUSPENDED' },
+              { expiresAt: { gt: input.now }, status: 'DRAFT' },
+            ],
+          },
           contact: {
             emailVerifiedAt: { not: null },
             normalizedEmail: input.normalizedEmail,
             revokedAt: null,
             verifications: {
               some: {
-                companyId: input.companyId,
                 level: 'CONTACT_VERIFIED',
                 status: 'VERIFIED',
               },
@@ -286,10 +294,19 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         include: { company: true, contact: true },
       });
       if (grant === null) return null;
+      const verification = await transaction.companyVerification.findFirst({
+        where: {
+          companyId: grant.companyId,
+          contactId: grant.contactId,
+          level: 'CONTACT_VERIFIED',
+          status: 'VERIFIED',
+        },
+      });
+      if (verification === null) return null;
 
       await transaction.emailVerificationChallenge.updateMany({
         where: {
-          companyId: input.companyId,
+          companyId: grant.companyId,
           consumedAt: null,
           contactId: grant.contactId,
           purpose: 'MANAGEMENT_LINK',
@@ -299,7 +316,7 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
       });
       const challenge = await transaction.emailVerificationChallenge.create({
         data: {
-          companyId: input.companyId,
+          companyId: grant.companyId,
           contactId: grant.contactId,
           expiresAt: input.expiresAt,
           purpose: 'MANAGEMENT_LINK',
@@ -311,7 +328,7 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         action: 'company_management_link.issued',
         actorId: grant.contactId,
         actorType: 'CONTACT',
-        companyId: input.companyId,
+        companyId: grant.companyId,
         ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
         targetId: challenge.id,
         targetType: 'email_verification_challenge',

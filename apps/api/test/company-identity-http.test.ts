@@ -325,15 +325,27 @@ describe('company identity HTTP surface', () => {
     );
   });
 
-  it('issues and exchanges management links without exposing the session secret', async () => {
+  it('accepts website and slug management-link locators without exposing a match', async () => {
     const harness = buildIdentityApp();
-    const issued = await harness.app.inject({
+    const matched = await harness.app.inject({
       method: 'POST',
       url: '/api/company-management-links',
-      payload: { companyId: company.id, contactEmail: 'founder@gmail.com' },
+      payload: { companyWebsiteUrl: company.websiteUrl, contactEmail: 'founder@gmail.com' },
     });
-    expect(issued.statusCode).toBe(202);
-    expect(issued.json().data).toEqual({ accepted: true });
+    const unmatched = await harness.app.inject({
+      method: 'POST',
+      url: '/api/company-management-links',
+      payload: { companySlug: 'does-not-exist', contactEmail: 'unknown@gmail.com' },
+    });
+    expect(matched.statusCode).toBe(unmatched.statusCode);
+    expect(matched.json().data).toEqual({ accepted: true });
+    expect(unmatched.json().data).toEqual(matched.json().data);
+    expect(matched.json().meta).toEqual({ requestId: expect.any(String) });
+    expect(unmatched.json().meta).toEqual({ requestId: expect.any(String) });
+    expect(harness.service.requestManagementLink).toHaveBeenCalledWith(
+      { companyWebsiteUrl: company.websiteUrl, contactEmail: 'founder@gmail.com' },
+      expect.objectContaining({ requestId: expect.any(String) }),
+    );
 
     const exchanged = await harness.app.inject({
       method: 'POST',

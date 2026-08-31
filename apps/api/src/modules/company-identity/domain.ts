@@ -69,6 +69,22 @@ export function normalizeContactEmail(input: string): string {
   return z.email().parse(value);
 }
 
+export function normalizeIpAddress(input: string): string {
+  const value = input.trim();
+  const version = isIP(value);
+  if (version === 4) return new URL(`http://${value}`).hostname;
+  if (version === 6) {
+    const normalized = new URL(`http://[${value}]`).hostname.slice(1, -1);
+    const mappedIpv4 = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (mappedIpv4 === null) return normalized;
+    const high = Number.parseInt(mappedIpv4[1] ?? '0', 16);
+    const low = Number.parseInt(mappedIpv4[2] ?? '0', 16);
+    const ipv4 = high * 65_536 + low;
+    return `${ipv4 >>> 24}.${(ipv4 >>> 16) & 255}.${(ipv4 >>> 8) & 255}.${ipv4 & 255}`;
+  }
+  return value.toLowerCase();
+}
+
 export function normalizeCompanyName(input: string): {
   displayName: string;
   normalizedName: string;

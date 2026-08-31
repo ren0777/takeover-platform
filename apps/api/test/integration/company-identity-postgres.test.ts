@@ -19,7 +19,10 @@ async function resetIdentityTables(): Promise<void> {
     RESTART IDENTITY CASCADE`);
 }
 
-async function createCompany(status: 'DRAFT' | 'ACTIVE', normalizedWebsite: string) {
+async function createCompany(
+  status: 'DRAFT' | 'ACTIVE' | 'SUSPENDED' | 'ARCHIVED',
+  normalizedWebsite: string,
+) {
   return prisma.company.create({
     data: {
       expiresAt: status === 'DRAFT' ? new Date(Date.now() + 86_400_000) : null,
@@ -564,8 +567,9 @@ describe('Phase 1 PostgreSQL invariants', () => {
     });
   });
 
-  it('issues management links only for active verified same-company grants', async () => {
+  it('resolves management links by website or slug only for eligible company-scoped grants', async () => {
     const company = await createCompany('ACTIVE', 'https://acme.example/');
+    await prisma.company.update({ where: { id: company.id }, data: { slug: 'acme-tools' } });
     const contact = await prisma.companyContact.create({
       data: {
         email: 'founder@gmail.com',
@@ -590,24 +594,141 @@ describe('Phase 1 PostgreSQL invariants', () => {
 
     await expect(
       repository.issueManagementChallenge({
-        companyId: company.id,
         expiresAt: new Date('2026-08-30T13:15:00.000Z'),
+        locator: { normalizedWebsite: company.normalizedWebsite },
         normalizedEmail: 'unknown@gmail.com',
         now: new Date('2026-08-30T13:00:00.000Z'),
         selector: 'management-unknown',
         tokenDigest: new Uint8Array(32).fill(1),
       }),
     ).resolves.toBeNull();
+    const otherCompany = await createCompany('ACTIVE', 'https://other-acme.example/');
+    const crossVerifiedContact = await prisma.companyContact.create({
+      data: {
+        email: 'cross-verified@gmail.com',
+        emailVerifiedAt: new Date('2026-08-30T13:00:00.000Z'),
+        normalizedEmail: 'cross-verified@gmail.com',
+      },
+    });
+    await prisma.companyVerification.create({
+      data: {
+        companyId: otherCompany.id,
+        contactId: crossVerifiedContact.id,
+        level: 'CONTACT_VERIFIED',
+        source: 'email_challenge',
+        status: 'VERIFIED',
+        verifiedAt: new Date('2026-08-30T13:00:00.000Z'),
+      },
+    });
+    await prisma.companyManagementGrant.create({
+      data: {
+        companyId: company.id,
+        contactId: crossVerifiedContact.id,
+        source: 'INITIAL_CONTACT',
+      },
+    });
     await expect(
       repository.issueManagementChallenge({
-        companyId: company.id,
         expiresAt: new Date('2026-08-30T13:15:00.000Z'),
+        locator: { normalizedWebsite: company.normalizedWebsite },
+        normalizedEmail: crossVerifiedContact.normalizedEmail,
+        now: new Date('2026-08-30T13:00:00.000Z'),
+        selector: 'management-cross-company-verification',
+        tokenDigest: new Uint8Array(32).fill(4),
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      repository.issueManagementChallenge({
+        expiresAt: new Date('2026-08-30T13:15:00.000Z'),
+        locator: { normalizedWebsite: company.normalizedWebsite },
         normalizedEmail: 'founder@gmail.com',
         now: new Date('2026-08-30T13:00:00.000Z'),
         selector: 'management-known',
         tokenDigest: new Uint8Array(32).fill(2),
       }),
     ).resolves.toMatchObject({ companyName: 'Acme', toEmail: 'founder@gmail.com' });
+    await expect(
+      repository.issueManagementChallenge({
+        expiresAt: new Date('2026-08-30T13:15:00.000Z'),
+        locator: { normalizedSlug: 'acme-tools' },
+        normalizedEmail: 'founder@gmail.com',
+        now: new Date('2026-08-30T13:00:00.000Z'),
+        selector: 'management-by-slug',
+        tokenDigest: new Uint8Array(32).fill(3),
+      }),
+    ).resolves.toMatchObject({ companyName: 'Acme', toEmail: 'founder@gmail.com' });
+  });
+
+  it('returns the same accepted envelope for matching, unknown, and ineligible management discovery', async () => {
+    const active = await createCompany('ACTIVE', 'https://active-management.example/');
+    await prisma.company.update({ where: { id: active.id }, data: { slug: 'active-management' } });
+    const archived = await createCompany('ARCHIVED', 'https://archived-management.example/');
+    const addVerifiedManager = async (companyId: string, email: string) => {
+      const contact = await prisma.companyContact.create({
+        data: { email, emailVerifiedAt: new Date(), normalizedEmail: email },
+      });
+      await prisma.companyVerification.create({
+        data: {
+          companyId,
+          contactId: contact.id,
+          level: 'CONTACT_VERIFIED',
+          source: 'email_challenge',
+          status: 'VERIFIED',
+          verifiedAt: new Date(),
+        },
+      });
+      await prisma.companyManagementGrant.create({
+        data: { companyId, contactId: contact.id, source: 'INITIAL_CONTACT' },
+      });
+    };
+    await addVerifiedManager(active.id, 'active-manager@example.com');
+    await addVerifiedManager(archived.id, 'archived-manager@example.com');
+
+    const app = buildApp({
+      config: parseApiConfig({
+        DATABASE_URL: process.env.TEST_DATABASE_URL,
+        EMAIL_PROVIDER: 'development',
+        NODE_ENV: 'test',
+      }),
+      logger: false,
+    });
+    try {
+      const responses = await Promise.all([
+        app.inject({
+          method: 'POST',
+          url: '/api/company-management-links',
+          payload: {
+            companyWebsiteUrl: active.websiteUrl,
+            contactEmail: 'active-manager@example.com',
+          },
+        }),
+        app.inject({
+          method: 'POST',
+          url: '/api/company-management-links',
+          payload: { companySlug: 'unknown-company', contactEmail: 'unknown@example.com' },
+        }),
+        app.inject({
+          method: 'POST',
+          url: '/api/company-management-links',
+          payload: {
+            companyWebsiteUrl: archived.websiteUrl,
+            contactEmail: 'archived-manager@example.com',
+          },
+        }),
+      ]);
+
+      for (const response of responses) {
+        expect(response.statusCode).toBe(202);
+        expect(response.json()).toEqual({
+          data: { accepted: true },
+          meta: { requestId: expect.any(String) },
+        });
+        expect(response.body).not.toContain('active-management');
+        expect(response.body).not.toContain('archived-management');
+      }
+    } finally {
+      await app.close();
+    }
   });
 
   it('consumes a management link once and replaces prior sessions for its grant', async () => {
@@ -644,8 +765,8 @@ describe('Phase 1 PostgreSQL invariants', () => {
     const repository = new PrismaCompanyIdentityRepository(prisma);
     const linkDigest = new Uint8Array(32).fill(5);
     const issued = await repository.issueManagementChallenge({
-      companyId: company.id,
       expiresAt: new Date('2026-08-30T13:15:00.000Z'),
+      locator: { normalizedWebsite: company.normalizedWebsite },
       normalizedEmail: contact.normalizedEmail,
       now: new Date('2026-08-30T13:00:00.000Z'),
       selector: 'management-exchange',

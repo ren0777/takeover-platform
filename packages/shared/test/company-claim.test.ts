@@ -11,6 +11,7 @@ import {
   companyAccessReviewPageSchema,
   emailTokenExchangeRequestSchema,
   managementContextSchema,
+  managementLinkRequestSchema,
   recoveryRequestResultSchema,
   takeoverIntentSchema,
   takeoverPreparationRequestSchema,
@@ -144,6 +145,83 @@ describe('company claim contracts', () => {
       token: 'selector.secret-material',
     });
     expect(() => emailTokenExchangeRequestSchema.parse({ token: 'short' })).toThrow();
+  });
+
+  it('accepts exactly one public management-link locator and normalizes a slug', () => {
+    expect(
+      managementLinkRequestSchema.parse({
+        companyWebsiteUrl: 'https://acme.example/',
+        contactEmail: 'founder@example.com',
+      }),
+    ).toEqual({
+      companyWebsiteUrl: 'https://acme.example/',
+      contactEmail: 'founder@example.com',
+    });
+    expect(
+      managementLinkRequestSchema.parse({
+        companyWebsiteUrl: 'https://8.8.8.8/',
+        contactEmail: 'founder@example.com',
+      }),
+    ).toMatchObject({ companyWebsiteUrl: 'https://8.8.8.8/' });
+    expect(
+      managementLinkRequestSchema.parse({
+        companySlug: '  Acme-Tools  ',
+        contactEmail: 'founder@example.com',
+      }),
+    ).toEqual({ companySlug: 'acme-tools', contactEmail: 'founder@example.com' });
+
+    expect(() =>
+      managementLinkRequestSchema.parse({ contactEmail: 'founder@example.com' }),
+    ).toThrow();
+    expect(() =>
+      managementLinkRequestSchema.parse({
+        companyId: COMPANY_ID,
+        contactEmail: 'founder@example.com',
+      }),
+    ).toThrow();
+    expect(() =>
+      managementLinkRequestSchema.parse({
+        companySlug: 'acme-tools',
+        companyWebsiteUrl: 'https://acme.example/',
+        contactEmail: 'founder@example.com',
+      }),
+    ).toThrow();
+    expect(() =>
+      managementLinkRequestSchema.parse({
+        companyWebsiteUrl: 'http://acme.example/',
+        contactEmail: 'founder@example.com',
+      }),
+    ).toThrow();
+    expect(() =>
+      managementLinkRequestSchema.parse({
+        companyWebsiteUrl: 'https://acme.example/?search=not-a-locator',
+        contactEmail: 'founder@example.com',
+      }),
+    ).toThrow();
+    expect(() =>
+      managementLinkRequestSchema.parse({
+        companyWebsiteUrl: 'https://user:secret@acme.example/',
+        contactEmail: 'founder@example.com',
+      }),
+    ).toThrow();
+    expect(() =>
+      managementLinkRequestSchema.parse({
+        companyWebsiteUrl: 'https://localhost/',
+        contactEmail: 'founder@example.com',
+      }),
+    ).toThrow();
+    expect(() =>
+      managementLinkRequestSchema.parse({
+        companyWebsiteUrl: 'https://127.0.0.1/',
+        contactEmail: 'founder@example.com',
+      }),
+    ).toThrow();
+    expect(() =>
+      managementLinkRequestSchema.parse({
+        companySlug: 'not a slug',
+        contactEmail: 'founder@example.com',
+      }),
+    ).toThrow();
   });
 
   it('publishes approved access and intent states only', () => {

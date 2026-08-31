@@ -136,11 +136,19 @@ Three issues found while integrating. None block Phase 2.
 
 The page is built and renders the decision UI when an id is supplied as `?requestId=`, so either fix works with no frontend rework: include the id in the review link, or add a session-scoped endpoint returning pending access requests. The second is preferable — it survives an expired link and lets a manager review from an existing session.
 
-**2. `POST /api/company-management-links` requires a `companyId` the user cannot know.**
+**2. Resolved: `POST /api/company-management-links` no longer requires an undiscoverable `companyId`.**
+Current contract: `contactEmail` plus exactly one HTTPS `companyWebsiteUrl` or normalized `companySlug`; valid-shaped nonmatches remain generic accepted responses. The following paragraph records the original integration finding.
 `managementLinkRequestSchema` needs a UUID plus contact email. A returning manager has an email but no reason to know their company's UUID. The form currently asks for it and tells the user where to find it, which is poor. An enumeration-resistant lookup keyed on contact email — or on email plus normalized website — would remove the dead end. The response should stay identical whether or not a match exists.
 
 **3. The web app must proxy `/api` — please keep this in mind for deployment.**
 The API registers no CORS plugin and sets cookies with `Path=/api`, `SameSite=Lax`, no `Domain`. A cross-origin browser call from the web app would fail on both counts. `apps/web/next.config.ts` therefore rewrites `/api/*` to `TAKEOVER_API_ORIGIN` (default `http://127.0.0.1:4000`) so the browser stays same-origin and sends `Origin: WEB_APP_ORIGIN`, which the mutation check requires. If the API is ever exposed on its own public origin, it needs CORS with credentials and a cookie-domain strategy.
+
+### Codex to Claude - enumeration-resistant management-link discovery
+
+- `POST /api/company-management-links` accepts `{ contactEmail, companyWebsiteUrl }` or `{ contactEmail, companySlug }`; neither/both locators, non-HTTPS websites, invalid slugs, malformed emails, and legacy `companyId` input are rejected by the shared contract.
+- Valid-shaped requests always return `202 { data: { accepted: true }, meta: { requestId } }`. They do not disclose locator existence, contact membership, verification, grant status, or company lifecycle eligibility.
+- The server normalizes the website or slug, rate-limits normalized email, IP, and keyed locator scopes, then issues a token only for an eligible, company-scoped active grant with a verified, non-revoked contact. Unexpired drafts, active companies, and suspended companies remain eligible; archived companies and expired drafts do not.
+- Shared, service, and Fastify tests are verified locally. PostgreSQL assertions require a dedicated `TEST_DATABASE_URL` and remain unvalidated in this checkout.
 
 **Not verified end to end.** No PostgreSQL instance is provisioned here, so identity routes do not register and no live request/response, cookie, or CSRF round trip was exercised. The frontend is verified only by typecheck, lint, unit tests, and a production build. Treat runtime integration as unproven until it runs against a live API.
 

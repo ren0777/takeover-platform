@@ -1,15 +1,23 @@
-import { getDatabaseClient, type PrismaClient } from '@takeover/database';
+import { getDatabaseClient, Prisma, type PrismaClient } from '@takeover/database';
 import { territoryVisualMetadataSchema } from '@takeover/shared';
-import type { Prisma } from '@takeover/database';
-import { TerritoryDataIntegrityError, type PublicCompanyRecord } from './domain.js';
+import {
+  OwnershipConflictError,
+  StaleTerritoryVersionError,
+  TerritoryDataIntegrityError,
+  TerritoryDisabledError,
+  type PublicCompanyRecord,
+} from './domain.js';
 import type {
   CategoryRecord,
   CursorPage,
   CursorQuery,
   HistoryCursor,
   OwnershipRecord,
+  ReplaceActiveOwnershipInput,
+  ReplaceActiveOwnershipResult,
   TerritoryCursor,
   TerritoryListQueryRecord,
+  TerritoryOwnershipRepository,
   TerritoryRecord,
   TerritoryRepository,
 } from './repository.js';
@@ -142,6 +150,116 @@ function territoryInclude(historyTake: number) {
       take: historyTake,
     },
   } as const;
+}
+
+type LockedTerritoryRow = {
+  availabilityStatus: 'ACTIVE' | 'DISABLED';
+  id: string;
+  version: bigint;
+};
+
+export class TerritoryOwnershipTerritoryNotFoundError extends Error {
+  readonly code = 'TERRITORY_NOT_FOUND';
+
+  constructor() {
+    super('Territory was not found');
+    this.name = 'TerritoryOwnershipTerritoryNotFoundError';
+  }
+}
+
+function isOwnershipConstraintError(error: unknown): boolean {
+  if (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    ['P2000', 'P2002', 'P2003', 'P2004'].includes(error.code)
+  ) {
+    return true;
+  }
+  if (!(error instanceof Prisma.PrismaClientUnknownRequestError)) return false;
+
+  return [
+    'invalid territory ownership end transition',
+    'territory ownership history is immutable',
+    'territory_ownerships_company_id_fkey',
+    'territory_ownerships_no_overlap',
+    'territory_ownerships_one_active_per_territory',
+    'territory_ownerships_reign_check',
+    'territory_ownerships_territory_id_fkey',
+    'territory_ownerships_territory_id_territory_version_key',
+    'territory_ownerships_version_check',
+  ].some((constraint) => error.message.includes(constraint));
+}
+
+export class PrismaTerritoryOwnershipRepository implements TerritoryOwnershipRepository {
+  constructor(private readonly transaction: Prisma.TransactionClient) {}
+
+  async replaceActiveOwnership(
+    input: ReplaceActiveOwnershipInput,
+  ): Promise<ReplaceActiveOwnershipResult> {
+    const [territory] = await this.transaction.$queryRaw<LockedTerritoryRow[]>(Prisma.sql`
+      SELECT
+        "id",
+        "availability_status" AS "availabilityStatus",
+        "version"
+      FROM "territories"
+      WHERE "id" = ${input.territoryId}::uuid
+      FOR UPDATE
+    `);
+    if (territory === undefined) throw new TerritoryOwnershipTerritoryNotFoundError();
+    if (territory.availabilityStatus === 'DISABLED') throw new TerritoryDisabledError();
+    if (territory.version !== input.expectedTerritoryVersion) {
+      throw new StaleTerritoryVersionError();
+    }
+
+    const activeOwnership = await this.transaction.territoryOwnership.findFirst({
+      select: { companyId: true, id: true },
+      where: { endedAt: null, territoryId: territory.id },
+    });
+    if (activeOwnership?.companyId === input.newOwnerCompanyId) {
+      throw new OwnershipConflictError();
+    }
+
+    const territoryVersion = input.expectedTerritoryVersion + 1n;
+    try {
+      if (activeOwnership !== null) {
+        const ended = await this.transaction.territoryOwnership.updateMany({
+          data: { endedAt: input.transitionAt },
+          where: { endedAt: null, id: activeOwnership.id },
+        });
+        if (ended.count !== 1) throw new OwnershipConflictError();
+      }
+
+      const incremented = await this.transaction.territory.updateMany({
+        data: { version: { increment: 1 } },
+        where: { id: territory.id, version: input.expectedTerritoryVersion },
+      });
+      if (incremented.count !== 1) throw new StaleTerritoryVersionError();
+
+      const ownership = await this.transaction.territoryOwnership.create({
+        data: {
+          capturedAt: input.transitionAt,
+          companyId: input.newOwnerCompanyId,
+          ...(input.reason === undefined ? {} : { reason: input.reason }),
+          source: input.source,
+          territoryId: territory.id,
+          territoryVersion,
+        },
+        select: { id: true },
+      });
+
+      return {
+        ownershipId: ownership.id,
+        previousOwnershipId: activeOwnership?.id ?? null,
+        territoryId: territory.id,
+        territoryVersion,
+      };
+    } catch (error) {
+      if (error instanceof OwnershipConflictError || error instanceof StaleTerritoryVersionError) {
+        throw error;
+      }
+      if (isOwnershipConstraintError(error)) throw new OwnershipConflictError();
+      throw error;
+    }
+  }
 }
 
 export class PrismaTerritoryRepository implements TerritoryRepository {

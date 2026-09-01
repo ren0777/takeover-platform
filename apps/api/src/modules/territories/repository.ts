@@ -60,6 +60,26 @@ export type TerritoryRecord = {
   visualMetadata: TerritoryVisualMetadata;
 };
 
+export type ReplaceActiveOwnershipInput = {
+  territoryId: string;
+  newOwnerCompanyId: string;
+  expectedTerritoryVersion: bigint;
+  transitionAt: Date;
+  source: 'INITIAL_SEED' | 'PAID_CAPTURE';
+  reason?: string;
+};
+
+export type ReplaceActiveOwnershipResult = {
+  territoryId: string;
+  previousOwnershipId: string | null;
+  ownershipId: string;
+  territoryVersion: bigint;
+};
+
+export interface TerritoryOwnershipRepository {
+  replaceActiveOwnership(input: ReplaceActiveOwnershipInput): Promise<ReplaceActiveOwnershipResult>;
+}
+
 export interface TerritoryRepository {
   listCategories(): Promise<CategoryRecord[]>;
   listTerritories(query: TerritoryListQueryRecord): Promise<CursorPage<TerritoryRecord>>;

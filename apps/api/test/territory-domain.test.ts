@@ -24,6 +24,20 @@ const publicCompanyRecord = {
   websiteUrl: 'https://example.com',
 };
 
+const poisonedPublicCompanyRecord = {
+  ...publicCompanyRecord,
+  contactEmail: 'private-contact@example.com',
+  managementGrants: [{ id: 'private-grant-id' }],
+  managementSessions: [{ id: 'private-session-id' }],
+  verifications: [
+    {
+      evidence: { contactEmail: 'private-contact@example.com' },
+      level: 'CONTACT_VERIFIED' as const,
+      status: 'VERIFIED' as const,
+    },
+  ],
+};
+
 describe('deriveTerritoryStatus', () => {
   it('derives an active territory without an owner as unclaimed', () => {
     expect(deriveTerritoryStatus('ACTIVE', false)).toBe('unclaimed');
@@ -70,21 +84,7 @@ describe('assertPublicCompany', () => {
   });
 
   it('discards injected private company, authority, and verification-evidence fields', () => {
-    expect(
-      assertPublicCompany({
-        ...publicCompanyRecord,
-        contactEmail: 'private-contact@example.com',
-        managementGrants: [{ id: 'private-grant-id' }],
-        managementSessions: [{ id: 'private-session-id' }],
-        verifications: [
-          {
-            evidence: { contactEmail: 'private-contact@example.com' },
-            level: 'CONTACT_VERIFIED' as const,
-            status: 'VERIFIED' as const,
-          },
-        ],
-      }),
-    ).toEqual({
+    expect(assertPublicCompany(poisonedPublicCompanyRecord)).toEqual({
       id: '8d2e49f3-0c1f-4b3d-9ea3-8cbe68cf9e68',
       logoUrl: 'https://example.com/logo.png',
       name: 'Suspended but truthful Ltd',

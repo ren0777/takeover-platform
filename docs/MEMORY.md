@@ -127,6 +127,24 @@ Ready endpoints and security requirements are listed in **API Contracts** above.
 - A future SSE boundary is needed for real activity; do not synthesize production events.
 - Phase 3 stale-price responses must include current owner, current winning amount, current legal minimum, currency, and version, and must require explicit review without auto-charge.
 
+**Frontend is prepared for live territory reads — these assumptions need confirming (2026-08-31).**
+
+`apps/web` can switch each public read resource from fixtures to the live API independently via `TAKEOVER_LIVE_RESOURCES` (comma-separated resource names, or `all`). No component change is needed to go live. The client halves exist but never run in production today, because every resource defaults to `fixture`.
+
+The frontend had to guess the following. Each is centralised so a correction is a one-line change per resource. **Please confirm or correct these when the endpoints land, rather than letting the frontend discover them at runtime.**
+
+1. **Paths** (assumed, in `TERRITORY_API_PATHS`): `/api/territory-categories`, `/api/territories`, `/api/territories/{slug}`, `/api/territories/{slug}/history`, `/api/companies/{slug}`, `/api/companies/{slug}/territories`.
+2. **Unpaginated reads assume `{ data: T }`.** Categories, territory detail, public company, and company territories have published item contracts but no published response wrapper.
+3. **Paginated reads use an envelope parser.** `territoryPageSchema` and `territoryHistoryPageSchema` extend the envelope and make `meta` **required**, unlike every other response. The generic client returns `data` alone, so these two use `apiRequestEnvelope`; a missing `meta` is a parse failure rather than a silently dropped cursor.
+4. **Territory detail is assumed to include `ownershipHistoryPreview`.**
+5. **A 404 on detail or company is treated as "not found"** and mapped to `null`; any other status propagates as an error.
+
+Frontend invariants that must not be broken by the API:
+
+6. **Territory `version` and `territoryVersion` stay opaque decimal strings** and are never parsed into a JS number. Tested against values beyond `Number.MAX_SAFE_INTEGER`.
+7. **Production never silently serves fixture territory or ownership data.** A resource with no live source throws in production; an unreachable live resource propagates its error rather than falling back to fixtures.
+8. **`getTerritories` currently discards page `meta`** because the board does not paginate yet. This is deliberate and stays until pagination is an explicit product requirement — changing it would touch the board component.
+
 **Phase 2 territory frontend is implemented against the authoritative contracts (2026-08-31).** `apps/web` defines no territory types of its own. Public routes: `/territories` (Value Mosaic + category filter), `/territory/[slug]` (detail, five-entry history preview, full history), `/company/[slug]` (public profile + territory grid). All are server components shipping 164 B of client JavaScript.
 
 Fixtures remain in `src/lib/fixtures/territories.ts` behind the per-resource seam because no public territory API exists yet. They are parsed through the real `.strict()` schemas at module load, so contract drift fails loudly. Flip `resolveSource` per resource when the endpoints land.

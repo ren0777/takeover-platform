@@ -16,3 +16,4 @@ export {
   type TerritorySeedResult,
   type TerritorySeedTerritory,
 } from './territory-seed.js';
+export { approvedTerritorySeed } from './territory-seed-data.js';

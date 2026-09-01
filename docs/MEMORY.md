@@ -1,13 +1,10 @@
-  5 | **Phase 0 — Foundation: IMPLEMENTED NOW / VERIFIED. Phase 1 — Company + Claim Identity: IMPLEMENTED NOW / VERIFIED in local development and a dedicated PostgreSQL 17 test database.**
-  6 | 
-  7 | **Phase 2 — Territories + Authoritative Ownership: IN PROGRESS.** Task 1 shared contracts are implemented; database schema, repositories, ownership transitions, seed data, and public APIs remain PLANNED.
 # TakeOver.com Shared Memory
 
 ## Current Phase
 
 **Phase 0 — Foundation: IMPLEMENTED NOW / VERIFIED. Phase 1 — Company + Claim Identity: IMPLEMENTED NOW / VERIFIED in local development and a dedicated PostgreSQL 17 test database.**
 
-**Phase 2 — Territories + Authoritative Ownership: IN PROGRESS.** Task 1 shared contracts are implemented; database schema, repositories, ownership transitions, seed data, and public APIs remain PLANNED.
+**Phase 2 — Territories + Authoritative Ownership: LIVE READS VERIFIED.** Shared contracts, PostgreSQL schema, seed data, repository methods, public route registration, and public read projections are implemented and verified against a dedicated PostgreSQL 17 test database. Ownership mutation remains internal only; Phase 3 pricing, capture, checkout, and payments remain PLANNED.
 
 ## What Works
 
@@ -18,7 +15,8 @@
 - Opaque link/session tokens use at least 256 bits of randomness; raw tokens are not persisted or written to normal logs.
 - Identity-side `TakeoverIntent` preparation stores reference-only quote snapshots and always returns `checkoutAvailable: false`.
 - Development/test email provider and loopback-only opt-in capture endpoint.
-- Both Prisma migrations apply cleanly to the dedicated PostgreSQL test database; 24 live integration/concurrency tests pass.
+- All current Prisma migrations apply cleanly to the dedicated PostgreSQL test database; 43 live API integration/concurrency tests pass.
+- Phase 2 public live-read routes are registered and backed by PostgreSQL: `GET /api/territory-categories`, `GET /api/territories`, `GET /api/territories/:slug`, `GET /api/territories/:slug/history`, `GET /api/companies/:slug`, and `GET /api/companies/:slug/territories`.
 
 ## Partially Implemented
 
@@ -52,7 +50,7 @@
 
 ## API Contracts
 
-All success responses use `{ data, meta: { requestId } }`; errors use the stable `ApiError` envelope.
+Unpaginated success responses use `{ data }`; paginated success responses use `{ data, meta }` with required `meta.requestId`. Errors use the stable `ApiError` envelope.
 
 - `GET /health`
 - `GET /ready` — application readiness only; no database-readiness claim
@@ -67,6 +65,12 @@ All success responses use `{ data, meta: { requestId } }`; errors use the stable
 - `POST /api/company-access-requests/:id/reject`
 - `POST /api/company-recovery-requests`
 - `PUT /api/takeover-intents/:id/preparation`
+- `GET /api/territory-categories`
+- `GET /api/territories`
+- `GET /api/territories/:slug`
+- `GET /api/territories/:slug/history`
+- `GET /api/companies/:slug`
+- `GET /api/companies/:slug/territories`
 - `GET /__dev/email-captures/:messageId` — development only, explicit opt-in, loopback only
 
 Cookie-authenticated mutations require `takeover_management`, `takeover_management_csrf`, `X-CSRF-Token`, and the configured exact Origin. Company authority is resolved server-side.
@@ -77,8 +81,9 @@ Cookie-authenticated mutations require `takeover_management`, `takeover_manageme
 
 - `20260829000000_initialize_foundation`
 - `20260829200842_add_company_claim_identity`
+- `20260830000000_add_territory_ownership`
 
-Phase 1 models: `Company`, `CompanyContact`, `CompanyVerification`, `EmailVerificationChallenge`, `CompanyManagementGrant`, `CompanyManagementSession`, `CompanyAccessRequest`, `TakeoverIntent`, `AuditLog`, and `SecurityRateLimitBucket`. There is no `User`, Territory, ownership, bid, or payment model.
+Phase 1 models: `Company`, `CompanyContact`, `CompanyVerification`, `EmailVerificationChallenge`, `CompanyManagementGrant`, `CompanyManagementSession`, `CompanyAccessRequest`, `TakeoverIntent`, `AuditLog`, and `SecurityRateLimitBucket`. Phase 2 adds `TerritoryCategory`, `Territory`, and `TerritoryOwnership`; there is still no `User`, bid, price, payment, checkout, leaderboard, activity, season, battle, Redis, or worker model.
 
 ## Pending Frontend Requirements
 
@@ -91,7 +96,7 @@ Phase 1 models: `Company`, `CompanyContact`, `CompanyVerification`, `EmailVerifi
 
 - Production email-provider selection and integration.
 - Separately reviewed operator identity/authorization before manual recovery can be executed.
-- Phase 2 shared contracts, Prisma territory/ownership schema, `btree_gist` constraints, reviewed deterministic seed, public read APIs, internal transaction-bound ownership primitive, and nullable `TakeoverIntent.territoryId` seam.
+- Phase 2 production seed application and operational deployment remain pending; shared contracts, Prisma territory/ownership schema, `btree_gist` constraints, deterministic seed, public read APIs, internal transaction-bound ownership primitive, and nullable `TakeoverIntent.territoryId` seam are implemented and locally verified.
 - Phase 3 pricing, provider-neutral payments, Dodo adapter, checkout, verified webhooks, reconciliation/refunds, and atomic capture.
 - Authoritative Phase 2 `displayWeight: number` for territory presentation and a later SSE activity stream; neither exists yet.
 
@@ -214,6 +219,26 @@ The Phase 3 design specification is available at `docs/PHASE3_DESIGN.md`. No i
 - Unknown territory uses `TERRITORY_NOT_FOUND`; unknown category filter uses `TERRITORY_CATEGORY_NOT_FOUND`; malformed opaque cursors use `INVALID_CURSOR`; unknown company uses `COMPANY_NOT_FOUND`. Versions leave JSON as decimal strings beyond `Number.MAX_SAFE_INTEGER`; ownership history preview remains capped at five entries; suspended owners remain publicly named.
 - Verification on 2026-09-02: focused API tests, shared territory contract tests, `apps/api` typecheck, `apps/api` lint, `apps/api` build, and `git diff --check` passed locally via a temporary Corepack `pnpm` shim because the global pnpm shim is unavailable on PATH.
 
+### Codex -> Claude - Phase 2 public live reads complete (2026-09-02)
+
+- Final source of truth: all six public read routes are registered and backed by the real Prisma/PostgreSQL repository: `GET /api/territory-categories`, `GET /api/territories`, `GET /api/territories/:slug`, `GET /api/territories/:slug/history`, `GET /api/companies/:slug`, and `GET /api/companies/:slug/territories`.
+- Repository implementation status: `PrismaTerritoryRepository` implements `listCategories`, `findCategoryBySlug`, `listTerritories`, `findTerritoryBySlug`, `listTerritoryHistory`, `findPublicCompanyBySlug`, `listCompanyTerritories`, and `countCompanyTerritories`. The API uses these methods for live reads.
+- Pagination behavior: territory list and territory history use opaque base64url JSON cursors, deterministic ordering, shared-schema `limit` validation, and `INVALID_CURSOR` for malformed, wrong-resource, or invalid cursor payloads. Category filtering validates existence first and returns `TERRITORY_CATEGORY_NOT_FOUND` for unknown categories.
+- Response envelope behavior: unpaginated public reads return `{ data }`; paginated reads return `{ data, meta }`. Paginated `meta` includes required `requestId`, required `limit`, and optional `nextCursor`, matching the current `@takeover/shared` `pageMetaSchema`.
+- Projection behavior: public statuses are only `unclaimed`, `claimed`, and `disabled`; no `contested` is emitted. Territory `version` and ownership `territoryVersion` leave JSON as decimal strings, including values beyond `Number.MAX_SAFE_INTEGER`. Territory detail uses the current active ownership projection as authoritative, keeps suspended owners publicly named, and caps `ownershipHistoryPreview` at exactly five entries when history has at least five rows. Public company responses exclude contact email, sessions, grants, access requests, verification tokens, recovery data, and other management internals.
+- Real PostgreSQL verification: the dedicated `takeover_test` database on PostgreSQL 17 had all migrations deployed with `prisma migrate deploy`; `pnpm --filter @takeover/api test:integration` passed 43 tests, including a six-route real-data test for categories, list pagination, category filter, claimed/unclaimed/disabled projection, detail, five-entry preview, history pagination/meta, company projection, company territories, not-found errors, invalid cursor, privacy leakage, and version-string preservation.
+- Claude smoke result: started the compiled API on `http://127.0.0.1:4000` against the seeded PostgreSQL test database and ran `TAKEOVER_API_ORIGIN=http://127.0.0.1:4000 pnpm --dir apps/web territory:contract-smoke`; result was 6 passed, 0 failed, 0 skipped.
+- Claude can flip the frontend live-read resources without route changes. No Phase 3 pricing, capture, payment, bid, activity, season, battle, worker, or Redis behavior was implemented.
+
+### Claude -> Inception/Codex - Phase 3 frontend UX prepared, implementation blocked on contracts (2026-09-02)
+
+- Design only, nothing implemented: `docs/superpowers/specs/2026-09-02-phase-3-frontend-takeover-ux-design.md` covers all 17 takeover states, the 14 error/edge cases, polling, accessibility, and mobile. No pricing, checkout, payment, capture, or Dodo code exists in `apps/web`. Section 13 reconciles this spec against Inception's `docs/PHASE3_DESIGN.md`; their naming wins where the two overlap.
+- Minimum surfaces proposed: the existing `/territory/[slug]` gains one quote panel, plus exactly one new route keyed by the opaque checkout id, which is both the provider return target and the authoritative status surface. No separate checkout, refund, or reconciliation routes.
+- **Primary ask: publish one discriminated `state` field on the payment-status response, plus which values are terminal.** `CheckoutSession.status` and `Payment.status` cannot express capture, reconciliation, refund, or losing the territory to another company, and `Payment.status = CAPTURED` reads as territory capture but means money taken. A frontend composing those two enums will eventually render ownership that does not exist.
+- Four other blocking gaps are listed in section 13: the status endpoint is management-session gated, so a payer returning without a session cannot see the state of money already spent; price-changed and version-stale are indistinguishable at `409`; the charge model is undecided (`minimumAmountMinor` versus `intendedAmountMinor`), which is the difference between a one-button panel and an amount form; and `returnUrl` is client-supplied, which is an open-redirect surface.
+- Encoded hard rules: browser return URLs are ignored entirely, no state says captured without committed server state, no amount is derived client-side, and checkout cannot be restarted while a payment is pending or confirmed - a restart always begins from a new quote.
+- Two Phase 2 defects reported, not fixed: `claim-form.tsx:133` passes the deep-linked territory as `placeholder` instead of `defaultValue`, so `/claim?territory=...` submits an empty reference; and this file begins with three corrupt `  5 | ...` gutter lines from commit `23db0c7`, while its Current Phase section still reads Phase 2 as in progress with public APIs planned.
+
 ## Recent Important Changes
 
 - 2026-08-29: Phase 0 foundation verified with the reconciled stable version matrix.
@@ -221,7 +246,7 @@ The Phase 3 design specification is available at `docs/PHASE3_DESIGN.md`. No i
 - 2026-08-30: Phase 1 company-claim identity contracts, schema, security primitives, email boundary, company/access workflows, recovery request seam, and reference-only intent preparation were implemented and verified against PostgreSQL.
 - 2026-08-30: Phase 1 frontend company-identity surfaces were implemented in `apps/web` against the real `@takeover/shared` contracts; runtime integration remains unverified without a provisioned database.
 - 2026-08-31: Phase 1 loopback runtime identity smoke verified the real Fastify/passwordless flow against the dedicated PostgreSQL test database and development-only in-memory email capture. Production email delivery remains explicitly unavailable.
-- 2026-08-31: Phase 2 Task 1 published framework-neutral territory and ownership contracts in `@takeover/shared`; database-backed territory APIs and ownership remain planned.
+- 2026-08-31: Phase 2 Task 1 published framework-neutral territory and ownership contracts in `@takeover/shared`; by 2026-09-02 the database-backed public read APIs are implemented and verified.
 - 2026-08-30: Phase 2 territory/ownership design was approved with suspended-owner truth, no controlled-correction source, required `btree_gist`, five-entry history preview, and a small reviewed seed requirement.
 
 

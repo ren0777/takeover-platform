@@ -150,7 +150,7 @@ function createTerritoryService(): TerritoryService {
 }
 
 describe('Territory public read API routes', () => {
-  it('GET /api/territory-categories returns an array with requestId', async () => {
+  it('GET /api/territory-categories returns an unpaginated data envelope', async () => {
     const service = createTerritoryService();
     const app = buildApp({ territories: { service } });
     const response = await app.inject({ method: 'GET', url: '/api/territory-categories' });
@@ -159,7 +159,7 @@ describe('Territory public read API routes', () => {
     const body = JSON.parse(response.body);
     expect(Array.isArray(body.data)).toBe(true);
     expect(body.data[0]).toMatchObject({ slug: VALID_CATEGORY_SLUG, name: 'AI' });
-    expect(body.meta?.requestId).toBeDefined();
+    expect(body).not.toHaveProperty('meta');
   });
 
   it('GET /api/territories returns a paginated territory list with meta', async () => {
@@ -473,7 +473,7 @@ describe('Territory public read API routes', () => {
     expect(body.error.message).toBe('Company was not found');
   });
 
-  it('GET /api/companies/:slug/territories returns paginated company territories with meta', async () => {
+  it('GET /api/companies/:slug/territories returns an unpaginated data envelope', async () => {
     const service = createTerritoryService();
     const app = buildApp({ territories: { service } });
     const response = await app.inject({
@@ -486,8 +486,7 @@ describe('Territory public read API routes', () => {
     expect(body.data.company.slug).toBe(VALID_COMPANY_SLUG);
     expect(typeof body.data.currentTerritoryCount).toBe('number');
     expect(Array.isArray(body.data.territories)).toBe(true);
-    expect(body.meta.limit).toBe(50);
-    expect(body.meta.requestId).toBeDefined();
+    expect(body).not.toHaveProperty('meta');
   });
 
   it('GET /api/companies/:slug/territories returns 404 for unknown company', async () => {

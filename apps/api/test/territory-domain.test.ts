@@ -58,18 +58,65 @@ describe('assertPublicCompany', () => {
         ...publicCompanyRecord,
         status: 'ARCHIVED',
       }),
-    ).toMatchObject({ status: 'archived' });
+    ).toEqual({
+      id: '8d2e49f3-0c1f-4b3d-9ea3-8cbe68cf9e68',
+      logoUrl: 'https://example.com/logo.png',
+      name: 'Suspended but truthful Ltd',
+      slug: 'suspended-but-truthful',
+      status: 'archived',
+      verificationLevels: ['contact_verified'],
+      websiteUrl: 'https://example.com',
+    });
   });
 
-  it('rejects a draft owner instead of leaking it publicly', () => {
+  it('discards injected private company, authority, and verification-evidence fields', () => {
+    expect(
+      assertPublicCompany({
+        ...publicCompanyRecord,
+        contactEmail: 'private-contact@example.com',
+        managementGrants: [{ id: 'private-grant-id' }],
+        managementSessions: [{ id: 'private-session-id' }],
+        verifications: [
+          {
+            evidence: { contactEmail: 'private-contact@example.com' },
+            level: 'CONTACT_VERIFIED' as const,
+            status: 'VERIFIED' as const,
+          },
+        ],
+      }),
+    ).toEqual({
+      id: '8d2e49f3-0c1f-4b3d-9ea3-8cbe68cf9e68',
+      logoUrl: 'https://example.com/logo.png',
+      name: 'Suspended but truthful Ltd',
+      slug: 'suspended-but-truthful',
+      status: 'suspended',
+      verificationLevels: ['contact_verified'],
+      websiteUrl: 'https://example.com',
+    });
+  });
+
+  it('rejects a draft owner with a public-looking slug instead of leaking it', () => {
     expect(() =>
       assertPublicCompany({
         ...publicCompanyRecord,
-        slug: null,
+        slug: 'draft-company',
         status: 'DRAFT',
       }),
     ).toThrow(TerritoryDataIntegrityError);
   });
+
+  it.each(['ACTIVE', 'SUSPENDED', 'ARCHIVED'] as const)(
+    'rejects a %s owner with no public slug',
+    (status) => {
+      expect(() =>
+        assertPublicCompany({
+          ...publicCompanyRecord,
+          slug: null,
+          status,
+        }),
+      ).toThrow(TerritoryDataIntegrityError);
+    },
+  );
 });
 
 describe('serializeTerritoryVersion', () => {
@@ -83,6 +130,9 @@ describe('serializeTerritoryVersion', () => {
 });
 
 it('exposes stable domain errors for later ownership transitions', () => {
+  expect(new TerritoryDataIntegrityError('test integrity error').code).toBe(
+    'OWNERSHIP_HISTORY_INVALID',
+  );
   expect(new StaleTerritoryVersionError().code).toBe('STALE_TERRITORY_VERSION');
   expect(new TerritoryDisabledError().code).toBe('TERRITORY_DISABLED');
   expect(new OwnershipConflictError().code).toBe('OWNERSHIP_CONFLICT');

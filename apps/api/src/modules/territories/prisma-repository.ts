@@ -25,7 +25,7 @@ import type {
 export type TerritoryReadPrismaClient = {
   company: Pick<PrismaClient['company'], 'findFirst'>;
   territory: Pick<PrismaClient['territory'], 'findMany' | 'findUnique'>;
-  territoryCategory: Pick<PrismaClient['territoryCategory'], 'findMany'>;
+  territoryCategory: Pick<PrismaClient['territoryCategory'], 'findFirst' | 'findMany'>;
   territoryOwnership: Pick<PrismaClient['territoryOwnership'], 'count' | 'findMany'>;
 };
 
@@ -351,6 +351,13 @@ export class PrismaTerritoryRepository implements TerritoryRepository {
     return this.prisma.territoryCategory.findMany({
       orderBy: [{ displayOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }],
       select: { description: true, id: true, name: true, slug: true },
+    });
+  }
+
+  async findCategoryBySlug(slug: string): Promise<CategoryRecord | null> {
+    return this.prisma.territoryCategory.findFirst({
+      select: { description: true, id: true, name: true, slug: true },
+      where: { slug },
     });
   }
 

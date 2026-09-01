@@ -82,6 +82,7 @@ export interface TerritoryOwnershipRepository {
 
 export interface TerritoryRepository {
   listCategories(): Promise<CategoryRecord[]>;
+  findCategoryBySlug(slug: string): Promise<CategoryRecord | null>;
   listTerritories(query: TerritoryListQueryRecord): Promise<CursorPage<TerritoryRecord>>;
   findTerritoryBySlug(slug: string, historyLimit: number): Promise<TerritoryRecord | null>;
   listTerritoryHistory(

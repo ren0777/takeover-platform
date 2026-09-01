@@ -10,6 +10,7 @@ import type {
 import {
   CompanyNotFoundError,
   InvalidTerritoryCursorError,
+  TerritoryCategoryNotFoundError,
   TerritoryService,
 } from '../src/modules/territories/service.js';
 
@@ -92,6 +93,10 @@ class FakeTerritoryRepository implements TerritoryRepository {
 
   async findPublicCompanyBySlug(): Promise<typeof owner | null> {
     return this.company;
+  }
+
+  async findCategoryBySlug(slug: string): Promise<CategoryRecord | null> {
+    return this.categories.find((candidate) => candidate.slug === slug) ?? null;
   }
 
   async findTerritoryBySlug(_slug: string, _historyLimit: number): Promise<TerritoryRecord | null> {
@@ -214,6 +219,21 @@ describe('TerritoryService public territory queries', () => {
         InvalidTerritoryCursorError,
       );
     }
+    expect(repository.lastTerritoryQuery).toBeNull();
+  });
+
+  it('returns a stable category-not-found error for unknown category filters', async () => {
+    const { repository, service } = createHarness();
+
+    await expect(
+      service.listTerritories({ category: 'unknown-category', limit: 2 }),
+    ).rejects.toBeInstanceOf(TerritoryCategoryNotFoundError);
+    await expect(
+      service.listTerritories({ category: 'unknown-category', limit: 2 }),
+    ).rejects.toMatchObject({
+      code: 'TERRITORY_CATEGORY_NOT_FOUND',
+      message: 'Territory category was not found',
+    });
     expect(repository.lastTerritoryQuery).toBeNull();
   });
 

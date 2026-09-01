@@ -7,6 +7,7 @@ import {
   companyPublicSummarySchema,
   ownershipSourceSchema,
   territoryDetailSchema,
+  territoryHistoryPageSchema,
   territoryListQuerySchema,
   territoryPageSchema,
   territoryStatusSchema,
@@ -104,9 +105,15 @@ describe('territory contracts', () => {
     expect(
       territoryPageSchema.parse({
         data: [claimedTerritory()],
-        meta: { limit: 50, nextCursor: 'opaque-cursor' },
+        meta: { requestId: 'req-1', limit: 50, nextCursor: 'opaque-cursor' },
       }),
-    ).toMatchObject({ meta: { limit: 50, nextCursor: 'opaque-cursor' } });
+    ).toMatchObject({ meta: { requestId: 'req-1', limit: 50, nextCursor: 'opaque-cursor' } });
+    expect(
+      territoryHistoryPageSchema.parse({
+        data: [historyEntry],
+        meta: { requestId: 'req-1', limit: 50 },
+      }),
+    ).toMatchObject({ meta: { requestId: 'req-1', limit: 50 } });
   });
 
   it('accepts bounded category and public-status query filters', () => {

@@ -9,12 +9,16 @@ function createPrismaFake() {
   const territoryFindMany = vi.fn().mockResolvedValue([]);
   const territoryFindUnique = vi.fn().mockResolvedValue(null);
   const territoryCategoryFindMany = vi.fn().mockResolvedValue([]);
+  const territoryCategoryFindFirst = vi.fn().mockResolvedValue(null);
   const territoryOwnershipCount = vi.fn().mockResolvedValue(0);
   const territoryOwnershipFindMany = vi.fn().mockResolvedValue([]);
   const fake = {
     company: { findFirst: companyFindFirst },
     territory: { findMany: territoryFindMany, findUnique: territoryFindUnique },
-    territoryCategory: { findMany: territoryCategoryFindMany },
+    territoryCategory: {
+      findFirst: territoryCategoryFindFirst,
+      findMany: territoryCategoryFindMany,
+    },
     territoryOwnership: { count: territoryOwnershipCount, findMany: territoryOwnershipFindMany },
   } satisfies TerritoryReadPrismaClient;
 
@@ -22,6 +26,7 @@ function createPrismaFake() {
     companyFindFirst,
     prisma: fake,
     territoryCategoryFindMany,
+    territoryCategoryFindFirst,
     territoryFindMany,
     territoryFindUnique,
     territoryOwnershipCount,

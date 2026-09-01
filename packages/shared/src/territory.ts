@@ -118,6 +118,7 @@ export type PaginationQuery = z.infer<typeof paginationQuerySchema>;
 
 export const pageMetaSchema = z
   .object({
+    requestId: z.string().min(1),
     limit: z.number().int().min(1).max(100),
     nextCursor: z.string().min(1).optional(),
   })

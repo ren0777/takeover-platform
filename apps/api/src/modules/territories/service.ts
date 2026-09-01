@@ -67,6 +67,16 @@ export class TerritoryNotFoundError extends Error {
   }
 }
 
+export class TerritoryCategoryNotFoundError extends Error {
+  readonly code = ERROR_CODES.TERRITORY_CATEGORY_NOT_FOUND;
+  readonly statusCode = 404;
+
+  constructor() {
+    super('Territory category was not found');
+    this.name = 'TerritoryCategoryNotFoundError';
+  }
+}
+
 export class CompanyNotFoundError extends Error {
   readonly code = ERROR_CODES.COMPANY_NOT_FOUND;
   readonly statusCode = 404;
@@ -223,6 +233,10 @@ export class TerritoryService {
 
   async listTerritories(query: TerritoryListQuery): Promise<TerritoryListResult> {
     const pageQuery = territoryPageQuery(query);
+    if (query.category !== undefined) {
+      const category = await this.repository.findCategoryBySlug(query.category);
+      if (category === null) throw new TerritoryCategoryNotFoundError();
+    }
     const page = await this.repository.listTerritories({
       ...(query.category === undefined ? {} : { category: query.category }),
       page: pageQuery,

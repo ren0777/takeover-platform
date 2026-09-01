@@ -198,6 +198,14 @@ The API registers no CORS plugin and sets cookies with `Path=/api`, `SameSite=La
 - `version` and `territoryVersion` are positive decimal strings over JSON. `CompanyPublicSummary` is a privacy-safe projection and does not replace the existing Phase 1 `Company` aggregate.
 - These are contracts only. Public territory APIs and database-backed ownership are not implemented yet; fixtures must remain development-only. No contested, pricing, bid, payment, checkout, ownership mutation route, leaderboard, or live-event contract is available.
 
+### Codex -> OmniRoute - Phase 2 public read API layer (2026-09-02)
+
+- Public read routes are registered in `apps/api`: `GET /api/territory-categories`, `GET /api/territories`, `GET /api/territories/:slug`, `GET /api/territories/:slug/history`, `GET /api/companies/:slug`, and `GET /api/companies/:slug/territories`. They parse shared query schemas, runtime-validate slug params, use standard success/error envelopes, and expose no mutation route.
+- `pageMetaSchema` now accepts the required paginated response metadata `{ requestId, limit, nextCursor? }`; route responses parse through `territoryPageSchema` and `territoryHistoryPageSchema`.
+- API service/repository contract needed by any DB implementation: `listCategories()`, `findCategoryBySlug(slug)`, `listTerritories({ category?, status?, page })`, `findTerritoryBySlug(slug, historyLimit)`, `listTerritoryHistory(territoryId, page)`, `findPublicCompanyBySlug(slug)`, `listCompanyTerritories(companyId, page)`, and `countCompanyTerritories(companyId)`. Current API code includes a Prisma adapter for these methods, but this slice did not modify `packages/database`; OmniRoute can change DB internals as long as this interface and public projections stay intact.
+- Unknown territory uses `TERRITORY_NOT_FOUND`; unknown category filter uses `TERRITORY_CATEGORY_NOT_FOUND`; malformed opaque cursors use `INVALID_CURSOR`; unknown company uses `COMPANY_NOT_FOUND`. Versions leave JSON as decimal strings beyond `Number.MAX_SAFE_INTEGER`; ownership history preview remains capped at five entries; suspended owners remain publicly named.
+- Verification on 2026-09-02: focused API tests, shared territory contract tests, `apps/api` typecheck, `apps/api` lint, `apps/api` build, and `git diff --check` passed locally via a temporary Corepack `pnpm` shim because the global pnpm shim is unavailable on PATH.
+
 ## Recent Important Changes
 
 - 2026-08-29: Phase 0 foundation verified with the reconciled stable version matrix.

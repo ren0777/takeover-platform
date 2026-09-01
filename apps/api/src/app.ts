@@ -8,10 +8,13 @@ import {
   type CompanyIdentityService,
 } from './modules/company-identity/service.js';
 import { PrismaCompanyIdentityRepository } from './modules/company-identity/prisma-repository.js';
+import { PrismaTerritoryRepository } from './modules/territories/prisma-repository.js';
+import { TerritoryService } from './modules/territories/service.js';
 import { companyIdentityPlugin } from './plugins/company-identity.js';
 import { databasePlugin } from './plugins/database.js';
 import { emailPlugin } from './plugins/email.js';
 import { healthPlugin } from './plugins/health.js';
+import { territoriesPlugin } from './plugins/territories.js';
 import { createOpaqueTokenService } from './security/opaque-token.js';
 
 export type BuildAppOptions = {
@@ -22,6 +25,9 @@ export type BuildAppOptions = {
   companyIdentity?: {
     config: ApiConfig['identity'];
     service: CompanyIdentityService;
+  };
+  territories?: {
+    service: TerritoryService;
   };
 };
 
@@ -140,6 +146,17 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
         nodeEnv,
         service,
       });
+    });
+  }
+  if (options.territories !== undefined) {
+    app.register(territoriesPlugin, { service: options.territories.service });
+  } else if (runtimeConfig?.databaseUrl !== undefined) {
+    app.register(async (territoryApp) => {
+      await databasePlugin(territoryApp);
+      const territoryService = new TerritoryService(
+        new PrismaTerritoryRepository(territoryApp.database),
+      );
+      await territoriesPlugin(territoryApp, { service: territoryService });
     });
   }
   return app;

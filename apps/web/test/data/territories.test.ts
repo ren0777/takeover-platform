@@ -107,8 +107,11 @@ describe('getCompanyTerritories', () => {
 
 describe('resolveSource', () => {
   it('keeps every territory resource on fixtures until the API ships', () => {
-    expect(resolveSource('territories')).toBe('fixture');
+    expect(resolveSource('territory-categories')).toBe('fixture');
+    expect(resolveSource('territory-list')).toBe('fixture');
+    expect(resolveSource('territory-detail')).toBe('fixture');
     expect(resolveSource('territory-history')).toBe('fixture');
+    expect(resolveSource('public-company')).toBe('fixture');
     expect(resolveSource('company-territories')).toBe('fixture');
   });
 });

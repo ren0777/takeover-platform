@@ -6,9 +6,31 @@ import { apiErrorSchema, ERROR_CODES } from '@takeover/shared';
  * Typed structurally so `apps/web` does not take a direct dependency on zod;
  * the schemas themselves always come from `@takeover/shared`.
  */
-type ResponseSchema<T> = {
+export type ResponseSchema<T> = {
   safeParse(value: unknown): { success: true; data: T } | { success: false };
 };
+
+/**
+ * Lifts an item schema to an array schema without importing zod.
+ *
+ * Used where the contract publishes an item shape but no list wrapper.
+ */
+export function arrayOf<T>(schema: ResponseSchema<T>): ResponseSchema<T[]> {
+  return {
+    safeParse(value: unknown) {
+      if (!Array.isArray(value)) return { success: false };
+
+      const items: T[] = [];
+      for (const entry of value) {
+        const parsed = schema.safeParse(entry);
+        if (!parsed.success) return { success: false };
+        items.push(parsed.data);
+      }
+
+      return { success: true, data: items };
+    },
+  };
+}
 
 /** Readable (non-HttpOnly) CSRF cookie set alongside the HttpOnly session cookie. */
 const CSRF_COOKIE_NAME = 'takeover_management_csrf';
@@ -73,7 +95,7 @@ function parseRetryAfter(header: string | null): number | undefined {
  * Never accepts or returns raw token material beyond the single exchange body,
  * and never logs request bodies.
  */
-async function execute(options: RequestOptions): Promise<unknown> {
+async function executeRaw(options: RequestOptions): Promise<unknown> {
   const headers: Record<string, string> = {};
   if (options.body !== undefined) headers['content-type'] = 'application/json';
 
@@ -141,6 +163,12 @@ async function execute(options: RequestOptions): Promise<unknown> {
     });
   }
 
+  return payload;
+}
+
+/** Returns only the `data` member of the success envelope. */
+async function execute(options: RequestOptions): Promise<unknown> {
+  const payload = await executeRaw(options);
   return (payload as { data?: unknown }).data;
 }
 
@@ -157,6 +185,32 @@ export async function apiRequest<T>(
       code: ERROR_CODES.INTERNAL_ERROR,
       status: 200,
       message: 'The service returned a response this app does not understand.',
+    });
+  }
+
+  return parsed.data;
+}
+
+/**
+ * Performs a request and validates the WHOLE envelope, not just `data`.
+ *
+ * `territoryPageSchema` and `territoryHistoryPageSchema` extend the success
+ * envelope and make `meta` required, so their pagination cursor would be
+ * silently discarded by `apiRequest`, which returns `data` alone. Paginated
+ * reads must use this function so a missing `meta` is a parse failure rather
+ * than an invisible loss of the cursor.
+ */
+export async function apiRequestEnvelope<T>(
+  options: RequestOptions & { schema: ResponseSchema<T> },
+): Promise<T> {
+  const payload = await executeRaw(options);
+  const parsed = options.schema.safeParse(payload);
+
+  if (!parsed.success) {
+    throw new ApiRequestError({
+      code: ERROR_CODES.INTERNAL_ERROR,
+      status: 200,
+      message: 'The service returned a paginated response this app does not understand.',
     });
   }
 

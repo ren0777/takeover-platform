@@ -198,6 +198,11 @@ The API registers no CORS plugin and sets cookies with `Path=/api`, `SameSite=La
 - Authoritative inferred types safe to consume: `TerritoryCategory`, `TerritoryVisualMetadata`, `CompanyPublicSummary`, `TerritoryOwnershipSummary`, `TerritoryHistoryEntry`, `TerritorySummary`, `TerritoryDetail`, `CompanyTerritories`, `PaginationQuery`, `PageMeta`, `TerritoryListQuery`, `TerritoryPage`, and `TerritoryHistoryPage`.
 - Stable error codes now include `TERRITORY_NOT_FOUND`, `TERRITORY_CATEGORY_NOT_FOUND`, `INVALID_CURSOR`, `STALE_TERRITORY_VERSION`, `TERRITORY_DISABLED`, `OWNERSHIP_CONFLICT`, and `OWNERSHIP_HISTORY_INVALID`.
 - `displayWeight` is an authoritative integer contract constrained to `1..100`; the frontend may map it to presentation tiers, but mosaic position and physical adjacency have no gameplay meaning.
+
+## Phase 3 – Pricing, Checkout, Capture, Payment
+
+The Phase 3 design specification is available at `docs/PHASE3_DESIGN.md`. No implementation changes have been made yet; this entry documents the hand‑off.
+
 - `version` and `territoryVersion` are positive decimal strings over JSON. `CompanyPublicSummary` is a privacy-safe projection and does not replace the existing Phase 1 `Company` aggregate.
 - These are contracts only. Public territory APIs and database-backed ownership are not implemented yet; fixtures must remain development-only. No contested, pricing, bid, payment, checkout, ownership mutation route, leaderboard, or live-event contract is available.
 
@@ -218,3 +223,8 @@ The API registers no CORS plugin and sets cookies with `Path=/api`, `SameSite=La
 - 2026-08-31: Phase 1 loopback runtime identity smoke verified the real Fastify/passwordless flow against the dedicated PostgreSQL test database and development-only in-memory email capture. Production email delivery remains explicitly unavailable.
 - 2026-08-31: Phase 2 Task 1 published framework-neutral territory and ownership contracts in `@takeover/shared`; database-backed territory APIs and ownership remain planned.
 - 2026-08-30: Phase 2 territory/ownership design was approved with suspended-owner truth, no controlled-correction source, required `btree_gist`, five-entry history preview, and a small reviewed seed requirement.
+
+
+## Phase 3 — Pricing, Checkout, Capture, Payment (DESIGN READY)
+
+The Phase 3 design has been documented in `docs/PHASE3_DESIGN.md`. No implementation changes have been made; only documentation has been updated to reflect the upcoming work.

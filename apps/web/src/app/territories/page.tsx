@@ -1,7 +1,10 @@
 import type { Metadata } from 'next';
+import type { TerritoryCategory, TerritorySummary } from '@takeover/shared';
 import { CategoryFilter } from '@/components/territory/category-filter';
 import { TerritoryMosaic } from '@/components/territory/territory-mosaic';
+import { ErrorState } from '@/components/ui/error-state';
 import { PageHeader } from '@/components/ui/page-header';
+import { describeReadFailure } from '@/lib/data/failure';
 import { getTerritories, getTerritoryCategories } from '@/lib/data/territories';
 import { publicPageMetadata } from '@/lib/metadata';
 
@@ -20,7 +23,26 @@ export default async function TerritoriesPage({ searchParams }: PageProps) {
   const raw = query.category;
   const activeSlug = typeof raw === 'string' && raw.length > 0 ? raw : null;
 
-  const [territories, categories] = await Promise.all([getTerritories(), getTerritoryCategories()]);
+  let territories: TerritorySummary[];
+  let categories: TerritoryCategory[];
+  try {
+    [territories, categories] = await Promise.all([getTerritories(), getTerritoryCategories()]);
+  } catch (error: unknown) {
+    // No fixture fallback and no empty board: an unreadable board says so.
+    const failure = describeReadFailure(error, 'the territory board');
+    return (
+      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
+        <PageHeader title="Territories" />
+        <div className="mt-6">
+          <ErrorState
+            title={failure.title}
+            description={<p>{failure.description}</p>}
+            {...(failure.requestId === undefined ? {} : { requestId: failure.requestId })}
+          />
+        </div>
+      </div>
+    );
+  }
 
   const visible =
     activeSlug === null

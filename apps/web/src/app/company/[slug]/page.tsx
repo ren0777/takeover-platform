@@ -1,10 +1,13 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
+import type { CompanyTerritories } from '@takeover/shared';
 import { TerritoryMosaic } from '@/components/territory/territory-mosaic';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
 import { PageHeader } from '@/components/ui/page-header';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { getCompanyTerritories } from '@/lib/data/companies';
+import { describeReadFailure } from '@/lib/data/failure';
 import { publicPageMetadata } from '@/lib/metadata';
 import { buildPageTitle } from '@/lib/site';
 
@@ -18,7 +21,14 @@ const COMPANY_TONE = {
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const held = await getCompanyTerritories(slug);
+
+  let held: CompanyTerritories | null;
+  try {
+    held = await getCompanyTerritories(slug);
+  } catch {
+    // Metadata must never take the page down; the body renders the failure.
+    return { title: buildPageTitle('Company') };
+  }
   if (held === null) return { title: buildPageTitle('Company not found') };
 
   return publicPageMetadata({
@@ -30,7 +40,25 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
 export default async function CompanyPage({ params }: PageProps) {
   const { slug } = await params;
-  const held = await getCompanyTerritories(slug);
+
+  let held: CompanyTerritories | null;
+  try {
+    held = await getCompanyTerritories(slug);
+  } catch (error: unknown) {
+    const failure = describeReadFailure(error, 'this company');
+    return (
+      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
+        <ErrorState
+          title={failure.title}
+          description={<p>{failure.description}</p>}
+          {...(failure.requestId === undefined ? {} : { requestId: failure.requestId })}
+        />
+      </div>
+    );
+  }
+
+  // A company that does not exist is a 404, not a service failure, so
+  // `notFound()` stays outside the catch above.
   if (held === null) notFound();
 
   const { company, currentTerritoryCount, territories } = held;

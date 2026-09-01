@@ -29,6 +29,19 @@ async function fixtures() {
   return import('@/lib/fixtures/territories');
 }
 
+/**
+ * A page of results plus the cursor that continues it.
+ *
+ * The paginated reads carry `meta.nextCursor`, and the whole point of parsing
+ * the envelope rather than `data` alone is that the cursor is not thrown away
+ * between the API and this layer. Fixtures are a single page and report no
+ * cursor, which is true of them rather than a placeholder.
+ */
+export type Page<T> = {
+  items: T[];
+  nextCursor: string | undefined;
+};
+
 export async function getTerritoryCategories(): Promise<TerritoryCategory[]> {
   if (resolveSource('territory-categories') === 'live') {
     return fetchTerritoryCategories();
@@ -38,16 +51,22 @@ export async function getTerritoryCategories(): Promise<TerritoryCategory[]> {
   return TERRITORY_CATEGORY_FIXTURES;
 }
 
-export async function getTerritories(
+export async function getTerritoryPage(
   query: Partial<TerritoryListQuery> = {},
-): Promise<TerritorySummary[]> {
+): Promise<Page<TerritorySummary>> {
   if (resolveSource('territory-list') === 'live') {
     const page = await fetchTerritories(query);
-    return page.data;
+    return { items: page.data, nextCursor: page.meta.nextCursor };
   }
 
   const { TERRITORY_FIXTURES } = await fixtures();
-  return TERRITORY_FIXTURES;
+  return { items: TERRITORY_FIXTURES, nextCursor: undefined };
+}
+
+export async function getTerritories(
+  query: Partial<TerritoryListQuery> = {},
+): Promise<TerritorySummary[]> {
+  return (await getTerritoryPage(query)).items;
 }
 
 export async function getTerritoryBySlug(slug: string): Promise<TerritoryDetail | null> {
@@ -66,12 +85,19 @@ export async function getTerritoryBySlug(slug: string): Promise<TerritoryDetail 
   return summary === undefined ? null : detailFor(summary);
 }
 
-export async function getTerritoryHistory(slug: string): Promise<TerritoryHistoryEntry[]> {
+export async function getTerritoryHistoryPage(
+  slug: string,
+  query: { cursor?: string; limit?: number } = {},
+): Promise<Page<TerritoryHistoryEntry>> {
   if (resolveSource('territory-history') === 'live') {
-    const page = await fetchTerritoryHistory(slug);
-    return page.data;
+    const page = await fetchTerritoryHistory(slug, query);
+    return { items: page.data, nextCursor: page.meta.nextCursor };
   }
 
   const { historyFor } = await fixtures();
-  return historyFor(slug);
+  return { items: historyFor(slug), nextCursor: undefined };
+}
+
+export async function getTerritoryHistory(slug: string): Promise<TerritoryHistoryEntry[]> {
+  return (await getTerritoryHistoryPage(slug)).items;
 }

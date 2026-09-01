@@ -14,6 +14,14 @@ import {
   type TerritoryPage,
 } from '@takeover/shared';
 import { apiRequest, apiRequestEnvelope, arrayOf } from '@/lib/api/client';
+import { TERRITORY_API_PATHS } from '@/lib/api/territory-paths';
+
+/**
+ * Re-exported so callers and tests keep a single import for the read client
+ * and the paths it uses. The table itself lives in a dependency-free module so
+ * the contract smoke script can load it under plain Node.
+ */
+export { TERRITORY_API_PATHS };
 
 /**
  * Typed read client for the public territory API.
@@ -26,23 +34,6 @@ import { apiRequest, apiRequestEnvelope, arrayOf } from '@/lib/api/client';
  * Every request and response shape comes from `@takeover/shared`. No contract
  * is restated here.
  */
-
-/**
- * Endpoint paths.
- *
- * ASSUMED, not published. Phase 2 shipped contracts but no routes, so these
- * paths are the frontend's best guess and are centralised precisely so a
- * correction is a one-line change per resource rather than a hunt through the
- * codebase. Confirm each against the real API before flipping its switch.
- */
-export const TERRITORY_API_PATHS = {
-  categories: '/api/territory-categories',
-  territories: '/api/territories',
-  territoryDetail: (slug: string) => `/api/territories/${encodeURIComponent(slug)}`,
-  territoryHistory: (slug: string) => `/api/territories/${encodeURIComponent(slug)}/history`,
-  company: (slug: string) => `/api/companies/${encodeURIComponent(slug)}`,
-  companyTerritories: (slug: string) => `/api/companies/${encodeURIComponent(slug)}/territories`,
-} as const;
 
 function listQueryString(query: Partial<TerritoryListQuery>): string {
   const params = new URLSearchParams();

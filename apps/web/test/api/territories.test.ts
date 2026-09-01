@@ -35,7 +35,7 @@ describe('fetchTerritories', () => {
     stubFetch(
       jsonResponse({
         data: TERRITORY_FIXTURES,
-        meta: { limit: 50, nextCursor: 'cursor-abc' },
+        meta: { requestId: 'req-1', limit: 50, nextCursor: 'cursor-abc' },
       }),
     );
 
@@ -48,7 +48,7 @@ describe('fetchTerritories', () => {
   });
 
   it('accepts a final page with no cursor', async () => {
-    stubFetch(jsonResponse({ data: [], meta: { limit: 50 } }));
+    stubFetch(jsonResponse({ data: [], meta: { requestId: 'req-1', limit: 50 } }));
 
     const page = await fetchTerritories();
     expect(page.meta.nextCursor).toBeUndefined();
@@ -65,7 +65,7 @@ describe('fetchTerritories', () => {
     stubFetch(
       jsonResponse({
         data: [{ ...first, displayWeight: 250 }, ...rest],
-        meta: { limit: 50 },
+        meta: { requestId: 'req-1', limit: 50 },
       }),
     );
 
@@ -79,7 +79,7 @@ describe('fetchTerritories', () => {
     stubFetch(
       jsonResponse({
         data: [{ ...first, version: '9007199254740993' }],
-        meta: { limit: 50 },
+        meta: { requestId: 'req-1', limit: 50 },
       }),
     );
 
@@ -89,7 +89,7 @@ describe('fetchTerritories', () => {
   });
 
   it('sends the category and status filters as query parameters', async () => {
-    const spy = stubFetch(jsonResponse({ data: [], meta: { limit: 10 } }));
+    const spy = stubFetch(jsonResponse({ data: [], meta: { requestId: 'req-1', limit: 10 } }));
 
     await fetchTerritories({ category: 'ai', status: 'claimed', limit: 10 });
 
@@ -105,7 +105,7 @@ describe('fetchTerritoryHistory', () => {
     stubFetch(
       jsonResponse({
         data: historyFor('ai-coding'),
-        meta: { limit: 20, nextCursor: 'next-page' },
+        meta: { requestId: 'req-1', limit: 20, nextCursor: 'next-page' },
       }),
     );
 
@@ -128,7 +128,7 @@ describe('fetchTerritoryHistory', () => {
     stubFetch(
       jsonResponse({
         data: [{ ...first, territoryVersion: '18446744073709551615' }],
-        meta: { limit: 20 },
+        meta: { requestId: 'req-1', limit: 20 },
       }),
     );
 

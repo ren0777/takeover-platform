@@ -1,10 +1,13 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import type { TerritoryDetail, TerritoryHistoryEntry } from '@takeover/shared';
 import { OwnershipHistory } from '@/components/territory/ownership-history';
+import { ErrorState } from '@/components/ui/error-state';
 import { Notice } from '@/components/ui/notice';
 import { PageHeader } from '@/components/ui/page-header';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { describeReadFailure } from '@/lib/data/failure';
 import { formatAbsoluteDateTime } from '@/lib/format/datetime';
 import { formatReign } from '@/lib/format/duration';
 import { getTerritoryBySlug, getTerritoryHistory } from '@/lib/data/territories';
@@ -18,7 +21,14 @@ type PageProps = {
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const territory = await getTerritoryBySlug(slug);
+
+  let territory: TerritoryDetail | null;
+  try {
+    territory = await getTerritoryBySlug(slug);
+  } catch {
+    // Metadata must never take the page down; the body renders the failure.
+    return { title: buildPageTitle('Territory') };
+  }
   if (territory === null) return { title: buildPageTitle('Territory not found') };
 
   return publicPageMetadata({
@@ -30,14 +40,39 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
 export default async function TerritoryPage({ params, searchParams }: PageProps) {
   const { slug } = await params;
-  const territory = await getTerritoryBySlug(slug);
+
+  let territory: TerritoryDetail | null;
+  try {
+    territory = await getTerritoryBySlug(slug);
+  } catch (error: unknown) {
+    const failure = describeReadFailure(error, 'this territory');
+    return (
+      <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
+        <ErrorState
+          title={failure.title}
+          description={<p>{failure.description}</p>}
+          {...(failure.requestId === undefined ? {} : { requestId: failure.requestId })}
+        />
+      </div>
+    );
+  }
+
+  // `notFound()` throws its own control-flow signal, so it stays outside the
+  // catch above: a missing territory is a 404, not a service failure.
   if (territory === null) notFound();
 
   const query = await searchParams;
   const showFullHistory = query.history === 'all';
-  const history = showFullHistory
-    ? await getTerritoryHistory(slug)
-    : territory.ownershipHistoryPreview;
+
+  let history: TerritoryHistoryEntry[] | null = territory.ownershipHistoryPreview;
+  if (showFullHistory) {
+    try {
+      history = await getTerritoryHistory(slug);
+    } catch {
+      // The rest of the page is loaded and true; only the history is missing.
+      history = null;
+    }
+  }
 
   const ownership = territory.currentOwnership;
   const nowMs = Date.now();
@@ -156,10 +191,19 @@ export default async function TerritoryPage({ params, searchParams }: PageProps)
           Ownership history
         </h2>
         <div className="mt-3">
-          <OwnershipHistory entries={history} />
+          {history === null ? (
+            <ErrorState
+              title="Ownership history could not be loaded"
+              description={
+                <p>The rest of this page is current. Reload to try the full history again.</p>
+              }
+            />
+          ) : (
+            <OwnershipHistory entries={history} />
+          )}
         </div>
 
-        {!showFullHistory && territory.ownershipHistoryPreview.length >= 5 && (
+        {history !== null && !showFullHistory && territory.ownershipHistoryPreview.length >= 5 && (
           <Link
             href={`/territory/${territory.slug}?history=all`}
             className="mt-4 inline-flex min-h-11 items-center rounded-[var(--radius-control)] border border-[var(--color-border)] px-4 text-sm font-medium hover:bg-[var(--color-surface-raised)]"

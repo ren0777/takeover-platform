@@ -1,4 +1,5 @@
 import { apiErrorSchema, ERROR_CODES } from '@takeover/shared';
+import { resolveRequestUrl } from '@/lib/api/origin';
 
 /**
  * Structural view of a schema's `safeParse`.
@@ -111,9 +112,12 @@ async function executeRaw(options: RequestOptions): Promise<unknown> {
     headers['x-csrf-token'] = csrfToken;
   }
 
+  // Relative in the browser, absolute on the server. See `resolveRequestUrl`.
+  const url = resolveRequestUrl(options.path);
+
   let response: Response;
   try {
-    response = await fetch(options.path, {
+    response = await fetch(url, {
       method: options.method,
       credentials: 'same-origin',
       headers,

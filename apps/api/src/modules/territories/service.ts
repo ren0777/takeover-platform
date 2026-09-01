@@ -9,6 +9,7 @@ import type {
   TerritoryOwnershipSummary,
   TerritorySummary,
 } from '@takeover/shared';
+import { displayWeightSchema, ERROR_CODES } from '@takeover/shared';
 import { z } from 'zod';
 import {
   assertPublicCompany,
@@ -29,10 +30,10 @@ import type {
 
 const territoryCursorSchema = z
   .object({
-    displayWeight: z.number().int(),
+    displayWeight: displayWeightSchema,
     id: z.uuid(),
     k: z.literal('territory'),
-    name: z.string(),
+    name: z.string().trim().min(1).max(120),
     v: z.literal(1),
   })
   .strict();
@@ -57,12 +58,22 @@ export class InvalidTerritoryCursorError extends Error {
 }
 
 export class TerritoryNotFoundError extends Error {
-  readonly code = 'NOT_FOUND';
+  readonly code = ERROR_CODES.TERRITORY_NOT_FOUND;
   readonly statusCode = 404;
 
   constructor() {
     super('Territory was not found');
     this.name = 'TerritoryNotFoundError';
+  }
+}
+
+export class CompanyNotFoundError extends Error {
+  readonly code = ERROR_CODES.COMPANY_NOT_FOUND;
+  readonly statusCode = 404;
+
+  constructor() {
+    super('Company was not found');
+    this.name = 'CompanyNotFoundError';
   }
 }
 
@@ -262,7 +273,7 @@ export class TerritoryService {
 
   async getCompany(slug: string): Promise<CompanyPublicSummary> {
     const company = await this.repository.findPublicCompanyBySlug(slug);
-    if (company === null) throw new TerritoryNotFoundError();
+    if (company === null) throw new CompanyNotFoundError();
     return assertPublicCompany(company);
   }
 

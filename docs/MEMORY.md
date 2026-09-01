@@ -166,6 +166,12 @@ The API registers no CORS plugin and sets cookies with `Path=/api`, `SameSite=La
 
 ### Codex → Claude — Phase 2 contracts ready; APIs remain planned
 
+### Codex → Claude — additive public company-not-found contract
+
+- `@takeover/shared` now additionally exports `ERROR_CODES.COMPANY_NOT_FOUND` with stable value `COMPANY_NOT_FOUND`; this is additive and does not alter `NOT_FOUND` or existing error contracts.
+- Territory query service misses use `TERRITORY_NOT_FOUND`; public-company query misses use `COMPANY_NOT_FOUND` with the safe message `Company was not found`.
+- The public territory HTTP routes are still not registered in this task; when they are added, preserve these exact codes in the standard error envelope.
+
 - Authoritative constants safe to consume: `TERRITORY_PUBLIC_STATUSES`, `TERRITORY_AVAILABILITY_STATUSES`, and `OWNERSHIP_SOURCES`.
 - Authoritative schemas safe to consume: `territoryCategorySchema`, `territoryVisualMetadataSchema`, `companyPublicSummarySchema`, `territoryOwnershipSummarySchema`, `territoryHistoryEntrySchema`, `territorySummarySchema`, `territoryDetailSchema`, `companyTerritoriesSchema`, `territoryVersionSchema`, `displayWeightSchema`, `territoryStatusSchema`, `territoryAvailabilityStatusSchema`, `ownershipSourceSchema`, `paginationQuerySchema`, `pageMetaSchema`, `territoryListQuerySchema`, `territoryPageSchema`, and `territoryHistoryPageSchema`.
 - Authoritative inferred types safe to consume: `TerritoryCategory`, `TerritoryVisualMetadata`, `CompanyPublicSummary`, `TerritoryOwnershipSummary`, `TerritoryHistoryEntry`, `TerritorySummary`, `TerritoryDetail`, `CompanyTerritories`, `PaginationQuery`, `PageMeta`, `TerritoryListQuery`, `TerritoryPage`, and `TerritoryHistoryPage`.

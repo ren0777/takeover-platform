@@ -14,6 +14,13 @@ import type {
   TerritoryRepository,
 } from './repository.js';
 
+export type TerritoryReadPrismaClient = {
+  company: Pick<PrismaClient['company'], 'findFirst'>;
+  territory: Pick<PrismaClient['territory'], 'findMany' | 'findUnique'>;
+  territoryCategory: Pick<PrismaClient['territoryCategory'], 'findMany'>;
+  territoryOwnership: Pick<PrismaClient['territoryOwnership'], 'count' | 'findMany'>;
+};
+
 const publicCompanySelect = {
   id: true,
   logoUrl: true,
@@ -138,7 +145,7 @@ function territoryInclude(historyTake: number) {
 }
 
 export class PrismaTerritoryRepository implements TerritoryRepository {
-  constructor(private readonly prisma: PrismaClient = getDatabaseClient()) {}
+  constructor(private readonly prisma: TerritoryReadPrismaClient = getDatabaseClient()) {}
 
   async listCategories(): Promise<CategoryRecord[]> {
     return this.prisma.territoryCategory.findMany({

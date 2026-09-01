@@ -131,6 +131,7 @@ describe('territory contracts', () => {
 
   it('publishes stable territory error codes', () => {
     expect(ERROR_CODES).toMatchObject({
+      COMPANY_NOT_FOUND: 'COMPANY_NOT_FOUND',
       TERRITORY_NOT_FOUND: 'TERRITORY_NOT_FOUND',
       TERRITORY_CATEGORY_NOT_FOUND: 'TERRITORY_CATEGORY_NOT_FOUND',
       INVALID_CURSOR: 'INVALID_CURSOR',

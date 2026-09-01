@@ -8,8 +8,8 @@ import type {
   TerritoryRepository,
 } from '../src/modules/territories/repository.js';
 import {
+  CompanyNotFoundError,
   InvalidTerritoryCursorError,
-  TerritoryNotFoundError,
   TerritoryService,
 } from '../src/modules/territories/service.js';
 
@@ -193,25 +193,46 @@ describe('TerritoryService public territory queries', () => {
     });
   });
 
-  it('rejects malformed or wrong-kind cursors before querying', async () => {
+  it('rejects malformed, version-mismatched, wrong-kind, and impossible territory cursors before querying', async () => {
     const { repository, service } = createHarness();
 
     await expect(
       service.listTerritories({ cursor: 'not-a-cursor', limit: 2 }),
     ).rejects.toBeInstanceOf(InvalidTerritoryCursorError);
-    const wrongVersion = Buffer.from(
-      JSON.stringify({
-        displayWeight: 90,
-        id: territory().id,
-        k: 'territory',
-        name: 'AI Coding',
-        v: 2,
-      }),
-    ).toString('base64url');
-    await expect(
-      service.listTerritories({ cursor: wrongVersion, limit: 2 }),
-    ).rejects.toBeInstanceOf(InvalidTerritoryCursorError);
+    const invalidPayloads = [
+      { displayWeight: 0, id: territory().id, k: 'territory', name: 'AI Coding', v: 1 },
+      { displayWeight: 101, id: territory().id, k: 'territory', name: 'AI Coding', v: 1 },
+      { displayWeight: 90, id: territory().id, k: 'territory', name: '', v: 1 },
+      { displayWeight: 90, id: territory().id, k: 'territory', name: 'a'.repeat(121), v: 1 },
+      { displayWeight: 90, id: 'not-a-uuid', k: 'territory', name: 'AI Coding', v: 1 },
+      { capturedAt: '2026-08-30T12:00:00.000Z', id: territory().id, k: 'history', v: 1 },
+      { displayWeight: 90, id: territory().id, k: 'territory', name: 'AI Coding', v: 2 },
+    ];
+    for (const payload of invalidPayloads) {
+      const cursor = Buffer.from(JSON.stringify(payload)).toString('base64url');
+      await expect(service.listTerritories({ cursor, limit: 2 })).rejects.toBeInstanceOf(
+        InvalidTerritoryCursorError,
+      );
+    }
     expect(repository.lastTerritoryQuery).toBeNull();
+  });
+
+  it('rejects malformed history cursor timestamps and UUIDs before loading history', async () => {
+    const { repository, service } = createHarness();
+    const invalidPayloads = [
+      { capturedAt: 'not-a-date', id: territory().id, k: 'history', v: 1 },
+      { capturedAt: '2026-08-30T12:00:00.000Z', id: 'not-a-uuid', k: 'history', v: 1 },
+      { displayWeight: 90, id: territory().id, k: 'territory', name: 'AI Coding', v: 1 },
+      { capturedAt: '2026-08-30T12:00:00.000Z', id: territory().id, k: 'history', v: 2 },
+    ];
+
+    for (const payload of invalidPayloads) {
+      const cursor = Buffer.from(JSON.stringify(payload)).toString('base64url');
+      await expect(
+        service.listTerritoryHistory('ai-coding', { cursor, limit: 2 }),
+      ).rejects.toBeInstanceOf(InvalidTerritoryCursorError);
+    }
+    expect(repository.lastHistoryQuery).toBeNull();
   });
 
   it('returns five history-preview entries for detail and maps only allow-listed company fields', async () => {
@@ -247,14 +268,26 @@ describe('TerritoryService public territory queries', () => {
     expect(JSON.stringify(result)).not.toContain('private-session');
   });
 
-  it('rejects missing territory details and history as stable not-found results', async () => {
+  it('returns stable territory and company-specific not-found results', async () => {
     const { repository, service } = createHarness();
     repository.territory = null;
 
-    await expect(service.getTerritory('missing')).rejects.toBeInstanceOf(TerritoryNotFoundError);
-    await expect(service.listTerritoryHistory('missing', { limit: 2 })).rejects.toBeInstanceOf(
-      TerritoryNotFoundError,
+    await expect(service.getTerritory('missing')).rejects.toMatchObject({
+      code: 'TERRITORY_NOT_FOUND',
+      message: 'Territory was not found',
+    });
+    await expect(service.listTerritoryHistory('missing', { limit: 2 })).rejects.toMatchObject({
+      code: 'TERRITORY_NOT_FOUND',
+      message: 'Territory was not found',
+    });
+    repository.company = null;
+    await expect(service.getCompany('missing-company')).rejects.toBeInstanceOf(
+      CompanyNotFoundError,
     );
+    await expect(service.getCompany('missing-company')).rejects.toMatchObject({
+      code: 'COMPANY_NOT_FOUND',
+      message: 'Company was not found',
+    });
   });
 
   it('uses captured-at descending cursors for history and drops the sentinel ownership row', async () => {

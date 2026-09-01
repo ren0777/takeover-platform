@@ -1,3 +1,6 @@
+  5 | **Phase 0 — Foundation: IMPLEMENTED NOW / VERIFIED. Phase 1 — Company + Claim Identity: IMPLEMENTED NOW / VERIFIED in local development and a dedicated PostgreSQL 17 test database.**
+  6 | 
+  7 | **Phase 2 — Territories + Authoritative Ownership: IN PROGRESS.** Task 1 shared contracts are implemented; database schema, repositories, ownership transitions, seed data, and public APIs remain PLANNED.
 # TakeOver.com Shared Memory
 
 ## Current Phase

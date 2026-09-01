@@ -1,0 +1,224 @@
+import { getDatabaseClient, type PrismaClient } from '@takeover/database';
+import { territoryVisualMetadataSchema } from '@takeover/shared';
+import type { Prisma } from '@takeover/database';
+import { TerritoryDataIntegrityError, type PublicCompanyRecord } from './domain.js';
+import type {
+  CategoryRecord,
+  CursorPage,
+  CursorQuery,
+  HistoryCursor,
+  OwnershipRecord,
+  TerritoryCursor,
+  TerritoryListQueryRecord,
+  TerritoryRecord,
+  TerritoryRepository,
+} from './repository.js';
+
+const publicCompanySelect = {
+  id: true,
+  logoUrl: true,
+  name: true,
+  slug: true,
+  status: true,
+  verifications: {
+    select: { level: true, status: true },
+    where: { status: 'VERIFIED' },
+  },
+  websiteUrl: true,
+} as const satisfies Prisma.CompanySelect;
+
+type CompanyRow = PublicCompanyRecord;
+
+type OwnershipRow = {
+  capturedAt: Date;
+  company: CompanyRow;
+  endedAt: Date | null;
+  id: string;
+  source: OwnershipRecord['source'];
+  territoryVersion: bigint;
+};
+
+type TerritoryRow = {
+  availabilityStatus: TerritoryRecord['availabilityStatus'];
+  category: CategoryRecord;
+  createdAt: Date;
+  description: string;
+  displayWeight: number;
+  id: string;
+  name: string;
+  ownershipHistory: OwnershipRow[];
+  slug: string;
+  updatedAt: Date;
+  version: bigint;
+  visualMetadata: unknown;
+};
+
+function mapOwnershipRows(rows: OwnershipRow[]): OwnershipRecord[] {
+  const activeRows = rows.filter((row) => row.endedAt === null);
+  if (activeRows.length > 1) {
+    throw new TerritoryDataIntegrityError('Territory has multiple active ownership rows');
+  }
+
+  return rows.map((row, index) => {
+    const previous = rows[index + 1];
+    return {
+      capturedAt: row.capturedAt,
+      company: row.company,
+      endedAt: row.endedAt,
+      id: row.id,
+      ...(previous === undefined ? {} : { previousCompany: previous.company }),
+      source: row.source,
+      territoryVersion: row.territoryVersion,
+    };
+  });
+}
+
+function mapTerritoryRow(row: TerritoryRow, includeHistoryPreview = false): TerritoryRecord {
+  const ownerships = mapOwnershipRows(row.ownershipHistory);
+  const activeOwnership = ownerships.find((ownership) => ownership.endedAt === null);
+  return {
+    availabilityStatus: row.availabilityStatus,
+    category: row.category,
+    createdAt: row.createdAt,
+    ...(activeOwnership === undefined ? {} : { currentOwnership: activeOwnership }),
+    description: row.description,
+    displayWeight: row.displayWeight,
+    ...(includeHistoryPreview ? { historyPreview: ownerships } : {}),
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    updatedAt: row.updatedAt,
+    version: row.version,
+    visualMetadata: territoryVisualMetadataSchema.parse(row.visualMetadata),
+  };
+}
+
+function territoryCursorWhere(
+  cursor: TerritoryCursor | undefined,
+): Prisma.TerritoryWhereInput | undefined {
+  if (cursor === undefined) return undefined;
+  return {
+    OR: [
+      { displayWeight: { lt: cursor.displayWeight } },
+      { displayWeight: cursor.displayWeight, name: { gt: cursor.name } },
+      { displayWeight: cursor.displayWeight, id: { gt: cursor.id }, name: cursor.name },
+    ],
+  };
+}
+
+function historyCursorWhere(
+  cursor: HistoryCursor | undefined,
+): Prisma.TerritoryOwnershipWhereInput | undefined {
+  if (cursor === undefined) return undefined;
+  return {
+    OR: [
+      { capturedAt: { lt: cursor.capturedAt } },
+      { capturedAt: cursor.capturedAt, id: { lt: cursor.id } },
+    ],
+  };
+}
+
+function territoryOrderBy(): Prisma.TerritoryOrderByWithRelationInput[] {
+  return [{ displayWeight: 'desc' }, { name: 'asc' }, { id: 'asc' }];
+}
+
+function historyOrderBy(): Prisma.TerritoryOwnershipOrderByWithRelationInput[] {
+  return [{ capturedAt: 'desc' }, { id: 'desc' }];
+}
+
+function territoryInclude(historyTake: number) {
+  return {
+    category: { select: { description: true, id: true, name: true, slug: true } },
+    ownershipHistory: {
+      include: { company: { select: publicCompanySelect } },
+      orderBy: historyOrderBy(),
+      take: historyTake,
+    },
+  } as const;
+}
+
+export class PrismaTerritoryRepository implements TerritoryRepository {
+  constructor(private readonly prisma: PrismaClient = getDatabaseClient()) {}
+
+  async listCategories(): Promise<CategoryRecord[]> {
+    return this.prisma.territoryCategory.findMany({
+      orderBy: [{ displayOrder: 'asc' }, { name: 'asc' }, { id: 'asc' }],
+      select: { description: true, id: true, name: true, slug: true },
+    });
+  }
+
+  async listTerritories(query: TerritoryListQueryRecord): Promise<CursorPage<TerritoryRecord>> {
+    const filters: Prisma.TerritoryWhereInput[] = [];
+    if (query.category !== undefined) filters.push({ category: { slug: query.category } });
+    if (query.status === 'unclaimed') {
+      filters.push({ availabilityStatus: 'ACTIVE', ownershipHistory: { none: { endedAt: null } } });
+    }
+    if (query.status === 'claimed') {
+      filters.push({ availabilityStatus: 'ACTIVE', ownershipHistory: { some: { endedAt: null } } });
+    }
+    if (query.status === 'disabled') filters.push({ availabilityStatus: 'DISABLED' });
+    const cursorFilter = territoryCursorWhere(query.page.cursor);
+    if (cursorFilter !== undefined) filters.push(cursorFilter);
+
+    const rows = await this.prisma.territory.findMany({
+      ...(filters.length === 0 ? {} : { where: { AND: filters } }),
+      include: territoryInclude(2),
+      orderBy: territoryOrderBy(),
+      take: query.page.limit,
+    });
+    return { items: rows.map((row) => mapTerritoryRow(row)) };
+  }
+
+  async findTerritoryBySlug(slug: string, historyLimit: number): Promise<TerritoryRecord | null> {
+    const row = await this.prisma.territory.findUnique({
+      include: territoryInclude(Math.max(historyLimit + 1, 2)),
+      where: { slug },
+    });
+    return row === null ? null : mapTerritoryRow(row, true);
+  }
+
+  async listTerritoryHistory(
+    territoryId: string,
+    page: CursorQuery<HistoryCursor>,
+  ): Promise<CursorPage<OwnershipRecord>> {
+    const cursorFilter = historyCursorWhere(page.cursor);
+    const rows = await this.prisma.territoryOwnership.findMany({
+      ...(cursorFilter === undefined ? {} : { where: { AND: [{ territoryId }, cursorFilter] } }),
+      ...(cursorFilter === undefined ? { where: { territoryId } } : {}),
+      include: { company: { select: publicCompanySelect } },
+      orderBy: historyOrderBy(),
+      take: page.limit,
+    });
+    return { items: mapOwnershipRows(rows) };
+  }
+
+  async findPublicCompanyBySlug(slug: string): Promise<PublicCompanyRecord | null> {
+    return this.prisma.company.findFirst({
+      select: publicCompanySelect,
+      where: { slug, status: { not: 'DRAFT' } },
+    });
+  }
+
+  async listCompanyTerritories(
+    companyId: string,
+    page: CursorQuery<TerritoryCursor>,
+  ): Promise<CursorPage<TerritoryRecord>> {
+    const filters: Prisma.TerritoryWhereInput[] = [
+      { ownershipHistory: { some: { companyId, endedAt: null } } },
+    ];
+    const cursorFilter = territoryCursorWhere(page.cursor);
+    if (cursorFilter !== undefined) filters.push(cursorFilter);
+
+    const rows = await this.prisma.territory.findMany({
+      include: territoryInclude(2),
+      orderBy: territoryOrderBy(),
+      take: page.limit,
+      where: { AND: filters },
+    });
+    return { items: rows.map((row) => mapTerritoryRow(row)) };
+  }
+
+  async countCompanyTerritories(companyId: string): Promise<number> {
+    return this.prisma.territoryOwnership.count({ where: { companyId, endedAt: null } });
+  }
+}

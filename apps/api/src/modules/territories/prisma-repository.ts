@@ -167,30 +167,112 @@ export class TerritoryOwnershipTerritoryNotFoundError extends Error {
   }
 }
 
-function isOwnershipConstraintError(error: unknown): boolean {
-  if (
-    error instanceof Prisma.PrismaClientKnownRequestError &&
-    ['P2000', 'P2002', 'P2003', 'P2004'].includes(error.code)
-  ) {
-    return true;
-  }
-  if (!(error instanceof Prisma.PrismaClientUnknownRequestError)) return false;
+const territoryOwnershipTransactionClientBrand = Symbol('territoryOwnershipTransactionClient');
 
-  return [
-    'invalid territory ownership end transition',
-    'territory ownership history is immutable',
-    'territory_ownerships_company_id_fkey',
-    'territory_ownerships_no_overlap',
-    'territory_ownerships_one_active_per_territory',
-    'territory_ownerships_reign_check',
-    'territory_ownerships_territory_id_fkey',
-    'territory_ownerships_territory_id_territory_version_key',
-    'territory_ownerships_version_check',
-  ].some((constraint) => error.message.includes(constraint));
+export type TerritoryOwnershipTransactionClient = {
+  readonly [territoryOwnershipTransactionClientBrand]: true;
+  readonly client: Prisma.TransactionClient;
+};
+
+function transactionBoundaryError(): TypeError {
+  return new TypeError(
+    'PrismaTerritoryOwnershipRepository requires a transaction-scoped Prisma client',
+  );
+}
+
+function isFullPrismaClient(client: Prisma.TransactionClient): boolean {
+  const candidate = client as { $connect?: unknown; $disconnect?: unknown };
+  return typeof candidate.$connect === 'function' || typeof candidate.$disconnect === 'function';
+}
+
+export function createTerritoryOwnershipTransactionClient(
+  client: Prisma.TransactionClient,
+): TerritoryOwnershipTransactionClient {
+  if (isFullPrismaClient(client)) throw transactionBoundaryError();
+  return Object.freeze({
+    [territoryOwnershipTransactionClientBrand]: true as const,
+    client,
+  });
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+const ownershipConflictConstraints = new Set([
+  'territory_ownerships_company_id_fkey',
+  'territory_ownerships_no_overlap',
+  'territory_ownerships_one_active_per_territory',
+  'territory_ownerships_reign_check',
+  'territory_ownerships_territory_id_territory_version_key',
+  'territory_ownerships_version_check',
+]);
+
+function prismaErrorConstraint(meta: Record<string, unknown>): string | undefined {
+  const directConstraint = meta.constraint;
+  if (typeof directConstraint === 'string') return directConstraint;
+  const driverError = recordValue(meta.driverAdapterError);
+  const cause = recordValue(driverError?.cause);
+  const constraint = recordValue(cause?.constraint);
+  return typeof constraint?.index === 'string' ? constraint.index : undefined;
+}
+
+function isOwnershipUniqueTarget(target: unknown): boolean {
+  if (typeof target === 'string') {
+    return [
+      'territory_ownerships_one_active_per_territory',
+      'territory_ownerships_territory_id_territory_version_key',
+    ].includes(target);
+  }
+  if (!Array.isArray(target)) return false;
+  return (
+    target.length === 2 && target.includes('territory_id') && target.includes('territory_version')
+  );
+}
+
+function isOwnershipConstraintError(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  const meta = error.meta;
+  if (meta?.modelName !== 'TerritoryOwnership') return false;
+
+  if (error.code === 'P2002') return isOwnershipUniqueTarget(meta.target);
+  const constraint = prismaErrorConstraint(meta);
+  if (error.code === 'P2003') return constraint === 'territory_ownerships_company_id_fkey';
+  if (error.code === 'P2004') {
+    return constraint !== undefined && ownershipConflictConstraints.has(constraint);
+  }
+  if (error.code !== 'P2039') return false;
+
+  if (constraint !== undefined) return ownershipConflictConstraints.has(constraint);
+  const driverError = recordValue(meta.driverAdapterError);
+  const cause = recordValue(driverError?.cause);
+  const originalMessage = cause?.originalMessage;
+  return (
+    cause?.originalCode === 'P0001' &&
+    typeof originalMessage === 'string' &&
+    [
+      'invalid territory ownership end transition',
+      'territory ownership history is immutable',
+    ].includes(originalMessage)
+  );
 }
 
 export class PrismaTerritoryOwnershipRepository implements TerritoryOwnershipRepository {
-  constructor(private readonly transaction: Prisma.TransactionClient) {}
+  private readonly transaction: Prisma.TransactionClient;
+
+  constructor(transaction: TerritoryOwnershipTransactionClient) {
+    if (
+      typeof transaction !== 'object' ||
+      transaction === null ||
+      transaction[territoryOwnershipTransactionClientBrand] !== true ||
+      isFullPrismaClient(transaction.client)
+    ) {
+      throw transactionBoundaryError();
+    }
+    this.transaction = transaction.client;
+  }
 
   async replaceActiveOwnership(
     input: ReplaceActiveOwnershipInput,

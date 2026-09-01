@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { getDatabaseClient } from '@takeover/database';
+import { getDatabaseClient, type Prisma } from '@takeover/database';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   OwnershipConflictError,
@@ -7,11 +7,18 @@ import {
   TerritoryDisabledError,
 } from '../../src/modules/territories/domain.js';
 import {
+  createTerritoryOwnershipTransactionClient,
   PrismaTerritoryOwnershipRepository,
   PrismaTerritoryRepository,
 } from '../../src/modules/territories/prisma-repository.js';
 
 const prisma = getDatabaseClient();
+
+function ownershipRepository(transaction: Prisma.TransactionClient) {
+  return new PrismaTerritoryOwnershipRepository(
+    createTerritoryOwnershipTransactionClient(transaction),
+  );
+}
 
 type Fixture = {
   categoryId: string;
@@ -21,9 +28,12 @@ type Fixture = {
 
 let fixture: Fixture | undefined;
 
-async function createCompany(label: string): Promise<string> {
+async function createCompany(
+  transaction: Prisma.TransactionClient,
+  label: string,
+): Promise<string> {
   const suffix = randomUUID();
-  const company = await prisma.company.create({
+  const company = await transaction.company.create({
     data: {
       name: `${label} ${suffix}`,
       normalizedName: `${label.toLowerCase()} ${suffix}`,
@@ -37,31 +47,33 @@ async function createCompany(label: string): Promise<string> {
 }
 
 async function createFixture(): Promise<Fixture> {
-  const suffix = randomUUID();
-  const category = await prisma.territoryCategory.create({
-    data: {
-      displayOrder: 100,
-      name: `Ownership concurrency ${suffix}`,
-      slug: `ownership-concurrency-${suffix}`,
-    },
-  });
-  const territory = await prisma.territory.create({
-    data: {
-      categoryId: category.id,
-      description: 'A UUID-scoped fixture for the transaction-bound ownership primitive.',
-      displayWeight: 50,
-      name: `Ownership concurrency ${suffix}`,
-      slug: `ownership-concurrency-${suffix}`,
-      visualMetadata: {},
-    },
-  });
-  const companyIds = (await Promise.all([
-    createCompany('Ownership Alpha'),
-    createCompany('Ownership Bravo'),
-    createCompany('Ownership Charlie'),
-  ])) as [string, string, string];
+  return prisma.$transaction(async (transaction) => {
+    const suffix = randomUUID();
+    const category = await transaction.territoryCategory.create({
+      data: {
+        displayOrder: 100,
+        name: `Ownership concurrency ${suffix}`,
+        slug: `ownership-concurrency-${suffix}`,
+      },
+    });
+    const territory = await transaction.territory.create({
+      data: {
+        categoryId: category.id,
+        description: 'A UUID-scoped fixture for the transaction-bound ownership primitive.',
+        displayWeight: 50,
+        name: `Ownership concurrency ${suffix}`,
+        slug: `ownership-concurrency-${suffix}`,
+        visualMetadata: {},
+      },
+    });
+    const companyIds: [string, string, string] = [
+      await createCompany(transaction, 'Ownership Alpha'),
+      await createCompany(transaction, 'Ownership Bravo'),
+      await createCompany(transaction, 'Ownership Charlie'),
+    ];
 
-  return { categoryId: category.id, companyIds, territoryId: territory.id };
+    return { categoryId: category.id, companyIds, territoryId: territory.id };
+  });
 }
 
 async function cleanFixture(): Promise<void> {
@@ -104,6 +116,25 @@ beforeEach(async () => {
 afterEach(cleanFixture);
 
 describe('transaction-bound territory ownership replacement', () => {
+  it('rejects a full Prisma client at construction before starting any mutation', async () => {
+    if (fixture === undefined) throw new Error('fixture is not initialized');
+    const territoryBefore = await prisma.territory.findUniqueOrThrow({
+      where: { id: fixture.territoryId },
+    });
+
+    expect(() => {
+      // @ts-expect-error A full PrismaClient must not satisfy the transaction-only constructor.
+      new PrismaTerritoryOwnershipRepository(prisma);
+    }).toThrow('PrismaTerritoryOwnershipRepository requires a transaction-scoped Prisma client');
+
+    await expect(
+      prisma.territory.findUniqueOrThrow({ where: { id: fixture.territoryId } }),
+    ).resolves.toEqual(territoryBefore);
+    await expect(
+      prisma.territoryOwnership.count({ where: { territoryId: fixture.territoryId } }),
+    ).resolves.toBe(0);
+  });
+
   it('adds a first owner with one version increment and no identity, audit, or intent side effects', async () => {
     if (fixture === undefined) throw new Error('fixture is not initialized');
     const transitionAt = new Date('2026-09-01T08:00:00.000Z');
@@ -112,7 +143,7 @@ describe('transaction-bound territory ownership replacement', () => {
     expect(new PrismaTerritoryRepository()).not.toHaveProperty('replaceActiveOwnership');
 
     const result = await prisma.$transaction((transaction) =>
-      new PrismaTerritoryOwnershipRepository(transaction).replaceActiveOwnership({
+      ownershipRepository(transaction).replaceActiveOwnership({
         expectedTerritoryVersion: 1n,
         newOwnerCompanyId: fixture!.companyIds[0],
         reason: 'approved launch owner',
@@ -152,7 +183,7 @@ describe('transaction-bound territory ownership replacement', () => {
     const original = await createInitialOwnership(fixture.companyIds[0], capturedAt);
 
     const result = await prisma.$transaction((transaction) =>
-      new PrismaTerritoryOwnershipRepository(transaction).replaceActiveOwnership({
+      ownershipRepository(transaction).replaceActiveOwnership({
         expectedTerritoryVersion: 1n,
         newOwnerCompanyId: fixture!.companyIds[1],
         source: 'PAID_CAPTURE',
@@ -187,7 +218,7 @@ describe('transaction-bound territory ownership replacement', () => {
 
     await expect(
       prisma.$transaction((transaction) =>
-        new PrismaTerritoryOwnershipRepository(transaction).replaceActiveOwnership({
+        ownershipRepository(transaction).replaceActiveOwnership({
           expectedTerritoryVersion: 1n,
           newOwnerCompanyId: fixture!.companyIds[0],
           source: 'INITIAL_SEED',
@@ -207,7 +238,7 @@ describe('transaction-bound territory ownership replacement', () => {
 
     await expect(
       prisma.$transaction((transaction) =>
-        new PrismaTerritoryOwnershipRepository(transaction).replaceActiveOwnership({
+        ownershipRepository(transaction).replaceActiveOwnership({
           expectedTerritoryVersion: 1n,
           newOwnerCompanyId: fixture!.companyIds[0],
           source: 'PAID_CAPTURE',
@@ -237,7 +268,7 @@ describe('transaction-bound territory ownership replacement', () => {
 
     await expect(
       prisma.$transaction((transaction) =>
-        new PrismaTerritoryOwnershipRepository(transaction).replaceActiveOwnership({
+        ownershipRepository(transaction).replaceActiveOwnership({
           expectedTerritoryVersion: 1n,
           newOwnerCompanyId: fixture!.companyIds[1],
           source: 'PAID_CAPTURE',
@@ -263,7 +294,7 @@ describe('transaction-bound territory ownership replacement', () => {
 
     await expect(
       prisma.$transaction((transaction) =>
-        new PrismaTerritoryOwnershipRepository(transaction).replaceActiveOwnership({
+        ownershipRepository(transaction).replaceActiveOwnership({
           expectedTerritoryVersion: 2n,
           newOwnerCompanyId: fixture!.companyIds[1],
           source: 'PAID_CAPTURE',
@@ -280,6 +311,81 @@ describe('transaction-bound territory ownership replacement', () => {
     ).resolves.toEqual([original]);
   });
 
+  it('maps the named history trigger rejection for a non-forward transition and rolls back', async () => {
+    if (fixture === undefined) throw new Error('fixture is not initialized');
+    const capturedAt = new Date('2026-09-01T08:00:00.000Z');
+    const original = await createInitialOwnership(fixture.companyIds[0], capturedAt);
+
+    await expect(
+      prisma.$transaction((transaction) =>
+        ownershipRepository(transaction).replaceActiveOwnership({
+          expectedTerritoryVersion: 1n,
+          newOwnerCompanyId: fixture!.companyIds[1],
+          source: 'PAID_CAPTURE',
+          territoryId: fixture!.territoryId,
+          transitionAt: capturedAt,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(OwnershipConflictError);
+    await expect(
+      prisma.territory.findUniqueOrThrow({ where: { id: fixture.territoryId } }),
+    ).resolves.toMatchObject({ version: 1n });
+    await expect(
+      prisma.territoryOwnership.findMany({ where: { territoryId: fixture.territoryId } }),
+    ).resolves.toEqual([original]);
+  });
+
+  it('maps only the ownership company foreign-key failure and rolls back the version increment', async () => {
+    if (fixture === undefined) throw new Error('fixture is not initialized');
+
+    await expect(
+      prisma.$transaction((transaction) =>
+        ownershipRepository(transaction).replaceActiveOwnership({
+          expectedTerritoryVersion: 1n,
+          newOwnerCompanyId: randomUUID(),
+          source: 'INITIAL_SEED',
+          territoryId: fixture!.territoryId,
+          transitionAt: new Date('2026-09-01T08:00:00.000Z'),
+        }),
+      ),
+    ).rejects.toBeInstanceOf(OwnershipConflictError);
+    await expect(
+      prisma.territory.findUniqueOrThrow({ where: { id: fixture.territoryId } }),
+    ).resolves.toMatchObject({ version: 1n });
+    await expect(
+      prisma.territoryOwnership.count({ where: { territoryId: fixture.territoryId } }),
+    ).resolves.toBe(0);
+  });
+
+  it('passes an oversized-reason database error through and rolls back without masking it', async () => {
+    if (fixture === undefined) throw new Error('fixture is not initialized');
+
+    let received: unknown;
+    try {
+      await prisma.$transaction((transaction) =>
+        ownershipRepository(transaction).replaceActiveOwnership({
+          expectedTerritoryVersion: 1n,
+          newOwnerCompanyId: fixture!.companyIds[0],
+          reason: 'x'.repeat(501),
+          source: 'INITIAL_SEED',
+          territoryId: fixture!.territoryId,
+          transitionAt: new Date('2026-09-01T08:00:00.000Z'),
+        }),
+      );
+    } catch (error) {
+      received = error;
+    }
+
+    expect(received).toMatchObject({ code: 'P2000' });
+    expect(received).not.toBeInstanceOf(OwnershipConflictError);
+    await expect(
+      prisma.territory.findUniqueOrThrow({ where: { id: fixture.territoryId } }),
+    ).resolves.toMatchObject({ version: 1n });
+    await expect(
+      prisma.territoryOwnership.count({ where: { territoryId: fixture.territoryId } }),
+    ).resolves.toBe(0);
+  });
+
   it('ends each reign once while preserving immutable fields across sequential replacements', async () => {
     if (fixture === undefined) throw new Error('fixture is not initialized');
     const firstCapturedAt = new Date('2026-07-01T08:00:00.000Z');
@@ -288,7 +394,7 @@ describe('transaction-bound territory ownership replacement', () => {
     const original = await createInitialOwnership(fixture.companyIds[0], firstCapturedAt);
 
     const firstReplacement = await prisma.$transaction((transaction) =>
-      new PrismaTerritoryOwnershipRepository(transaction).replaceActiveOwnership({
+      ownershipRepository(transaction).replaceActiveOwnership({
         expectedTerritoryVersion: 1n,
         newOwnerCompanyId: fixture!.companyIds[1],
         reason: 'first replacement',
@@ -298,7 +404,7 @@ describe('transaction-bound territory ownership replacement', () => {
       }),
     );
     await prisma.$transaction((transaction) =>
-      new PrismaTerritoryOwnershipRepository(transaction).replaceActiveOwnership({
+      ownershipRepository(transaction).replaceActiveOwnership({
         expectedTerritoryVersion: 2n,
         newOwnerCompanyId: fixture!.companyIds[2],
         reason: 'second replacement',
@@ -338,7 +444,7 @@ describe('transaction-bound territory ownership replacement', () => {
 
     await expect(
       prisma.$transaction(async (transaction) => {
-        await new PrismaTerritoryOwnershipRepository(transaction).replaceActiveOwnership({
+        await ownershipRepository(transaction).replaceActiveOwnership({
           expectedTerritoryVersion: 1n,
           newOwnerCompanyId: fixture!.companyIds[0],
           source: 'INITIAL_SEED',
@@ -365,7 +471,7 @@ describe('transaction-bound territory ownership replacement', () => {
     const replacements = await Promise.allSettled(
       fixture.companyIds.slice(1).map((newOwnerCompanyId) =>
         prisma.$transaction((transaction) =>
-          new PrismaTerritoryOwnershipRepository(transaction).replaceActiveOwnership({
+          ownershipRepository(transaction).replaceActiveOwnership({
             expectedTerritoryVersion: 1n,
             newOwnerCompanyId,
             source: 'PAID_CAPTURE',

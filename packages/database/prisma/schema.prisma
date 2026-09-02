@@ -475,7 +475,7 @@ model PaymentWebhookEvent {
   signatureDigest    Bytes    @map("signature_digest")
   payload            Json
   receivedAt         DateTime @default(now()) @db.Timestamptz(3) @map("received_at")
-  processingStatus   String   @default("PENDING")
+  processingStatus   String   @default("PENDING") @map("processing_status")
   paymentId          String?  @map("payment_id") @db.Uuid
   processedAt        DateTime? @db.Timestamptz(3) @map("processed_at")
   errorCode          String?  @map("error_code")

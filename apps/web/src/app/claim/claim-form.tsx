@@ -124,13 +124,15 @@ export function ClaimForm({ territoryExternalRef }: { territoryExternalRef: stri
         autoComplete="email"
         hint="Any address works, including a personal one. Management links are sent here."
       />
+      {/* defaultValue, not placeholder: a placeholder is never submitted, so a
+          deep link from a territory used to post an empty reference. */}
       <FormField
         id="territoryExternalRef"
         name="territoryExternalRef"
         label="Territory reference"
         required
         disabled={busy}
-        {...(territoryExternalRef === null ? {} : { placeholder: territoryExternalRef })}
+        {...(territoryExternalRef === null ? {} : { defaultValue: territoryExternalRef })}
         hint="Territories are not modelled yet, so this is an opaque reference."
       />
 

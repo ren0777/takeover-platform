@@ -8,6 +8,13 @@ type FormFieldProps = {
   required?: boolean;
   autoComplete?: string;
   placeholder?: string;
+  /**
+   * Initial submitted value for this uncontrolled field.
+   *
+   * Distinct from `placeholder`, which is only ever hint text and is never
+   * submitted. Prefer this whenever the value should survive submission.
+   */
+  defaultValue?: string;
   hint?: ReactNode;
   disabled?: boolean;
   /** Field-level validation message. Announced and linked to the input. */
@@ -30,6 +37,7 @@ export function FormField({
   required = false,
   autoComplete,
   placeholder,
+  defaultValue,
   hint,
   disabled = false,
   error,
@@ -62,6 +70,7 @@ export function FormField({
         {...(describedBy.length > 0 ? { 'aria-describedby': describedBy.join(' ') } : {})}
         {...(autoComplete === undefined ? {} : { autoComplete })}
         {...(placeholder === undefined ? {} : { placeholder })}
+        {...(defaultValue === undefined ? {} : { defaultValue })}
         {...(inputMode === undefined ? {} : { inputMode })}
         className={[
           'mt-1 min-h-11 w-full rounded-[var(--radius-control)] border bg-[var(--color-background)]',

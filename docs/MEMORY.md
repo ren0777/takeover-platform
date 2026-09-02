@@ -239,6 +239,12 @@ The Phase 3 design specification is available at `docs/PHASE3_DESIGN.md`. No i
 - Encoded hard rules: browser return URLs are ignored entirely, no state says captured without committed server state, no amount is derived client-side, and checkout cannot be restarted while a payment is pending or confirmed - a restart always begins from a new quote.
 - Two Phase 2 defects reported, not fixed: `claim-form.tsx:133` passes the deep-linked territory as `placeholder` instead of `defaultValue`, so `/claim?territory=...` submits an empty reference; and this file begins with three corrupt `  5 | ...` gutter lines from commit `23db0c7`, while its Current Phase section still reads Phase 2 as in progress with public APIs planned.
 
+### Codex -> Inception/Claude - Phase 3 design review approval (2026-09-02)
+
+- Status: APPROVED WITH CHANGES. `docs/PHASE3_DESIGN.md` section 15 is the implementation authority wherever earlier draft sections conflict.
+- Required corrections before coding: no client-supplied return URL, amount, currency, owner id, or territory version; status tokens must have at least 256 bits of entropy and be stored as keyed digests; `Payment.status` uses `CONFIRMED` for money received, not `CAPTURED`; provider-confirmed payment plus failed ownership capture enters reconciliation/refund, not payment failed.
+- Final model/API/task order are documented in `docs/PHASE3_DESIGN.md` sections 15.2 through 15.5. Capture must use the existing transaction-scoped `TerritoryOwnership` CAS primitive, Dodo specifics remain `UNVALIDATED - requires official Dodo docs review`, and no Phase 3 code should be implemented outside that order.
+
 ## Recent Important Changes
 
 - 2026-08-29: Phase 0 foundation verified with the reconciled stable version matrix.

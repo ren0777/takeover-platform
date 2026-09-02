@@ -336,4 +336,71 @@ All other existing endpoints remain unchanged.
 
 ### 14.11 Commit Hash
 
-`b2c4d6e8f0a1b3c5d7e9f0a2b4c6d8e0f1a2b3c4` (placeholder – will be generated after committing).
+Review corrections are committed separately; do not use placeholder hashes as implementation evidence.
+
+## 15. Design Review Corrections - Implementation Authority
+
+Status: APPROVED WITH CHANGES. This section supersedes any conflicting earlier draft text in this document.
+
+### 15.1 Required Corrections Before Coding
+
+1. `TakeoverQuote` is not captured and does not create a payment. Checkout creation consumes or binds an active quote; provider-confirmed money creates or confirms a `Payment`.
+2. Append-only applies to raw webhook ledger rows, reconciliation actions, and audit facts. Mutable state rows such as `CheckoutSession`, `Payment`, and `OwnershipCapture` may be updated only through guarded, audited transitions.
+3. `Payment.status` must not use `CAPTURED` to mean money received. Use provider-neutral payment states such as `PENDING`, `CONFIRMED`, `FAILED`, `REFUND_PENDING`, and `REFUNDED`. Territory capture belongs only to `OwnershipCapture.status` and derived attempt state.
+4. `Payment` must store `provider`; enforce unique `(provider, providerPaymentId)`.
+5. Every Dodo-specific fact, including webhook headers, event IDs, retry behavior, status names, checkout payload shape, refund semantics, and SDK/API choice, remains `UNVALIDATED - requires official Dodo docs review`.
+6. Checkout creation must not accept browser-supplied `returnUrl`, amount, currency, owner id, or territory version. The server derives all of them from trusted database state and configured trusted origins.
+7. Status tokens must use at least 256 bits of entropy and be stored only as a keyed digest. UUIDv4 and bare SHA-256 are not sufficient for the Phase 3 status URL.
+8. A provider-confirmed payment whose ownership capture fails must enter `RECONCILIATION_REQUIRED` or refund flow. Do not mark the payment as failed after money has been confirmed.
+9. Ownership capture must use the existing transaction-scoped `TerritoryOwnership` version/CAS primitive. Do not duplicate ownership mutation logic in the payment service.
+10. `TAKEOVER_PRICE_CHANGED` and `STALE_TERRITORY_VERSION` are distinct errors. Neither path may silently reprice, auto-charge, or consume a payment.
+
+### 15.2 Final Minimal Model Set
+
+- `Territory`: add `minimumTakeoverAmountMinor` and `currency`. These are authoritative pricing facts updated only by ownership/pricing transaction rules.
+- `TakeoverQuote`: `id`, `territoryId`, `territoryVersion`, `companyId`, `minimumAmountMinor`, `currency`, `status`, `expiresAt`, `observedAt`, `createdAt`, optional `consumedAt`, optional `idempotencyKeyDigest`. Add an idempotent uniqueness scope for `(companyId, territoryId, territoryVersion, idempotencyKeyDigest)` when an idempotency key is present.
+- `CheckoutSession`: `id`, `quoteId`, `companyId`, `provider`, `providerCheckoutId`, optional `providerCheckoutUrl`, `status`, `createdAt`, `updatedAt`, optional `expiresAt`. Enforce unique `(provider, providerCheckoutId)` and one active checkout per quote.
+- `CheckoutStatusToken`: `id`, `checkoutId`, `tokenDigest`, `expiresAt`, optional `revokedAt`, `createdAt`. Enforce unique `tokenDigest`; never persist the raw token.
+- `Payment`: `id`, `checkoutId`, `provider`, `providerPaymentId`, `amountMinor`, `currency`, `status`, optional `confirmedAt`, optional `failedAt`, `createdAt`, `updatedAt`. Enforce unique `(provider, providerPaymentId)` and at most one confirmed payment per checkout.
+- `PaymentWebhookEvent`: `id`, `provider`, `providerEventId`, `signatureDigest`, `payload`, `receivedAt`, `processingStatus`, optional `paymentId`, optional `processedAt`, optional `errorCode`. Enforce unique `(provider, providerEventId)`. Store trusted provider facts only after signature verification succeeds.
+- `OwnershipCapture`: `id`, `paymentId`, `territoryId`, `newOwnerCompanyId`, `expectedTerritoryVersion`, `status`, `attemptedAt`, optional `completedAt`, optional `failureCode`. Enforce unique `paymentId`.
+- `PaymentReconciliationAction`: `id`, `paymentId`, `action`, `status`, `requestedByActorType`, optional `requestedByActorId`, `reason`, `createdAt`, optional provider refund reference. Enforce one active action of the same kind per payment.
+- Reuse `AuditLog`. Do not add `User`, wallet, balance, bid, season, leaderboard, activity, Redis, queue, or worker models for the Phase 3 critical path.
+
+### 15.3 Final State Machine
+
+```text
+QUOTE_ACTIVE -> CHECKOUT_CREATED -> PENDING_PAYMENT -> PAYMENT_CONFIRMED -> CAPTURE_IN_PROGRESS -> CAPTURED
+QUOTE_ACTIVE -> QUOTE_EXPIRED
+PENDING_PAYMENT -> PAYMENT_FAILED
+PENDING_PAYMENT -> LOST_TERRITORY_RACE
+PAYMENT_CONFIRMED -> RECONCILIATION_REQUIRED -> REFUND_PENDING -> REFUNDED
+CAPTURE_IN_PROGRESS -> RECONCILIATION_REQUIRED -> REFUND_PENDING -> REFUNDED
+```
+
+Terminal states are `CAPTURED`, `QUOTE_EXPIRED`, `PAYMENT_FAILED`, `LOST_TERRITORY_RACE`, `RECONCILIATION_REQUIRED` for automated capture, and `REFUNDED`. The browser return URL only opens a status view. Only a verified, idempotently processed webhook may move an attempt to `PAYMENT_CONFIRMED` or start capture.
+
+### 15.4 Final API Surface
+
+- `POST /api/takeover-quotes`: company-scoped management session plus Origin/CSRF. Body `{ territorySlug }`. Optional `Idempotency-Key`. Returns a provider-neutral quote with decimal-string `territoryVersion`, authoritative amount/currency, expiry, and request metadata.
+- `POST /api/takeover-checkouts`: company-scoped management session plus Origin/CSRF. Body `{ quoteId }`. Optional `Idempotency-Key`. Server revalidates quote, price, company authority, and territory version, creates provider checkout, and returns `{ checkoutId, statusToken, providerCheckoutUrl }`.
+- `GET /api/takeover-status/:statusToken`: token-based, no management session required. Looks up the keyed digest and returns `{ state, terminal, amountCharged?, capturedAt?, newOwnerCompanyId?, failureReason?, updatedAt?, pollAfterMs? }`.
+- `POST /api/payment/webhooks/dodo`: public raw-body endpoint. Verify signature before parsing or trusting provider fields, record the verified event idempotently, then validate amount, currency, internal references, quote, checkout, company, territory, and version before capture.
+- `POST /api/payment-reconciliations`: operator-only future endpoint. Block implementation until operator identity and authorization are designed.
+
+No provider-specific status, enum, checkout payload, or webhook payload may leak into `@takeover/shared` public domain contracts.
+
+### 15.5 Exact Phase 3 Task Order
+
+1. Add provider-neutral shared contracts and errors: attempt state, quote response, checkout response, status response, `TAKEOVER_PRICE_CHANGED`, and `STALE_TERRITORY_VERSION`.
+2. Add Prisma models and migration for the minimal model set above.
+3. Add provider-neutral payment domain interfaces. Use fakes only in tests; do not integrate Dodo until official docs are reviewed.
+4. Implement quote creation with company management authority, server-side price/version snapshot, expiry, and idempotency.
+5. Implement checkout creation with quote revalidation, no client amount/currency/return URL, trusted return URL construction, status token generation, and provider checkout creation.
+6. Implement token-based status lookup and derived attempt state.
+7. Implement raw webhook signature boundary and idempotent event ledger. Keep Dodo mapping blocked until official docs resolve all unvalidated facts.
+8. Implement webhook processing validation for amount, currency, provider refs, checkout, quote, company, territory, and expected version.
+9. Implement ownership capture through the existing `TerritoryOwnership` CAS transaction primitive, including payment/capture/audit updates in one transactional boundary where possible.
+10. Implement reconciliation/refund handling for confirmed payments that cannot capture.
+11. Add PostgreSQL integration and concurrency tests for quote expiry, stale version, stale price, duplicate/out-of-order webhooks, one-payment-one-capture, failed capture reconciliation, and privacy-safe status responses.
+12. After official Dodo documentation review, implement the isolated Dodo adapter and provider-specific webhook mapping.

@@ -1,7 +1,7 @@
 -- Migration: add Phase 3 models and fields
 
 -- Add columns to Territory
-ALTER TABLE "Territory"
+ALTER TABLE "territories"
   ADD COLUMN "minimum_takeover_amount_minor" BIGINT NOT NULL DEFAULT 0,
   ADD COLUMN "currency" VARCHAR(3) NOT NULL DEFAULT 'USD',
   ADD CONSTRAINT "chk_territory_minimum_amount_nonnegative" CHECK ("minimum_takeover_amount_minor" >= 0);
@@ -9,9 +9,9 @@ ALTER TABLE "Territory"
 -- Create TakeoverQuote
 CREATE TABLE "TakeoverQuote" (
   "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  "territory_id" UUID NOT NULL REFERENCES "Territory"("id") ON DELETE RESTRICT,
+  "territory_id" UUID NOT NULL REFERENCES "territories"("id") ON DELETE RESTRICT,
   "territory_version" BIGINT NOT NULL,
-  "company_id" UUID NOT NULL REFERENCES "Company"("id") ON DELETE RESTRICT,
+  "company_id" UUID NOT NULL REFERENCES "companies"("id") ON DELETE RESTRICT,
   "currency" VARCHAR(3) NOT NULL,
   "minimum_amount_minor" BIGINT NOT NULL CHECK ("minimum_amount_minor" > 0),
   "status" VARCHAR NOT NULL,
@@ -32,7 +32,7 @@ WHERE "status" = 'ACTIVE';
 CREATE TABLE "CheckoutSession" (
   "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   "quote_id" UUID NOT NULL REFERENCES "TakeoverQuote"("id") ON DELETE RESTRICT,
-  "company_id" UUID NOT NULL REFERENCES "Company"("id") ON DELETE RESTRICT,
+  "company_id" UUID NOT NULL REFERENCES "companies"("id") ON DELETE RESTRICT,
   "provider" VARCHAR(20) NOT NULL,
   "provider_checkout_id" VARCHAR NOT NULL,
   "provider_checkout_url" VARCHAR,
@@ -63,8 +63,9 @@ CREATE TABLE "Payment" (
   "currency" VARCHAR(3) NOT NULL,
   "status" VARCHAR NOT NULL DEFAULT 'PENDING',
   "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
-  "captured_at" TIMESTAMPTZ,
+  "capturedAt" TIMESTAMPTZ,
   "failed_at" TIMESTAMPTZ,
+  "confirmed_at" TIMESTAMPTZ,
   CONSTRAINT "uq_payment_provider" UNIQUE ("provider", "provider_payment_id")
 );
 
@@ -87,8 +88,8 @@ CREATE TABLE "PaymentWebhookEvent" (
 CREATE TABLE "OwnershipCapture" (
   "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   "payment_id" UUID NOT NULL REFERENCES "Payment"("id") ON DELETE RESTRICT,
-  "territory_id" UUID NOT NULL REFERENCES "Territory"("id") ON DELETE RESTRICT,
-  "new_owner_company_id" UUID NOT NULL REFERENCES "Company"("id") ON DELETE RESTRICT,
+  "territory_id" UUID NOT NULL REFERENCES "territories"("id") ON DELETE RESTRICT,
+  "new_owner_company_id" UUID NOT NULL REFERENCES "companies"("id") ON DELETE RESTRICT,
   "expected_territory_version" BIGINT NOT NULL,
   "status" VARCHAR NOT NULL DEFAULT 'PENDING',
   "attempted_at" TIMESTAMPTZ NOT NULL DEFAULT now(),

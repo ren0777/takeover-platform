@@ -317,6 +317,8 @@ model Territory {
   availabilityStatus TerritoryAvailabilityStatus @default(ACTIVE) @map("availability_status")
   visualMetadata     Json                        @default("{}") @map("visual_metadata")
   version            BigInt                      @default(1)
+  minimumTakeoverAmountMinor BigInt @default(0) @map("minimum_takeover_amount_minor")
+  currency String @default("USD") @map("currency") @db.VarChar(3)
   createdAt          DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(3)
   category           TerritoryCategory           @relation(fields: [categoryId], references: [id], onDelete: Restrict)
@@ -376,5 +378,136 @@ model SecurityRateLimitBucket {
 
   @@unique([keyDigest, windowStartedAt], map: "security_rate_limit_bucket_scope_key")
   @@index([expiresAt])
+
+enum QuoteStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum CheckoutStatus {
+  CREATED
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  CAPTURED
+  FAILED
+  REFUNDED
+  RECONCILED
+}
+
+enum OwnershipCaptureStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+model TakeoverQuote {
+  id                String   @id @default(uuid()) @db.Uuid
+  territoryId       String   @map("territory_id") @db.Uuid
+  territoryVersion  BigInt
+  companyId         String   @map("company_id") @db.Uuid
+  currency          String   @db.VarChar(3)
+  minimumAmountMinor BigInt   @db.BigInt
+  status            QuoteStatus
+  expiresAt         DateTime @db.Timestamptz(3)
+  observedAt        DateTime @db.Timestamptz(3)
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+  consumedAt        DateTime? @db.Timestamptz(3)
+  idempotencyKeyDigest Bytes? @map("idempotency_key_digest")
+  @@map("takeover_quotes")
+  @@index([territoryId, companyId, territoryVersion])
+}
+
+model CheckoutSession {
+  id                 String   @id @default(uuid()) @db.Uuid
+  quoteId            String   @map("quote_id") @db.Uuid
+  companyId          String   @map("company_id") @db.Uuid
+  provider           String   @db.VarChar(20)
+  providerCheckoutId  String   @map("provider_checkout_id")
+  providerCheckoutUrl String?  @map("provider_checkout_url")
+  status             CheckoutStatus @default(CREATED)
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime @updatedAt @db.Timestamptz(3)
+  expiresAt          DateTime? @db.Timestamptz(3)
+  @@map("checkout_sessions")
+  @@unique([provider, providerCheckoutId])
+}
+
+model CheckoutStatusToken {
+  id            String   @id @default(uuid()) @db.Uuid
+  checkoutId    String   @map("checkout_id") @db.Uuid
+  tokenDigest   Bytes    @map("token_digest")
+  expiresAt     DateTime @db.Timestamptz(3)
+  revokedAt     DateTime? @db.Timestamptz(3)
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+  @@map("checkout_status_tokens")
+  @@unique([tokenDigest])
+}
+
+model Payment {
+  id                String   @id @default(uuid()) @db.Uuid
+  checkoutId         String   @map("checkout_id") @db.Uuid
+  provider           String   @db.VarChar(20)
+  providerPaymentId  String   @map("provider_payment_id")
+  amountMinor        BigInt   @db.BigInt
+  currency           String   @db.VarChar(3)
+  status             PaymentStatus @default(PENDING)
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+  capturedAt         DateTime? @db.Timestamptz(3)
+  failedAt           DateTime? @db.Timestamptz(3)
+  @@map("payments")
+  @@unique([provider, providerPaymentId])
+}
+
+model PaymentWebhookEvent {
+  id                 String   @id @default(uuid()) @db.Uuid
+  provider           String   @db.VarChar(20)
+  providerEventId    String   @map("provider_event_id")
+  signatureDigest    Bytes    @map("signature_digest")
+  payload            Json
+  receivedAt         DateTime @default(now()) @db.Timestamptz(3)
+  processingStatus   String   @default("PENDING")
+  paymentId          String?  @map("payment_id") @db.Uuid
+  processedAt        DateTime? @db.Timestamptz(3)
+  errorCode          String?  @map("error_code")
+  @@map("payment_webhook_events")
+  @@unique([provider, providerEventId])
+}
+
+model OwnershipCapture {
+  id                         String   @id @default(uuid()) @db.Uuid
+  paymentId                  String   @map("payment_id") @db.Uuid
+  territoryId                String   @map("territory_id") @db.Uuid
+  newOwnerCompanyId          String   @map("new_owner_company_id") @db.Uuid
+  expectedTerritoryVersion    BigInt   @map("expected_territory_version")
+  status                     OwnershipCaptureStatus @default(PENDING)
+  attemptedAt                DateTime @default(now()) @db.Timestamptz(3)
+  completedAt                DateTime? @db.Timestamptz(3)
+  failureCode                String?  @map("failure_code")
+  @@map("ownership_captures")
+  @@unique([paymentId])
+}
+
+model PaymentReconciliationAction {
+  id                        String   @id @default(uuid()) @db.Uuid
+  paymentId                 String   @map("payment_id") @db.Uuid
+  action                    String
+  status                    String   @default("PENDING")
+  requestedByActorType      String   @map("requested_by_actor_type")
+  requestedByActorId        String?  @map("requested_by_actor_id") @db.Uuid
+  reason                    String?
+  createdAt                 DateTime @default(now()) @db.Timestamptz(3)
+  providerRefundReference    String?  @map("provider_refund_reference")
+  @@map("payment_reconciliation_actions")
+  @@unique([paymentId, action])
+}
+
   @@map("security_rate_limit_buckets")
 }

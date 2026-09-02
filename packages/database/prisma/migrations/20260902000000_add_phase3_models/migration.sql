@@ -19,9 +19,14 @@ CREATE TABLE "TakeoverQuote" (
   "observed_at" TIMESTAMPTZ NOT NULL,
   "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
   "consumed_at" TIMESTAMPTZ,
-  "idempotency_key_digest" BYTEA,
-  CONSTRAINT "uq_takeover_quote_active" UNIQUE ("territory_id", "company_id", "territory_version") WHERE ("status" = 'ACTIVE')
+  "idempotency_key_digest" BYTEA
 );
+
+-- Partial unique index for active quotes
+CREATE UNIQUE INDEX "uq_takeover_quote_active"
+ON "TakeoverQuote" ("territory_id", "company_id", "territory_version")
+WHERE "status" = 'ACTIVE';
+
 
 -- Create CheckoutSession
 CREATE TABLE "CheckoutSession" (
@@ -105,3 +110,5 @@ CREATE TABLE "PaymentReconciliationAction" (
   "provider_refund_reference" VARCHAR,
   CONSTRAINT "uq_reconciliation_action" UNIQUE ("payment_id", "action")
 );
+
+

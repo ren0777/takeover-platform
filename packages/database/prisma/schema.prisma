@@ -396,7 +396,7 @@ enum CheckoutStatus {
 
 enum PaymentStatus {
   PENDING
-  CAPTURED
+  CONFIRMED
   FAILED
   REFUNDED
   RECONCILED

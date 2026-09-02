@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { disconnectDatabase, getDatabaseClient } from '../src/index.js';
-import type { PrismaClient } from '../src/generated/prisma/client.js';
+import { Prisma, type PrismaClient } from '../src/generated/prisma/client.js';
 import {
   createPhase3Fixture,
   deletePhase3Fixture,
@@ -299,58 +299,34 @@ describe('Phase 3 checkout status token invariants', () => {
 });
 
 describe('Phase 3 payment invariants', () => {
-  async function insertRawPayment(
-    checkoutId: string,
-    providerPaymentId: string,
-    status: string,
-  ): Promise<void> {
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO payments (checkout_id, provider, provider_payment_id, amount_minor, currency, status)
-       VALUES ('${checkoutId}', 'DODO', '${providerPaymentId}', 1000, 'USD', '${status}'::"PaymentStatus")`,
-    );
-  }
-
-  async function storedPaymentStatus(providerPaymentId: string): Promise<string | undefined> {
-    const rows = await prisma.$queryRawUnsafe<Array<{ status: string }>>(
-      `SELECT status::text AS status FROM payments WHERE provider_payment_id = '${providerPaymentId}'`,
-    );
-    return rows[0]?.status;
-  }
-
-  it('persists every committed PaymentStatus value', async () => {
+  it('persists every committed PaymentStatus value through Prisma', async () => {
     const fixture = currentFixture();
     const quote = await prisma.takeoverQuote.create({ data: quoteData(fixture) });
     const session = await prisma.checkoutSession.create({ data: checkoutData(quote.id, fixture) });
 
-    for (const status of ['PENDING', 'CONFIRMED', 'FAILED', 'REFUNDED', 'RECONCILED']) {
-      const providerPaymentId = `pay-${randomUUID()}`;
-      await insertRawPayment(session.id, providerPaymentId, status);
-      expect(await storedPaymentStatus(providerPaymentId)).toBe(status);
+    for (const status of ['PENDING', 'CONFIRMED', 'FAILED', 'REFUNDED', 'RECONCILED'] as const) {
+      const payment = await prisma.payment.create({
+        data: paymentData(session.id, { providerPaymentId: `pay-${randomUUID()}`, status }),
+      });
+      const stored = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
+      expect(stored.status).toBe(status);
     }
     expect(await prisma.payment.count({ where: { checkoutId: session.id } })).toBe(5);
   });
 
-  // Expected failure while `schema.prisma` still declares the stale
-  // `PaymentStatus.CAPTURED` member: the committed migration and the live
-  // database use CONFIRMED, so the generated client rejects a CONFIRMED write
-  // with PrismaClientValidationError. Once the schema enum is reconciled and
-  // the client regenerated, remove the `.fails` marker — this must pass.
-  it.fails(
-    'writes CONFIRMED through the generated client once the schema enum matches the database',
-    async () => {
-      const fixture = currentFixture();
-      const quote = await prisma.takeoverQuote.create({ data: quoteData(fixture) });
-      const session = await prisma.checkoutSession.create({
-        data: checkoutData(quote.id, fixture),
-      });
-      const payment = await prisma.payment.create({
-        data: paymentData(session.id, { status: 'CONFIRMED' as never }),
-      });
-      expect(await storedPaymentStatus(payment.providerPaymentId)).toBe('CONFIRMED');
-    },
-  );
+  it('writes CONFIRMED through Prisma and reads it back unchanged', async () => {
+    const fixture = currentFixture();
+    const quote = await prisma.takeoverQuote.create({ data: quoteData(fixture) });
+    const session = await prisma.checkoutSession.create({ data: checkoutData(quote.id, fixture) });
+    const payment = await prisma.payment.create({
+      data: paymentData(session.id, { status: 'CONFIRMED' }),
+    });
 
-  it('never persists CAPTURED, whichever layer rejects it', async () => {
+    const stored = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
+    expect(stored.status).toBe('CONFIRMED');
+  });
+
+  it('rejects CAPTURED as an invalid PaymentStatus before any row is written', async () => {
     const fixture = currentFixture();
     const quote = await prisma.takeoverQuote.create({ data: quoteData(fixture) });
     const session = await prisma.checkoutSession.create({ data: checkoutData(quote.id, fixture) });
@@ -360,7 +336,9 @@ describe('Phase 3 payment invariants', () => {
       .then(() => null)
       .catch((caught: unknown) => caught);
 
-    expect(error).toBeInstanceOf(Error);
+    expect(error, 'CAPTURED must not be a valid PaymentStatus').toBeInstanceOf(
+      Prisma.PrismaClientValidationError,
+    );
     expect(await prisma.payment.count({ where: { providerPaymentId: rejectedPaymentId } })).toBe(0);
   });
 
@@ -432,15 +410,15 @@ describe('Phase 3 payment invariants', () => {
     const fixture = currentFixture();
     const quote = await prisma.takeoverQuote.create({ data: quoteData(fixture) });
     const session = await prisma.checkoutSession.create({ data: checkoutData(quote.id, fixture) });
-    await insertRawPayment(session.id, `pay-${randomUUID()}`, 'CONFIRMED');
-    await insertRawPayment(session.id, `pay-${randomUUID()}`, 'CONFIRMED');
+    await prisma.payment.create({
+      data: paymentData(session.id, { status: 'CONFIRMED', providerPaymentId: `pay-${randomUUID()}` }),
+    });
+    await prisma.payment.create({
+      data: paymentData(session.id, { status: 'CONFIRMED', providerPaymentId: `pay-${randomUUID()}` }),
+    });
 
-    const confirmedCount = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
-      `SELECT count(*) AS count FROM payments
-       WHERE checkout_id = '${session.id}' AND status = 'CONFIRMED'::"PaymentStatus"`,
-    );
     expect(
-      Number(confirmedCount[0]?.count ?? 0n),
+      await prisma.payment.count({ where: { checkoutId: session.id, status: 'CONFIRMED' } }),
       'two CONFIRMED payments for one checkout exist; if this fails the invariant was added and this test must be replaced',
     ).toBe(2);
     expect(

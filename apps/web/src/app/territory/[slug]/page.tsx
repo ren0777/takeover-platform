@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { TerritoryDetail, TerritoryHistoryEntry } from '@takeover/shared';
 import { OwnershipHistory } from '@/components/territory/ownership-history';
+import { TakeoverPanel } from '@/components/territory/takeover-panel';
 import { ErrorState } from '@/components/ui/error-state';
 import { Notice } from '@/components/ui/notice';
 import { PageHeader } from '@/components/ui/page-header';
@@ -182,6 +183,11 @@ export default async function TerritoryPage({ params, searchParams }: PageProps)
           </div>
         )
       )}
+
+      {/* Additive: the Phase 2 status block above is unchanged. A disabled
+          territory renders no panel at all, so disabled still suppresses the
+          action. */}
+      {territory.status !== 'disabled' && <TakeoverPanel territorySlug={territory.slug} />}
 
       <section aria-labelledby="history-heading" className="mt-10">
         <h2

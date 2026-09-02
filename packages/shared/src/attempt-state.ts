@@ -9,6 +9,7 @@ export const attemptStateEnum = z.enum([
   'PAYMENT_CONFIRMED',
   'CAPTURE_IN_PROGRESS',
   'CAPTURED',
+  'CAPTURE_FAILED',
   'QUOTE_EXPIRED',
   'PAYMENT_FAILED',
   'LOST_TERRITORY_RACE',
@@ -33,17 +34,24 @@ export const attemptStatusSchema = z.object({
   pollAfterMs: z.number().int().nonnegative().optional(),
 })
   .refine((data) => {
-    // Define which states are terminal according to the authoritative design.
-    const terminalStates = new Set([
-      'CAPTURED',
-      'QUOTE_EXPIRED',
-      'PAYMENT_FAILED',
-      'LOST_TERRITORY_RACE',
-      'RECONCILIATION_REQUIRED', // automated capture path
-      'REFUNDED',
-    ]);
-    // If state is terminal, terminal flag must be true; otherwise false.
-    return terminalStates.has(data.state) ? data.terminal === true : data.terminal === false;
+    // Determine if the state should be considered terminal based on the design.
+    // Fully settled states are terminal true.
+    // PAYMENT_FAILED is terminal only when no money has been charged.
+    // All other states must be terminal false.
+    const isTerminal = (() => {
+      switch (data.state) {
+        case 'CAPTURED':
+        case 'REFUNDED':
+        case 'QUOTE_EXPIRED':
+          return true;
+        case 'PAYMENT_FAILED':
+          // If amountCharged is undefined (no money captured), it's terminal.
+          return data.amountCharged === undefined;
+        default:
+          return false;
+      }
+    })();
+    return data.terminal === isTerminal;
   }, {
     message: 'terminal flag must match the terminality of the state',
     path: ['terminal'],

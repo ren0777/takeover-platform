@@ -205,7 +205,7 @@ A **provider‑neutral, frontend‑safe state** is exposed on the checkout attem
 | `RECONCILIATION_REQUIRED` | Capture failed and manual reconciliation (refund or retry) is needed. | `false` |
 | `REFUND_PENDING` | Refund has been requested but not yet processed by the provider. | `false` |
 | `REFUNDED` | Provider confirmed refund; ownership remains with previous owner. | `true` |
-| `LOST_TERRITORY_RACE` | While payment was pending, another company successfully captured the territory; this attempt is now futile. | `true` |
+| `LOST_TERRITORY_RACE` | While payment was pending, another company successfully captured the territory; this attempt is now futile. | `false` |
 
 The **`terminal`** flag is derived automatically (`true` for all states that are final). The frontend should treat any `terminal: true` as a final outcome and stop polling.
 

@@ -290,6 +290,22 @@ describe('Territory public read API routes', () => {
     expect(response.statusCode).toBe(400);
   });
 
+  it.each(['0', '-5'])(
+    'GET /api/territories rejects a %s limit below the 1..100 range with 400',
+    async (limit) => {
+      const service = createTerritoryService();
+      const app = buildApp({ territories: { service } });
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/territories?limit=${limit}`,
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+    },
+  );
+
   it('GET /api/territories/:slug returns territory detail with ownershipHistoryPreview', async () => {
     const service = createTerritoryService();
     const app = buildApp({ territories: { service } });

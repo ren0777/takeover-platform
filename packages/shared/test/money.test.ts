@@ -34,3 +34,13 @@ describe('isMoney', () => {
     expect(isMoney(null)).toBe(false);
   });
 });
+
+describe('money ceiling', () => {
+  it('accepts exactly Number.MAX_SAFE_INTEGER minor units as the contract ceiling', () => {
+    expect(createMoney(Number.MAX_SAFE_INTEGER, 'USD')).toEqual({
+      amountMinor: Number.MAX_SAFE_INTEGER,
+      currency: 'USD',
+    });
+    expect(isMoney({ amountMinor: Number.MAX_SAFE_INTEGER, currency: 'USD' })).toBe(true);
+  });
+});

@@ -202,7 +202,7 @@ A **provider‑neutral, frontend‑safe state** is exposed on the checkout attem
 | `CAPTURE_IN_PROGRESS` | Server‑side capture transaction is running (locking the territory, updating version). | `false` |
 | `CAPTURED` | Ownership transfer succeeded; territory version updated and new owner recorded. | `true` |
 | `CAPTURE_FAILED` | Capture transaction failed (e.g. DB conflict, insufficient funds after payment). | `false` |
-| `RECONCILIATION_REQUIRED` | Capture failed and manual reconciliation (refund or retry) is needed. | `true` |
+| `RECONCILIATION_REQUIRED` | Capture failed and manual reconciliation (refund or retry) is needed. | `false` |
 | `REFUND_PENDING` | Refund has been requested but not yet processed by the provider. | `false` |
 | `REFUNDED` | Provider confirmed refund; ownership remains with previous owner. | `true` |
 | `LOST_TERRITORY_RACE` | While payment was pending, another company successfully captured the territory; this attempt is now futile. | `true` |
@@ -300,7 +300,7 @@ Only the fields above are required; additional internal statuses remain in the d
 [CAPTURED] (terminal)
     |
     v
-[CAPTURE_FAILED] --> [RECONCILIATION_REQUIRED] (terminal)
+[CAPTURE_FAILED] --> [RECONCILIATION_REQUIRED]
     |
     v
 [REFUND_PENDING] --> [REFUNDED] (terminal)

@@ -245,6 +245,24 @@ The Phase 3 design specification is available at `docs/PHASE3_DESIGN.md`. No i
 - Required corrections before coding: no client-supplied return URL, amount, currency, owner id, or territory version; status tokens must have at least 256 bits of entropy and be stored as keyed digests; `Payment.status` uses `CONFIRMED` for money received, not `CAPTURED`; provider-confirmed payment plus failed ownership capture enters reconciliation/refund, not payment failed.
 - Final model/API/task order are documented in `docs/PHASE3_DESIGN.md` sections 15.2 through 15.5. Capture must use the existing transaction-scoped `TerritoryOwnership` CAS primitive, Dodo specifics remain `UNVALIDATED - requires official Dodo docs review`, and no Phase 3 code should be implemented outside that order.
 
+### Claude -> Backend - Phase 3 frontend implemented and FROZEN, five handoffs open (2026-09-02)
+
+Frontend Phase 3 is implemented against the corrected contracts in `c67212a` and is now frozen. Scope will not expand until the backend quote/checkout/status endpoints exist and their real responses have been inspected. Frozen commits: `f9f248a`, `07788a4`, `4d099af`, `1e968b7`, `658b961`.
+
+`apps/web` is authoritative for: `TakeoverPanel`, quote display, checkout initiation, the status route, `AttemptState` presentation, bounded polling, no-fake-success, and money-aware terminal semantics. It defines no Phase 3 domain types; every shape is imported from `@takeover/shared`. There is deliberately no fixture mode for takeover: a fixture quote invents a price, a fixture checkout invents a payment, and a fixture status invents an outcome for real money.
+
+Contract verification performed against `c67212a` before implementing, by probing the built package at runtime: one authoritative `AttemptState`; terminal semantics correct (`RECONCILIATION_REQUIRED`, `CAPTURE_FAILED`, `LOST_TERRITORY_RACE`, `REFUND_PENDING` non-terminal, `CAPTURED`/`REFUNDED`/`QUOTE_EXPIRED` terminal, `PAYMENT_FAILED` terminal only with no amount charged); canonical `Money`; `statusToken` session-free with >=256 bits; `providerCheckoutUrl` HTTPS-only; `TAKEOVER_PRICE_CHANGED` and `STALE_TERRITORY_VERSION` distinct; `territoryVersion` opaque past `Number.MAX_SAFE_INTEGER`.
+
+Five items the backend must settle before live integration:
+
+1. **Quote request body.** The frontend sends `{ territorySlug }` to `POST /api/takeover-quotes`. `@takeover/shared` publishes a quote response but no request schema, so this is the one assumed shape in the slice. It is written in a single place, `src/lib/api/takeover.ts`. Confirm or correct it explicitly rather than letting the frontend discover it at runtime.
+2. **`LOST_TERRITORY_RACE` must reach a money-terminal outcome.** It is now non-terminal, which is correct because the loser's payment still has to resolve, but it means the server must eventually transition the attempt to `REFUND_PENDING` -> `REFUNDED` or another approved settled state. Otherwise the status surface polls until its ten-minute budget expires and then tells the payer we stopped checking.
+3. **Refund amount is not published.** The contract exposes `amountCharged` only. The frontend will not invent a refunded figure, so `REFUNDED` shows what was charged and nothing else. If a distinct refund amount is product-required, shared must publish it.
+4. **`eligibilityReason` is a free-form string.** It is rendered verbatim when `checkoutAvailable` is false, and no recovery UX is built on it. A stable machine-readable enum is needed before the frontend can route someone to the right fix (verify email, await manager approval, and so on).
+5. **Abandoned checkouts must age out server-side.** The status route ignores provider query parameters entirely as authority. If a cancelled or abandoned checkout is signalled only through the browser return URL, that attempt will sit in `CHECKOUT_CREATED` until the server ages it out.
+
+When the endpoints land the frontend will inspect the real responses first, run focused live integration tests, then wire the existing seam. Components will not be redesigned unless the real contract forces it. Paths are centralised in `TAKEOVER_API_PATHS`, so a route correction is one line per resource.
+
 ## Recent Important Changes
 
 - 2026-08-29: Phase 0 foundation verified with the reconciled stable version matrix.
@@ -254,7 +272,6 @@ The Phase 3 design specification is available at `docs/PHASE3_DESIGN.md`. No i
 - 2026-08-31: Phase 1 loopback runtime identity smoke verified the real Fastify/passwordless flow against the dedicated PostgreSQL test database and development-only in-memory email capture. Production email delivery remains explicitly unavailable.
 - 2026-08-31: Phase 2 Task 1 published framework-neutral territory and ownership contracts in `@takeover/shared`; by 2026-09-02 the database-backed public read APIs are implemented and verified.
 - 2026-08-30: Phase 2 territory/ownership design was approved with suspended-owner truth, no controlled-correction source, required `btree_gist`, five-entry history preview, and a small reviewed seed requirement.
-
 
 ## Phase 3 — Pricing, Checkout, Capture, Payment (DESIGN READY)
 

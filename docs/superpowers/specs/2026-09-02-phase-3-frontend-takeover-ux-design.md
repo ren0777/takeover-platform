@@ -1,6 +1,6 @@
 # Phase 3 Frontend Takeover UX Design
 
-> **Status: DESIGN ONLY — NOT IMPLEMENTED.** No pricing, payment, checkout, capture, or Dodo code exists in `apps/web` and none may be written until Inception/Codex commit authoritative Phase 3 contracts to `@takeover/shared`.
+> **Status: IMPLEMENTED AND FROZEN** as of `658b961`, against the contracts in `c67212a`. See section 14 for what shipped and where it differs from this design. Sections 1-12 were written before implementation and are kept as the record of intent.
 >
 > Every type, field, endpoint, and status value in this document is **PROPOSED** unless explicitly attributed to a shipped Phase 1/2 contract. Dodo-specific behaviour is marked **UNVALIDATED — requires backend/Dodo docs**.
 >
@@ -268,3 +268,22 @@ Inception published a backend/state-machine design in parallel with this documen
 8. **`territory_version` is `BIGINT` in storage.** Over JSON it must remain a decimal string, matching the shipped Phase 2 invariant the frontend already tests beyond `Number.MAX_SAFE_INTEGER`.
 
 Their §10 Dodo unknowns and this spec's §5 UNVALIDATED list agree and do not conflict.
+
+## 14. As-built (2026-09-02)
+
+Implemented in five frontend-only commits: `f9f248a` (claim prefill), `07788a4` (seam), `4d099af` (state table), `1e968b7` (panel), `658b961` (status route and polling). 213 web tests pass; typecheck, lint, build and format check are clean.
+
+All eight pre-implementation contract checks passed against `c67212a`. The blocker reported against `217f7dc` — `RECONCILIATION_REQUIRED` forced to `terminal: true`, contradicting the approved design — was corrected upstream before any code was written.
+
+Where the build differs from sections 1-13, and why:
+
+| Design said                                                 | Shipped                                                 | Why                                                                                                                                                                                                                 |
+| ----------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Route keyed by `takeoverId`, later mapped to `checkoutId`   | `/takeover/[statusToken]`                               | The contract publishes a separate opaque `statusToken` on the checkout response, which is what the server puts in the provider return URL. It authorises the read without a session, which is what gap 2 asked for. |
+| Quote shown on page load                                    | Quote requested by a "Review takeover" action           | A quote is a company-scoped mutation, so fetching one for every visitor to a public page would be wrong. The amount still appears above the action, as required.                                                    |
+| State 8, "returned but status unknown", as a rendered state | Not rendered                                            | The route is a server component that fetches before it renders, so a cold return lands directly on the authoritative state. The transient unknown never reaches a person.                                           |
+| `LOST_TERRITORY_RACE` needs its own state (gap 3)           | Granted upstream, and non-terminal                      | The loser's money still has to resolve, so the surface keeps polling toward a settled outcome. This is now backend handoff 2.                                                                                       |
+| State 15 shows a refunded amount                            | Shows `amountCharged` only                              | The contract exposes no refund amount, and the frontend will not invent one. Backend handoff 3.                                                                                                                     |
+| `eligibility` as a reason enum                              | `eligibilityReason` free-form string, rendered verbatim | No recovery UX is built on an unstable string. Backend handoff 4.                                                                                                                                                   |
+
+Frozen: scope does not expand until the backend quote, checkout, and status endpoints exist and their real responses have been inspected. The five open backend handoffs are recorded in `docs/MEMORY.md`.

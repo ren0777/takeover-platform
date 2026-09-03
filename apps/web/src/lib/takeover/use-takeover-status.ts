@@ -14,7 +14,11 @@ import { shouldPoll } from '@/lib/takeover/describe-state';
  * `nextPollDelayMs` decides when. Two rules matter more than the mechanics:
  *
  * - A failed poll means "we could not ask", never "it failed". The last known
- *   status stays on screen and `staleSince` explains it.
+ *   status stays on screen and `couldNotRefresh` explains it — and the
+ *   schedule keeps going with backoff. It must not go quiet just because one
+ *   request failed: the loop below continues itself from a ref rather than
+ *   from React re-renders, because a failure produces no new `status` to
+ *   re-render on.
  * - Running out of budget stops polling. It does not invent an outcome.
  */
 export type TakeoverStatusView = {
@@ -40,11 +44,17 @@ export function useTakeoverStatus(
   const startedAt = useRef(Date.now());
   const retryAfter = useRef<number | undefined>(undefined);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Mirrors `status` for the polling loop below. A failed refresh never
+  // updates React state with a new status, so the loop cannot rely on a
+  // render dependency to know whether to keep going — it reads this instead.
+  const statusRef = useRef<AttemptStatus | null>(initialStatus);
+  const stopped = useRef(false);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
       const next = await getTakeoverStatus(statusToken);
+      statusRef.current = next;
       setStatus(next);
       setCouldNotRefresh(false);
       retryAfter.current = undefined;
@@ -58,36 +68,45 @@ export function useTakeoverStatus(
   }, [statusToken]);
 
   useEffect(() => {
-    if (status === null || !shouldPoll(status)) return;
-    if (stoppedWaiting) return;
+    statusRef.current = initialStatus;
+    stopped.current = false;
+    startedAt.current = Date.now();
 
     function schedule() {
+      const current = statusRef.current;
+      if (current === null || !shouldPoll(current) || stopped.current) return;
+
       const delay = nextPollDelayMs({
         elapsedMs: Date.now() - startedAt.current,
-        serverPollAfterMs: status?.pollAfterMs,
+        serverPollAfterMs: current.pollAfterMs,
         retryAfterSeconds: retryAfter.current,
       });
 
       if (delay === null) {
+        stopped.current = true;
         setStoppedWaiting(true);
         return;
       }
 
       timer.current = setTimeout(() => {
-        // Paused while the tab is hidden; the visibility listener resumes it.
+        // Paused while the tab is hidden; the visibility listener resumes it,
+        // and this loop keeps checking back rather than going quiet.
         if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
           schedule();
           return;
         }
-        void refresh();
+        // Reschedule regardless of outcome: a failed poll must retry with
+        // backoff, not stop, and only `shouldPoll`/`stopped` above may end it.
+        void refresh().then(schedule);
       }, delay);
     }
 
     schedule();
     return () => {
+      stopped.current = true;
       if (timer.current !== undefined) clearTimeout(timer.current);
     };
-  }, [status, refresh, stoppedWaiting]);
+  }, [statusToken, initialStatus, refresh]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;

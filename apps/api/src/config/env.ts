@@ -36,6 +36,11 @@ const apiEnvironmentSchema = z
     TOKEN_EXCHANGE_FAILURES_PER_SELECTOR: positiveSeconds.default(10),
     TOKEN_HMAC_SECRET: z.string().default(DEVELOPMENT_TOKEN_SECRET),
     WEB_APP_ORIGIN: z.url().default('http://localhost:3000'),
+    DODO_API_KEY: z.string().nonempty().optional(),
+    DODO_BASE_URL: z.string().url().default('https://test.dodopayments.com/'),
+     DODO_PRODUCT_IDS: z.string().optional(),
+    DODO_DEFAULT_PRODUCT_ID: z.string().nonempty().optional(),
+
   })
   .superRefine((value, context) => {
     if (decodedSecret(value.TOKEN_HMAC_SECRET) === null) {
@@ -110,6 +115,12 @@ export type IdentityConfig = Readonly<{
   webAppOrigin: string;
 }>;
 
+export type DodoConfig = Readonly<{
+  apiKey: string;
+  baseUrl: string;
+  productIds?: Record<string, string>;
+}>;
+
 export type ApiConfig = {
   host: string;
   port: number;
@@ -117,6 +128,7 @@ export type ApiConfig = {
   nodeEnv: 'development' | 'test' | 'production';
   databaseUrl?: string;
   identity: IdentityConfig;
+  dodo?: DodoConfig;
 };
 
 export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
@@ -142,6 +154,43 @@ export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
     tokenExchangeAttemptsPerIpPerHour: result.data.TOKEN_EXCHANGE_ATTEMPTS_PER_IP_PER_HOUR,
     tokenExchangeFailuresPerSelector: result.data.TOKEN_EXCHANGE_FAILURES_PER_SELECTOR,
   });
+  // Parse DODO_PRODUCT_IDS JSON mapping if provided.
+  let productIds: Record<string, string> | undefined;
+  if (result.data.DODO_PRODUCT_IDS) {
+    try {
+      const parsed = JSON.parse(result.data.DODO_PRODUCT_IDS);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        throw new Error('DODO_PRODUCT_IDS must be a JSON object');
+      }
+      productIds = {};
+      for (const [key, value] of Object.entries(parsed)) {
+        if (!/^[A-Z]{3}$/.test(key)) {
+          throw new Error(`Invalid currency code in DODO_PRODUCT_IDS: ${key}`);
+        }
+        if (typeof value !== 'string' || value.length === 0) {
+          throw new Error(`Invalid product ID for currency ${key} in DODO_PRODUCT_IDS`);
+        }
+        productIds[key] = value;
+      }
+    } catch (e) {
+      throw new Error(`Invalid DODO_PRODUCT_IDS JSON: ${(e as Error).message}`);
+    }
+  }
+// Validate DODO configuration
+if (result.data.DODO_API_KEY) {
+  if (!productIds || Object.keys(productIds).length === 0) {
+    throw new Error('DODO_PRODUCT_IDS must be a non-empty JSON object when DODO_API_KEY is configured');
+  }
+}
+try {
+  const baseUrlObj = new URL(result.data.DODO_BASE_URL);
+  if (baseUrlObj.protocol !== 'https:') {
+    throw new Error('DODO_BASE_URL must be HTTPS');
+  }
+} catch (e) {
+  throw new Error(`Invalid DODO_BASE_URL: ${(e as Error).message}`);
+}
+
   const identity: IdentityConfig = Object.freeze({
     accessRequestTtlSeconds: result.data.ACCESS_REQUEST_TTL_SECONDS,
     developmentEmailCaptureEnabled: result.data.DEV_EMAIL_CAPTURE_ENABLED,
@@ -161,6 +210,13 @@ export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
     logLevel: result.data.LOG_LEVEL,
     nodeEnv: result.data.NODE_ENV,
     port: result.data.API_PORT,
+    dodo: result.data.DODO_API_KEY
+      ? {
+          apiKey: result.data.DODO_API_KEY,
+          baseUrl: result.data.DODO_BASE_URL,
+          productIds,
+        }
+      : undefined,
   };
 
   if (result.data.DATABASE_URL !== undefined) config.databaseUrl = result.data.DATABASE_URL;

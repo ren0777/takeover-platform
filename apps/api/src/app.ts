@@ -11,6 +11,7 @@ import { PrismaCompanyIdentityRepository } from './modules/company-identity/pris
 import { PrismaTerritoryRepository } from './modules/territories/prisma-repository.js';
 import { TerritoryService } from './modules/territories/service.js';
 import { UnavailablePaymentProvider } from './modules/takeover/payment-provider.js';
+import { DodoPaymentProvider } from './modules/takeover/providers/dodo/DodoPaymentProvider.js';
 import { PrismaTakeoverRepository } from './modules/takeover/prisma-repository.js';
 import { TakeoverService } from './modules/takeover/service.js';
 import { companyIdentityPlugin } from './plugins/company-identity.js';
@@ -181,9 +182,19 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
         repository: new PrismaCompanyIdentityRepository(takeoverApp.database),
         tokens: createOpaqueTokenService(runtimeConfig.identity.tokenHmacSecret),
       });
+       // Determine which payment provider to use.
+       const provider = runtimeConfig?.dodo?.apiKey && runtimeConfig?.dodo?.baseUrl
+         ? new DodoPaymentProvider({
+             apiKey: runtimeConfig.dodo.apiKey,
+             baseUrl: runtimeConfig.dodo.baseUrl,
+             productIds: runtimeConfig.dodo.productIds ?? {},
+           })
+         : new UnavailablePaymentProvider();
+
       const service = new TakeoverService({
         clock: { now: () => new Date() },
-        provider: new UnavailablePaymentProvider(),
+        provider,
+
         repository: new PrismaTakeoverRepository(takeoverApp.database),
         statusTokenSecret: runtimeConfig.identity.tokenHmacSecret,
         statusTokenTtlSeconds: 86_400,

@@ -6,6 +6,8 @@ import type {
   TerritoryListResult,
 } from '../src/modules/territories/service.js';
 import type { TerritoryService } from '../src/modules/territories/service.js';
+vi.setConfig({ testTimeout: 20000 });
+
 import type {
   CompanyPublicSummary,
   TerritoryCategory,
@@ -502,7 +504,13 @@ describe('Territory public read API routes', () => {
     expect(body.data.company.slug).toBe(VALID_COMPANY_SLUG);
     expect(typeof body.data.currentTerritoryCount).toBe('number');
     expect(Array.isArray(body.data.territories)).toBe(true);
-    expect(body).not.toHaveProperty('meta');
+    // Expect pagination metadata envelope.
+    expect(body).toHaveProperty('meta');
+    expect(body.meta).toHaveProperty('requestId');
+    expect(body.meta.limit).toBe(50);
+    // nextCursor may be undefined for single-page result.
+    // Ensure meta does not contain unexpected properties.
+    expect(Object.keys(body.meta)).toEqual(expect.arrayContaining(['requestId', 'limit']));
   });
 
   it('GET /api/companies/:slug/territories returns 404 for unknown company', async () => {

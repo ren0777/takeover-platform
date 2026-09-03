@@ -1,11 +1,13 @@
 import { z } from 'zod';
+import { apiSuccessSchema } from './api.js';
+// import { z } from 'zod';
 import {
   OWNERSHIP_SOURCES,
   TERRITORY_AVAILABILITY_STATUSES,
   TERRITORY_PUBLIC_STATUSES,
 } from './constants.js';
 import { httpsUrlSchema, verificationLevelSchema } from './company.js';
-import { apiSuccessSchema } from './api.js';
+// import { apiSuccessSchema } from './api.js';
 
 const isoDateTimeSchema = z.string().datetime({ offset: true });
 const slugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
@@ -107,15 +109,13 @@ export const companyTerritoriesSchema = z
   })
   .strict();
 export type CompanyTerritories = z.infer<typeof companyTerritoriesSchema>;
-
-export const paginationQuerySchema = z
-  .object({
-    cursor: z.string().min(1).optional(),
-    limit: z.coerce.number().int().min(1).max(100).default(50),
-  })
-  .strict();
-export type PaginationQuery = z.infer<typeof paginationQuerySchema>;
-
+// export const pageMetaSchema = z
+//   .object({
+//     requestId: z.string().min(1),
+//     limit: z.number().int().min(1).max(100),
+//     nextCursor: z.string().min(1).optional(),
+//   })
+//   .strict();
 export const pageMetaSchema = z
   .object({
     requestId: z.string().min(1),
@@ -124,6 +124,22 @@ export const pageMetaSchema = z
   })
   .strict();
 export type PageMeta = z.infer<typeof pageMetaSchema>;
+
+
+
+// Paginated envelope for company territories, mirroring other paginated responses.
+export const companyTerritoriesPageSchema = apiSuccessSchema(companyTerritoriesSchema)
+  .extend({ meta: pageMetaSchema })
+  .strict();
+export type CompanyTerritoriesPage = z.infer<typeof companyTerritoriesPageSchema>;
+
+export const paginationQuerySchema = z
+  .object({
+    cursor: z.string().min(1).optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+  })
+  .strict();
+export type PaginationQuery = z.infer<typeof paginationQuerySchema>;
 
 export const territoryListQuerySchema = paginationQuerySchema
   .extend({

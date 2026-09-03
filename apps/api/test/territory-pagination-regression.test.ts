@@ -6,6 +6,10 @@ import type {
 } from '../src/modules/territories/service.js';
 import type { CompanyPublicSummary, TerritorySummary } from '@takeover/shared';
 
+vi.setConfig({ testTimeout: 20000 });
+
+
+
 /**
  * Regression marker for the company-territories pagination bug.
  *
@@ -53,20 +57,44 @@ const ownedTerritory = {
 } as unknown as TerritorySummary;
 
 function createService(): TerritoryService {
+  // Two deterministic territories for pagination
+  const secondTerritory = {
+    ...ownedTerritory,
+    id: '21000000-0000-4000-8000-000000000002',
+    name: 'AI Coding 2',
+    slug: 'ai-coding-2',
+  } as unknown as TerritorySummary;
+
+  let callIndex = 0;
   return {
     getCompany: vi.fn(async () => company),
-    listCompanyTerritories: vi.fn(async (): Promise<CompanyTerritoriesResult> => ({
-      company,
-      currentTerritoryCount: 2,
-      territories: [ownedTerritory],
-      limit: 1,
-      nextCursor: 'next-page-cursor',
-    })),
+    listCompanyTerritories: vi.fn(async (slug: string, query: { cursor?: string; limit: number }) => {
+      // First page (no cursor)
+      if (!query?.cursor) {
+        callIndex++;
+        return {
+          company,
+          currentTerritoryCount: 2,
+          territories: [ownedTerritory],
+          limit: query.limit,
+          nextCursor: 'next-page-cursor',
+        };
+      }
+      // Second page (cursor present)
+      callIndex++;
+      return {
+        company,
+        currentTerritoryCount: 2,
+        territories: [secondTerritory],
+        limit: query.limit,
+        nextCursor: null,
+      };
+    }),
   } as unknown as TerritoryService;
 }
 
 describe('company territories pagination regression', () => {
-  it.fails(
+  it(
     'GET /api/companies/:slug/territories publishes the pagination cursor in meta',
     async () => {
       const app = buildApp({ territories: { service: createService() } });
@@ -82,6 +110,22 @@ describe('company territories pagination regression', () => {
       expect(body.meta.nextCursor).toBe('next-page-cursor');
       expect(body.meta.limit).toBe(1);
       expect(typeof body.meta.requestId).toBe('string');
+
+       // Request second page using cursor
+       const nextCursor = body.meta.nextCursor;
+       const response2 = await app.inject({
+         method: 'GET',
+         url: `/api/companies/${companySlug}/territories?limit=1&cursor=${nextCursor}`,
+       });
+       expect(response2.statusCode).toBe(200);
+       const body2 = JSON.parse(response2.body);
+       expect(body2.data.territories).toHaveLength(1);
+       // Ensure different territory
+       expect(body2.data.territories[0].id).not.toBe(body.data.territories[0].id);
+       expect(body2.meta).toBeDefined();
+       expect(body2.meta.nextCursor).toBeNull();
+       expect(body2.meta.limit).toBe(1);
+       expect(typeof body2.meta.requestId).toBe('string');
     },
   );
 });

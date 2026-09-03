@@ -1,6 +1,7 @@
 import {
   companyPublicSummarySchema,
   companyTerritoriesSchema,
+  companyTerritoriesPageSchema,
   territoryCategorySchema,
   territoryDetailSchema,
   territoryHistoryPageSchema,
@@ -103,10 +104,11 @@ export function fetchPublicCompany(slug: string): Promise<CompanyPublicSummary> 
   });
 }
 
-export function fetchCompanyTerritories(slug: string): Promise<CompanyTerritories> {
-  return apiRequest({
+export async function fetchCompanyTerritories(slug: string): Promise<CompanyTerritories> {
+  const envelope = await apiRequestEnvelope({
     method: 'GET',
     path: TERRITORY_API_PATHS.companyTerritories(slug),
-    schema: companyTerritoriesSchema,
+    schema: companyTerritoriesPageSchema,
   });
+  return envelope.data;
 }

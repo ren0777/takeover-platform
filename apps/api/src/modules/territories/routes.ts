@@ -114,7 +114,8 @@ export async function territoryRoutes(
       territories: result.territories,
     };
     companyTerritoriesSchema.parse(payload);
-    const response: ApiSuccess<typeof payload> = { data: payload };
+    const meta = buildPageMeta(request.id, result.limit, result.nextCursor);
+    const response: ApiSuccess<typeof payload> = { data: payload, meta };
     return response;
   });
 }

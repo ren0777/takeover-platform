@@ -161,7 +161,7 @@ describe('Territory public read API routes', () => {
     const body = JSON.parse(response.body);
     expect(Array.isArray(body.data)).toBe(true);
     expect(body.data[0]).toMatchObject({ slug: VALID_CATEGORY_SLUG, name: 'AI' });
-    expect(body).not.toHaveProperty('meta');
+    expect(body).toHaveProperty('meta');
   });
 
   it('GET /api/territories returns a paginated territory list with meta', async () => {

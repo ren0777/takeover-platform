@@ -1,6 +1,7 @@
 import {
   companyPublicSummarySchema,
-  companyTerritoriesSchema,
+
+  companyTerritoriesPageSchema,
   paginationQuerySchema,
   territoryCategorySchema,
   territoryDetailSchema,
@@ -42,11 +43,12 @@ export async function territoryRoutes(
   options: TerritoryRoutesOptions,
 ): Promise<void> {
   // GET /api/territory-categories - unpaginated, data-only success envelope.
-  app.get('/api/territory-categories', async () => {
+  app.get('/api/territory-categories', async (request) => {
     const categories = await options.service.listCategories();
     territoryCategorySchema.array().parse(categories);
     const response: ApiSuccess<typeof categories> = {
       data: categories,
+      meta: buildPageMeta(request.id, categories.length, undefined),
     };
     return response;
   });
@@ -103,6 +105,7 @@ export async function territoryRoutes(
   // GET /api/companies/:slug/territories - data-only territories owned by a company.
   app.get<{ Params: { slug: string } }>('/api/companies/:slug/territories', async (request) => {
     const { slug } = publicSlugParamSchema.parse(request.params);
+
     const query = paginationQuerySchema.parse(request.query);
     const result = await options.service.listCompanyTerritories(slug, {
       ...(query.cursor !== undefined ? { cursor: query.cursor } : {}),
@@ -113,8 +116,8 @@ export async function territoryRoutes(
       currentTerritoryCount: result.currentTerritoryCount,
       territories: result.territories,
     };
-    companyTerritoriesSchema.parse(payload);
     const meta = buildPageMeta(request.id, result.limit, result.nextCursor);
+    companyTerritoriesPageSchema.parse({ data: payload, meta });
     const response: ApiSuccess<typeof payload> = { data: payload, meta };
     return response;
   });

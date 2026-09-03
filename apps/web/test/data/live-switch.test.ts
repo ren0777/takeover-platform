@@ -306,6 +306,7 @@ describe('company-territories', () => {
         currentTerritoryCount: owned.length,
         territories: owned,
       },
+      meta: { requestId: 'req-1', limit: 50 },
     });
 
     expect((await getCompanyTerritories(slug))?.currentTerritoryCount).toBe(owned.length);
@@ -321,7 +322,7 @@ describe('company-territories', () => {
 
   it('rejects a malformed live response instead of rendering it', async () => {
     live('company-territories');
-    respondWith({ data: { currentTerritoryCount: 1, territories: [] } });
+    respondWith({ data: { currentTerritoryCount: 1, territories: [] }, meta: { requestId: 'req-1', limit: 50 } });
 
     await expect(getCompanyTerritories('nope')).rejects.toThrow();
   });

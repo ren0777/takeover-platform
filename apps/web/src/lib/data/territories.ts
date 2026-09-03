@@ -56,7 +56,7 @@ export async function getTerritoryPage(
 ): Promise<Page<TerritorySummary>> {
   if (resolveSource('territory-list') === 'live') {
     const page = await fetchTerritories(query);
-    return { items: page.data, nextCursor: page.meta.nextCursor };
+    return { items: page.data, nextCursor: page.meta.nextCursor ?? undefined };
   }
 
   const { TERRITORY_FIXTURES } = await fixtures();
@@ -91,7 +91,7 @@ export async function getTerritoryHistoryPage(
 ): Promise<Page<TerritoryHistoryEntry>> {
   if (resolveSource('territory-history') === 'live') {
     const page = await fetchTerritoryHistory(slug, query);
-    return { items: page.data, nextCursor: page.meta.nextCursor };
+    return { items: page.data, nextCursor: page.meta.nextCursor ?? undefined };
   }
 
   const { historyFor } = await fixtures();

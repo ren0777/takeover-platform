@@ -15,7 +15,7 @@ This repository documents its own truth honestly: every doc states whether a cap
 | 0 | Monorepo foundation, shared tooling, health endpoints | ✅ Implemented & verified |
 | 1 | Company/contact identity, passwordless verification, company-scoped management sessions | ✅ Implemented & verified |
 | 2 | Territories, authoritative ownership history | 🚧 Designed, not implemented |
-| 3 | Capture engine — pricing, payments (Dodo), webhooks, atomic ownership transfer | 📋 Planned |
+| 3 | Capture engine — pricing, payments (Dodo), webhooks, atomic ownership transfer | 🚧 Frontend implemented & tested; backend capture engine in progress |
 | 4 | Empire scoring, rankings, live activity feed | 📋 Planned |
 | 5 | Seasons, rollover, Hall of Fame | 📋 Planned |
 | 6 | Battles (rivalry state machine) | 📋 Planned / needs review |
@@ -90,6 +90,7 @@ The canonical docs are the actual source of truth for scope and design — read 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system design, sequence diagrams, data model, security model
 - [docs/PHASES.md](docs/PHASES.md) — delivery phases with dependencies, acceptance criteria, and verification evidence
 - [docs/DESIGN.md](docs/DESIGN.md) / [docs/PHASE3_DESIGN.md](docs/PHASE3_DESIGN.md) — detailed design specs for specific phases
+- [docs/DODO_INTEGRATION.md](docs/DODO_INTEGRATION.md) — what Dodo Payments' public docs confirm vs. leave unknown; tracked before any Dodo-specific code is written
 - [docs/RULES.md](docs/RULES.md) — engineering rules and invariants this codebase holds itself to
 
 ## Contributing

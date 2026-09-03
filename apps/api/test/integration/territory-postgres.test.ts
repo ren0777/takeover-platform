@@ -169,7 +169,11 @@ describe('Phase 2 PostgreSQL territory migration invariants', () => {
       const categories = await app.inject({ method: 'GET', url: '/api/territory-categories' });
       expect(categories.statusCode).toBe(200);
       const categoryEnvelope = JSON.parse(categories.body);
-      expect(categoryEnvelope).not.toHaveProperty('meta');
+      expect(categoryEnvelope.meta).toMatchObject({
+        requestId: expect.any(String),
+        limit: approvedTerritorySeed.categories.length,
+      });
+      expect(categoryEnvelope.meta).not.toHaveProperty('nextCursor');
       expect(territoryCategorySchema.array().parse(categoryEnvelope.data)).toHaveLength(
         approvedTerritorySeed.categories.length,
       );
@@ -262,7 +266,11 @@ describe('Phase 2 PostgreSQL territory migration invariants', () => {
       });
       expect(companyTerritories.statusCode).toBe(200);
       const holdingsEnvelope = JSON.parse(companyTerritories.body);
-      expect(holdingsEnvelope).not.toHaveProperty('meta');
+      expect(holdingsEnvelope.meta).toMatchObject({
+        requestId: expect.any(String),
+        limit: 3,
+      });
+      expect(holdingsEnvelope.meta).not.toHaveProperty('nextCursor');
       const holdings = companyTerritoriesSchema.parse(holdingsEnvelope.data);
       expect(holdings.currentTerritoryCount).toBe(3);
       expect(holdings.territories).toHaveLength(3);

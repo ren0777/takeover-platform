@@ -1008,7 +1008,7 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
         if (
           payment.status === 'REFUNDED' ||
           existingRefund?.status === 'COMPLETED' ||
-          existingRefund?.status === 'PENDING'
+          (existingRefund?.status === 'PENDING' && existingRefund.providerRefundReference !== null)
         ) {
           return {
             payment: null,
@@ -1169,7 +1169,7 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
       reconciliation:
         reconciliation === null
           ? null
-          : { action: reconciliation.action, status: reconciliation.status },
+          : { action: reconciliation.action, status: reconciliation.status, providerRefundReference: (reconciliation as any).providerRefundReference },
       territory: {
         ownerCompanyId: activeOwnership?.companyId ?? null,
         version: territory.version,

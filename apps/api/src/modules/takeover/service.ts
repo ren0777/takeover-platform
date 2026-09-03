@@ -46,6 +46,12 @@ export type PaymentProvider = {
    */
   createCheckout(input: PaymentProviderCheckoutInput): Promise<PaymentProviderCheckoutResult>;
   refundPayment(input: PaymentProviderRefundInput): Promise<PaymentProviderRefundResult>;
+  /**
+   * Lookup an existing refund for a given provider payment ID. Returns null if no refund exists.
+   * This method enables recovery from crashes where the refund was processed by the provider
+   * but the local state was not persisted.
+   */
+  lookupRefund(input: { providerPaymentId: string; paymentId: string }): Promise<PaymentProviderRefundResult | null>;
 };
 
 export type TerritoryQuoteRecord = {
@@ -402,6 +408,10 @@ function mapAttempt(record: StatusAttemptRecord, now: Date): AttemptStatus {
   } else if (record.payment === null && record.quote.expiresAt <= now) {
     state = 'QUOTE_EXPIRED';
   }
+     // Ensure REFUND_PENDING is only set when providerRefundReference exists
+     if (record.reconciliation?.action === 'REFUND' && record.reconciliation?.status === 'PENDING' && !(record.reconciliation as any).providerRefundReference) {
+       state = 'RECONCILIATION_REQUIRED';
+     }
 
   return attemptStatusSchema.parse({
     ...(amountCharged === undefined ? {} : { amountCharged }),
@@ -540,7 +550,43 @@ export class TakeoverService {
     }
     if (prepared.payment === null) return undefined;
 
-    let refund: PaymentProviderRefundResult;
+     let refundResult: PaymentProviderRefundResult | null = null;
+     // try {
+       // First, attempt to look up any existing refund on the provider side.
+       const existing = await this.dependencies.provider.lookupRefund({
+         providerPaymentId: prepared.payment.providerPaymentId,
+         paymentId: prepared.payment.id,
+       });
+       if (existing) {
+         refundResult = existing;
+       } else {
+         // No existing refund, issue a new one.
+         refundResult = await this.dependencies.provider.refundPayment({
+           amount: mapMoney(prepared.payment.amountMinor, prepared.payment.currency),
+           paymentId: prepared.payment.id,
+           providerPaymentId: prepared.payment.providerPaymentId,
+           reason: 'Takeover ownership capture could not be completed safely',
+         });
+       }
+     } catch (error) {
+       const attempt = await this.dependencies.repository.recordRefundRequestFailure({
+         paymentId: prepared.payment.id,
+         reason: error instanceof Error ? error.message : 'Refund request failed',
+         status:
+           error instanceof PaymentProviderRefundError && !error.retryable ? 'FAILED' : 'PENDING',
+       });
+       return mapAttempt(attempt, this.dependencies.clock.now());
+     }
+
+     // At this point, refundResult is guaranteed to be non‑null.
+     const attempt = await this.dependencies.repository.recordRefundRequestResult({
+       paymentId: prepared.payment.id,
+       providerRefundId: refundResult.providerRefundId,
+       status: refundResult.status,
+     });
+     return mapAttempt(attempt, this.dependencies.clock.now());
+     /*
+    let //refund: PaymentProviderRefundResult;
     try {
       refund = await this.dependencies.provider.refundPayment({
         amount: mapMoney(prepared.payment.amountMinor, prepared.payment.currency),
@@ -563,6 +609,7 @@ export class TakeoverService {
       providerRefundId: refund.providerRefundId,
       status: refund.status,
     });
+     */
     return mapAttempt(attempt, this.dependencies.clock.now());
   }
 }

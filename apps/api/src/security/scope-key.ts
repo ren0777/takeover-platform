@@ -1,6 +1,12 @@
 import { createHmac } from 'node:crypto';
 
-export type SecurityDigestDomain = 'csrf' | 'ip' | 'link' | 'rate-key' | 'session';
+export type SecurityDigestDomain =
+  | 'checkout-status'
+  | 'csrf'
+  | 'ip'
+  | 'link'
+  | 'rate-key'
+  | 'session';
 
 export function hashSecurityScope(
   key: Uint8Array,

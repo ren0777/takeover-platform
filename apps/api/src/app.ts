@@ -10,10 +10,14 @@ import {
 import { PrismaCompanyIdentityRepository } from './modules/company-identity/prisma-repository.js';
 import { PrismaTerritoryRepository } from './modules/territories/prisma-repository.js';
 import { TerritoryService } from './modules/territories/service.js';
+import { UnavailablePaymentProvider } from './modules/takeover/payment-provider.js';
+import { PrismaTakeoverRepository } from './modules/takeover/prisma-repository.js';
+import { TakeoverService } from './modules/takeover/service.js';
 import { companyIdentityPlugin } from './plugins/company-identity.js';
 import { databasePlugin } from './plugins/database.js';
 import { emailPlugin } from './plugins/email.js';
 import { healthPlugin } from './plugins/health.js';
+import { takeoverPlugin } from './plugins/takeover.js';
 import { territoriesPlugin } from './plugins/territories.js';
 import { createOpaqueTokenService } from './security/opaque-token.js';
 
@@ -28,6 +32,11 @@ export type BuildAppOptions = {
   };
   territories?: {
     service: TerritoryService;
+  };
+  takeover?: {
+    config: { webAppOrigin: string };
+    identityService: CompanyIdentityService;
+    service: TakeoverService;
   };
 };
 
@@ -157,6 +166,34 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
         new PrismaTerritoryRepository(territoryApp.database),
       );
       await territoriesPlugin(territoryApp, { service: territoryService });
+    });
+  }
+  if (options.takeover !== undefined) {
+    app.register(takeoverPlugin, options.takeover);
+  } else if (runtimeConfig?.databaseUrl !== undefined) {
+    app.register(async (takeoverApp) => {
+      await databasePlugin(takeoverApp);
+      await emailPlugin(takeoverApp, runtimeConfig);
+      const identityService = createCompanyIdentityService({
+        clock: { now: () => new Date() },
+        config: runtimeConfig.identity,
+        emailProvider: takeoverApp.emailProvider,
+        repository: new PrismaCompanyIdentityRepository(takeoverApp.database),
+        tokens: createOpaqueTokenService(runtimeConfig.identity.tokenHmacSecret),
+      });
+      const service = new TakeoverService({
+        clock: { now: () => new Date() },
+        provider: new UnavailablePaymentProvider(),
+        repository: new PrismaTakeoverRepository(takeoverApp.database),
+        statusTokenSecret: runtimeConfig.identity.tokenHmacSecret,
+        statusTokenTtlSeconds: 86_400,
+        trustedWebOrigin: runtimeConfig.identity.webAppOrigin,
+      });
+      await takeoverPlugin(takeoverApp, {
+        config: { webAppOrigin: runtimeConfig.identity.webAppOrigin },
+        identityService,
+        service,
+      });
     });
   }
   return app;

@@ -41,6 +41,14 @@ type TakeoverTransactionClient = Prisma.TransactionClient;
 
 type QuoteLockRow = { id: string };
 
+type ProviderPaymentTransitionRecord = {
+  amountMinor: bigint;
+  checkoutId: string;
+  currency: string;
+  id: string;
+  status: 'PENDING' | 'CONFIRMED' | 'FAILED' | 'REFUNDED' | 'RECONCILED';
+};
+
 function mapTerritory(row: {
   availabilityStatus: 'ACTIVE' | 'DISABLED';
   currency: string;
@@ -375,6 +383,17 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
           return null;
         }
 
+        const existingPaymentOutcome = await this.resolveExistingProviderPaymentEvent(transaction, {
+          amountMinor: input.amountMinor,
+          checkoutId: checkout.id,
+          currency: input.currency,
+          eventId: event.id,
+          eventType: input.eventType,
+          provider: input.provider,
+          providerPaymentId: input.providerPaymentId,
+        });
+        if (existingPaymentOutcome !== null) return existingPaymentOutcome;
+
         if (
           input.eventType !== 'payment.succeeded' ||
           input.amountMinor === undefined ||
@@ -429,6 +448,17 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
             : null;
         const reconciliationReason = metadataError ?? moneyError;
         if (reconciliationReason !== null) {
+          const existingPayment = await this.findProviderPayment(transaction, {
+            provider: input.provider,
+            providerPaymentId: input.providerPaymentId,
+          });
+          if (existingPayment !== null) {
+            return this.reconcileExistingProviderPaymentEvent(transaction, {
+              eventId: event.id,
+              payment: existingPayment,
+              reason: reconciliationReason,
+            });
+          }
           const payment = await transaction.payment.upsert({
             create: {
               amountMinor: input.amountMinor,
@@ -592,7 +622,7 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
         data: { status: 'REFUNDED' },
         where: { id: payment.id },
       });
-      if (capture?.status === 'FAILED') {
+      if (capture) {
         await transaction.ownershipCapture.update({
           data: { status: 'REFUNDED' },
           where: { id: capture.id },
@@ -693,6 +723,122 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
     return null;
   }
 
+  private async findProviderPayment(
+    transaction: TakeoverTransactionClient,
+    input: { provider: string; providerPaymentId: string },
+  ): Promise<ProviderPaymentTransitionRecord | null> {
+    return transaction.payment.findUnique({
+      select: {
+        amountMinor: true,
+        checkoutId: true,
+        currency: true,
+        id: true,
+        status: true,
+      },
+      where: {
+        provider_providerPaymentId: {
+          provider: input.provider,
+          providerPaymentId: input.providerPaymentId,
+        },
+      },
+    });
+  }
+
+  private providerPaymentMismatch(
+    payment: ProviderPaymentTransitionRecord,
+    input: { amountMinor?: bigint; checkoutId: string; currency?: string },
+  ): boolean {
+    return (
+      payment.checkoutId !== input.checkoutId ||
+      (input.amountMinor !== undefined && payment.amountMinor !== input.amountMinor) ||
+      (input.currency !== undefined && payment.currency !== input.currency)
+    );
+  }
+
+  private async reconcileExistingProviderPaymentEvent(
+    transaction: TakeoverTransactionClient,
+    input: { eventId?: string; payment: ProviderPaymentTransitionRecord; reason: string },
+  ): Promise<StatusAttemptRecord> {
+    await transaction.paymentReconciliationAction.upsert({
+      create: {
+        action: 'RECONCILE',
+        paymentId: input.payment.id,
+        reason: input.reason,
+        requestedByActorType: 'SYSTEM',
+        status: 'PENDING',
+      },
+      update: {},
+      where: { paymentId_action: { action: 'RECONCILE', paymentId: input.payment.id } },
+    });
+    if (input.eventId !== undefined) {
+      await transaction.paymentWebhookEvent.update({
+        data: {
+          errorCode: input.reason,
+          paymentId: input.payment.id,
+          processedAt: new Date(),
+          processingStatus: 'RECONCILED',
+        },
+        where: { id: input.eventId },
+      });
+    }
+    return requireStatusAttempt(
+      await this.findStatusAttemptByCheckoutId(transaction, input.payment.checkoutId),
+    );
+  }
+
+  private async ignoreExistingProviderPaymentEvent(
+    transaction: TakeoverTransactionClient,
+    input: { eventId: string; payment: ProviderPaymentTransitionRecord },
+  ): Promise<StatusAttemptRecord> {
+    await transaction.paymentWebhookEvent.update({
+      data: {
+        paymentId: input.payment.id,
+        processedAt: new Date(),
+        processingStatus: 'IGNORED',
+      },
+      where: { id: input.eventId },
+    });
+    return requireStatusAttempt(
+      await this.findStatusAttemptByCheckoutId(transaction, input.payment.checkoutId),
+    );
+  }
+
+  private async resolveExistingProviderPaymentEvent(
+    transaction: TakeoverTransactionClient,
+    input: {
+      amountMinor?: bigint;
+      checkoutId: string;
+      currency?: string;
+      eventId: string;
+      eventType: string;
+      provider: string;
+      providerPaymentId: string;
+    },
+  ): Promise<StatusAttemptRecord | null> {
+    const existingPayment = await this.findProviderPayment(transaction, input);
+    if (existingPayment === null) return null;
+    if (this.providerPaymentMismatch(existingPayment, input)) {
+      return this.reconcileExistingProviderPaymentEvent(transaction, {
+        eventId: input.eventId,
+        payment: existingPayment,
+        reason: 'PROVIDER_PAYMENT_MISMATCH',
+      });
+    }
+    if (existingPayment.status === 'REFUNDED' || existingPayment.status === 'RECONCILED') {
+      return this.ignoreExistingProviderPaymentEvent(transaction, {
+        eventId: input.eventId,
+        payment: existingPayment,
+      });
+    }
+    if (input.eventType !== 'payment.succeeded' && existingPayment.status === 'CONFIRMED') {
+      return this.ignoreExistingProviderPaymentEvent(transaction, {
+        eventId: input.eventId,
+        payment: existingPayment,
+      });
+    }
+    return null;
+  }
+
   private async confirmProviderPaymentAndCaptureInTransaction(
     transaction: TakeoverTransactionClient,
     input: ConfirmProviderPaymentInput,
@@ -718,27 +864,42 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
       throw new Error('Provider payment amount does not match quote');
     }
 
-    const payment = await transaction.payment.upsert({
-      create: {
-        amountMinor: input.amountMinor,
-        checkoutId: checkout.id,
-        confirmedAt: new Date(),
-        currency: input.currency,
-        provider: input.provider,
-        providerPaymentId: input.providerPaymentId,
-        status: 'CONFIRMED',
-      },
-      update: {
-        confirmedAt: new Date(),
-        status: 'CONFIRMED',
-      },
-      where: {
-        provider_providerPaymentId: {
+    const existingPayment = await this.findProviderPayment(transaction, input);
+    const payment =
+      existingPayment ??
+      (await transaction.payment.create({
+        data: {
+          amountMinor: input.amountMinor,
+          checkoutId: checkout.id,
+          confirmedAt: new Date(),
+          currency: input.currency,
           provider: input.provider,
           providerPaymentId: input.providerPaymentId,
+          status: 'CONFIRMED',
         },
-      },
-    });
+      }));
+    if (existingPayment !== null) {
+      if (this.providerPaymentMismatch(existingPayment, input)) {
+        return this.reconcileExistingProviderPaymentEvent(transaction, {
+          payment: existingPayment,
+          reason: 'PROVIDER_PAYMENT_MISMATCH',
+        });
+      }
+      if (existingPayment.status === 'REFUNDED' || existingPayment.status === 'RECONCILED') {
+        return requireStatusAttempt(
+          await this.findStatusAttemptByCheckoutId(transaction, existingPayment.checkoutId),
+        );
+      }
+      if (existingPayment.status !== 'CONFIRMED') {
+        await transaction.payment.update({
+          data: {
+            confirmedAt: new Date(),
+            status: 'CONFIRMED',
+          },
+          where: { id: existingPayment.id },
+        });
+      }
+    }
 
     const existingCapture = await transaction.ownershipCapture.findUnique({
       where: { paymentId: payment.id },
@@ -749,6 +910,11 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
       );
     }
     if (existingCapture?.status === 'FAILED') {
+      return requireStatusAttempt(
+        await this.findStatusAttemptByCheckoutId(transaction, checkout.id),
+      );
+    }
+    if (existingCapture?.status === 'REFUNDED') {
       return requireStatusAttempt(
         await this.findStatusAttemptByCheckoutId(transaction, checkout.id),
       );

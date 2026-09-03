@@ -48,6 +48,50 @@ function createService(provider = createProvider()) {
   };
 }
 
+async function createCheckoutForFixture(service: TakeoverService, companyId = fixture.companyId) {
+  const quote = await service.createQuote({
+    companyId,
+    territorySlug: fixture.territorySlug,
+  });
+  const checkout = await service.createCheckout({
+    companyId,
+    quoteId: quote.quoteId,
+  });
+  return { checkout, quote };
+}
+
+async function ingestDodoWebhook(
+  service: TakeoverService,
+  input: {
+    amountMinor?: bigint;
+    checkoutId: string;
+    currency?: string;
+    eventId: string;
+    eventType: string;
+    paymentId: string;
+    providerCheckoutId: string;
+    quoteId: string;
+  },
+) {
+  return service.processVerifiedProviderWebhook({
+    ...(input.amountMinor === undefined ? {} : { amountMinor: input.amountMinor }),
+    ...(input.currency === undefined ? {} : { currency: input.currency }),
+    eventType: input.eventType,
+    metadata: {
+      ...(input.amountMinor === undefined ? {} : { amount_minor: Number(input.amountMinor) }),
+      checkout_id: input.checkoutId,
+      ...(input.currency === undefined ? {} : { currency: input.currency }),
+      quote_id: input.quoteId,
+    },
+    payload: { data: { payment_id: input.paymentId }, type: input.eventType },
+    provider: 'DODO',
+    providerCheckoutId: input.providerCheckoutId,
+    providerEventId: input.eventId,
+    providerPaymentId: input.paymentId,
+    signatureDigest: new Uint8Array(32).fill(12),
+  });
+}
+
 beforeEach(async () => {
   const suffix = randomUUID().slice(0, 8);
   const category = await prisma.territoryCategory.create({
@@ -618,4 +662,213 @@ describe('TakeoverService with real PostgreSQL repository', () => {
       prisma.territoryOwnership.count({ where: { territoryId: fixture.territoryId } }),
     ).resolves.toBe(0);
   });
+
+  it('keeps refunded payment terminal when late payment webhooks arrive out of order', async () => {
+    const provider = createProvider('DODO');
+    const { service } = createService(provider);
+    const { checkout, quote } = await createCheckoutForFixture(service);
+    await prisma.territory.update({
+      data: { version: { increment: 1 } },
+      where: { id: fixture.territoryId },
+    });
+    const providerPaymentId = `pay-late-refunded-${fixture.suffix}`;
+    await service.confirmProviderPayment({
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      provider: 'DODO',
+      providerPaymentId,
+    });
+    const payment = await prisma.payment.findFirstOrThrow({
+      where: { checkoutId: checkout.checkoutId },
+    });
+    await service.requestRefundForReconciliation(payment.id);
+    await service.processVerifiedProviderWebhook({
+      amountMinor: 1500n,
+      currency: 'USD',
+      eventType: 'refund.succeeded',
+      metadata: { amount_minor: 1500, currency: 'USD', payment_id: payment.id },
+      payload: { data: { refund_id: `ref-late-${fixture.suffix}` }, type: 'refund.succeeded' },
+      provider: 'DODO',
+      providerEventId: `msg-late-refund-${fixture.suffix}`,
+      providerPaymentId,
+      providerRefundId: `ref-late-${fixture.suffix}`,
+      signatureDigest: new Uint8Array(32).fill(13),
+    });
+
+    const lateSucceeded = await ingestDodoWebhook(service, {
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      eventId: `msg-late-payment-success-${fixture.suffix}`,
+      eventType: 'payment.succeeded',
+      paymentId: providerPaymentId,
+      providerCheckoutId: `provider-${checkout.checkoutId}`,
+      quoteId: quote.quoteId,
+    });
+    const lateFailed = await ingestDodoWebhook(service, {
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      eventId: `msg-late-payment-failed-${fixture.suffix}`,
+      eventType: 'payment.failed',
+      paymentId: providerPaymentId,
+      providerCheckoutId: `provider-${checkout.checkoutId}`,
+      quoteId: quote.quoteId,
+    });
+    const lateProcessing = await ingestDodoWebhook(service, {
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      eventId: `msg-late-payment-processing-${fixture.suffix}`,
+      eventType: 'payment.processing',
+      paymentId: providerPaymentId,
+      providerCheckoutId: `provider-${checkout.checkoutId}`,
+      quoteId: quote.quoteId,
+    });
+
+    expect(lateSucceeded).toMatchObject({ state: 'REFUNDED', terminal: true });
+    expect(lateFailed).toMatchObject({ state: 'REFUNDED', terminal: true });
+    expect(lateProcessing).toMatchObject({ state: 'REFUNDED', terminal: true });
+    await expect(
+      prisma.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+    ).resolves.toMatchObject({
+      status: 'REFUNDED',
+    });
+    await expect(prisma.ownershipCapture.count({ where: { paymentId: payment.id } })).resolves.toBe(
+      1,
+    );
+    await expect(
+      prisma.ownershipCapture.findUniqueOrThrow({ where: { paymentId: payment.id } }),
+    ).resolves.toMatchObject({ status: 'REFUNDED' });
+    await expect(
+      prisma.territoryOwnership.count({ where: { territoryId: fixture.territoryId } }),
+    ).resolves.toBe(0);
+  });
+
+  it('does not downgrade confirmed money when late failed payment webhooks arrive', async () => {
+    const { service } = createService(createProvider('DODO'));
+    const { checkout, quote } = await createCheckoutForFixture(service);
+    const providerPaymentId = `pay-late-failed-${fixture.suffix}`;
+    await ingestDodoWebhook(service, {
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      eventId: `msg-payment-success-${fixture.suffix}`,
+      eventType: 'payment.succeeded',
+      paymentId: providerPaymentId,
+      providerCheckoutId: `provider-${checkout.checkoutId}`,
+      quoteId: quote.quoteId,
+    });
+
+    const lateFailed = await ingestDodoWebhook(service, {
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      eventId: `msg-payment-failed-after-success-${fixture.suffix}`,
+      eventType: 'payment.failed',
+      paymentId: providerPaymentId,
+      providerCheckoutId: `provider-${checkout.checkoutId}`,
+      quoteId: quote.quoteId,
+    });
+
+    expect(lateFailed).toMatchObject({ state: 'CAPTURED', terminal: true });
+    await expect(
+      prisma.payment.findFirstOrThrow({ where: { checkoutId: checkout.checkoutId } }),
+    ).resolves.toMatchObject({ status: 'CONFIRMED' });
+    const payment = await prisma.payment.findFirstOrThrow({
+      select: { id: true },
+      where: { checkoutId: checkout.checkoutId },
+    });
+    await expect(prisma.ownershipCapture.count({ where: { paymentId: payment.id } })).resolves.toBe(
+      1,
+    );
+  });
+
+  it('reconciles provider payment id reuse with a different checkout', async () => {
+    const { service } = createService(createProvider('DODO'));
+    const { checkout, quote } = await createCheckoutForFixture(service);
+    const providerPaymentId = `pay-reused-checkout-${fixture.suffix}`;
+    await ingestDodoWebhook(service, {
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      eventId: `msg-reused-payment-original-${fixture.suffix}`,
+      eventType: 'payment.succeeded',
+      paymentId: providerPaymentId,
+      providerCheckoutId: `provider-${checkout.checkoutId}`,
+      quoteId: quote.quoteId,
+    });
+    await prisma.territory.update({
+      data: { minimumTakeoverAmountMinor: 2000n },
+      where: { id: fixture.territoryId },
+    });
+    const second = await createCheckoutForFixture(service);
+
+    const status = await ingestDodoWebhook(service, {
+      amountMinor: 2000n,
+      checkoutId: second.checkout.checkoutId,
+      currency: 'USD',
+      eventId: `msg-reused-payment-second-${fixture.suffix}`,
+      eventType: 'payment.succeeded',
+      paymentId: providerPaymentId,
+      providerCheckoutId: `provider-${second.checkout.checkoutId}`,
+      quoteId: second.quote.quoteId,
+    });
+
+    expect(status).toMatchObject({ state: 'CAPTURED', terminal: true });
+    await expect(
+      prisma.payment.findFirstOrThrow({ where: { checkoutId: checkout.checkoutId } }),
+    ).resolves.toMatchObject({
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      status: 'CONFIRMED',
+    });
+    await expect(
+      prisma.paymentReconciliationAction.count({ where: { reason: 'PROVIDER_PAYMENT_MISMATCH' } }),
+    ).resolves.toBe(1);
+  });
+
+  it.each([
+    ['amount', 1600n, 'USD'],
+    ['currency', 1500n, 'EUR'],
+  ])(
+    'reconciles provider payment id reuse with a different %s',
+    async (_field, amountMinor, currency) => {
+      const { service } = createService(createProvider('DODO'));
+      const { checkout, quote } = await createCheckoutForFixture(service);
+      const providerPaymentId = `pay-reused-${_field}-${fixture.suffix}`;
+      await ingestDodoWebhook(service, {
+        amountMinor: 1500n,
+        checkoutId: checkout.checkoutId,
+        currency: 'USD',
+        eventId: `msg-reused-${_field}-original-${fixture.suffix}`,
+        eventType: 'payment.succeeded',
+        paymentId: providerPaymentId,
+        providerCheckoutId: `provider-${checkout.checkoutId}`,
+        quoteId: quote.quoteId,
+      });
+
+      const status = await ingestDodoWebhook(service, {
+        amountMinor,
+        checkoutId: checkout.checkoutId,
+        currency,
+        eventId: `msg-reused-${_field}-mismatch-${fixture.suffix}`,
+        eventType: 'payment.succeeded',
+        paymentId: providerPaymentId,
+        providerCheckoutId: `provider-${checkout.checkoutId}`,
+        quoteId: quote.quoteId,
+      });
+
+      expect(status).toMatchObject({ state: 'CAPTURED', terminal: true });
+      await expect(
+        prisma.payment.findFirstOrThrow({ where: { checkoutId: checkout.checkoutId } }),
+      ).resolves.toMatchObject({ amountMinor: 1500n, currency: 'USD', status: 'CONFIRMED' });
+      await expect(
+        prisma.paymentReconciliationAction.count({
+          where: { reason: 'PROVIDER_PAYMENT_MISMATCH' },
+        }),
+      ).resolves.toBe(1);
+    },
+  );
 });

@@ -378,6 +378,7 @@ model SecurityRateLimitBucket {
 
   @@unique([keyDigest, windowStartedAt], map: "security_rate_limit_bucket_scope_key")
   @@index([expiresAt])
+  @@map("security_rate_limit_buckets")
 }
 
 enum QuoteStatus {
@@ -510,6 +511,3 @@ model PaymentReconciliationAction {
   @@map("payment_reconciliation_actions")
   @@unique([paymentId, action])
 }
-
-  
-// STRAY_MARKER

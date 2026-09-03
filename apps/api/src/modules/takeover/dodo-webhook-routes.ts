@@ -6,10 +6,11 @@ import type { TakeoverService } from './service.js';
 
 const DODO_PROVIDER = 'DODO';
 
-const dodoPaymentEventSchema = z
+const dodoEventSchema = z
   .object({
     data: z
       .object({
+        amount: z.number().int().nonnegative().nullable().optional(),
         checkout_session_id: z.string().optional(),
         currency: z
           .string()
@@ -17,6 +18,7 @@ const dodoPaymentEventSchema = z
           .optional(),
         metadata: z.record(z.string(), z.unknown()).default({}),
         payment_id: z.string().optional(),
+        refund_id: z.string().optional(),
         status: z.string().optional(),
         total_amount: z.number().int().nonnegative().optional(),
       })
@@ -95,11 +97,14 @@ export async function dodoWebhookRoutes(
       return reply.status(400).send({ received: false });
     }
 
-    const event = dodoPaymentEventSchema.parse(parsed);
+    const event = dodoEventSchema.parse(parsed);
+    const amountMinor = event.type.startsWith('refund.')
+      ? event.data.amount
+      : event.data.total_amount;
     await options.service.processVerifiedProviderWebhook({
-      ...(event.data.total_amount === undefined
+      ...(amountMinor === undefined || amountMinor === null
         ? {}
-        : { amountMinor: BigInt(event.data.total_amount) }),
+        : { amountMinor: BigInt(amountMinor) }),
       ...(event.data.currency === undefined ? {} : { currency: event.data.currency }),
       eventType: event.type,
       metadata: event.data.metadata,
@@ -110,6 +115,7 @@ export async function dodoWebhookRoutes(
         : { providerCheckoutId: event.data.checkout_session_id }),
       providerEventId: webhookId,
       ...(event.data.payment_id === undefined ? {} : { providerPaymentId: event.data.payment_id }),
+      ...(event.data.refund_id === undefined ? {} : { providerRefundId: event.data.refund_id }),
       signatureDigest: signatureDigest(webhookSignature),
     });
 

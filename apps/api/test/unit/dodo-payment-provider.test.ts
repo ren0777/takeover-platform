@@ -70,12 +70,10 @@ describe('DodoPaymentProvider', () => {
   });
 
   it('missing session_id', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue({
-        ok: true,
-        json: async () => ({ checkout_url: 'https://checkout.example.com/sess' }),
-      });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ checkout_url: 'https://checkout.example.com/sess' }),
+    });
     global.fetch = fetchMock;
     await expect(
       provider.createCheckout({
@@ -107,12 +105,10 @@ describe('DodoPaymentProvider', () => {
   });
 
   it('null checkout_url', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue({
-        ok: true,
-        json: async () => ({ session_id: 'sess', checkout_url: null }),
-      });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ session_id: 'sess', checkout_url: null }),
+    });
     global.fetch = fetchMock;
     await expect(
       provider.createCheckout({
@@ -125,12 +121,10 @@ describe('DodoPaymentProvider', () => {
   });
 
   it('non‑HTTPS checkout URL', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue({
-        ok: true,
-        json: async () => ({ session_id: 'sess', checkout_url: 'http://insecure/sess' }),
-      });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ session_id: 'sess', checkout_url: 'http://insecure/sess' }),
+    });
     global.fetch = fetchMock;
     await expect(
       provider.createCheckout({
@@ -188,6 +182,107 @@ describe('DodoPaymentProvider', () => {
       returnUrl: 'https://app.example/return',
     });
     const expectation = expect(promise).rejects.toThrow('Dodo checkout request timed out');
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expectation;
+    vi.useRealTimers();
+  });
+
+  it('requests a full refund for a provider payment', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        payment_id: 'pay_123',
+        refund_id: 'ref_123',
+        status: 'pending',
+      }),
+    });
+    global.fetch = fetchMock;
+
+    const result = await provider.refundPayment({
+      amount: amountUsd,
+      paymentId: 'payment-row-1',
+      providerPaymentId: 'pay_123',
+      reason: 'capture failed',
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${baseUrl}/refunds`);
+    expect(opts.method).toBe('POST');
+    expect(opts.signal).toBeInstanceOf(AbortSignal);
+    expect(opts.headers).toMatchObject({
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    });
+    expect(JSON.parse(opts.body as string)).toEqual({
+      payment_id: 'pay_123',
+      metadata: {
+        amount_minor: 1500,
+        currency: 'USD',
+        payment_id: 'payment-row-1',
+      },
+      reason: 'capture failed',
+    });
+    expect(result).toEqual({ providerRefundId: 'ref_123', status: 'pending' });
+  });
+
+  it.each([400, 429, 500])(
+    'fails closed on Dodo refund HTTP %s without leaking body',
+    async (status) => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status,
+        text: async () => 'sensitive provider body',
+      });
+      global.fetch = fetchMock;
+
+      await expect(
+        provider.refundPayment({
+          amount: amountUsd,
+          paymentId: 'payment-row-1',
+          providerPaymentId: 'pay_123',
+          reason: 'capture failed',
+        }),
+      ).rejects.toThrow(`Dodo refund request failed with status ${status}`);
+    },
+  );
+
+  it('rejects malformed refund responses', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ payment_id: 'pay_123', status: 'pending' }),
+    });
+    global.fetch = fetchMock;
+
+    await expect(
+      provider.refundPayment({
+        amount: amountUsd,
+        paymentId: 'payment-row-1',
+        providerPaymentId: 'pay_123',
+        reason: 'capture failed',
+      }),
+    ).rejects.toThrow('Dodo refund response was malformed');
+  });
+
+  it('times out refund requests with AbortController cancellation', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        });
+      });
+    });
+    global.fetch = fetchMock;
+    const promise = provider.refundPayment({
+      amount: amountUsd,
+      paymentId: 'payment-row-1',
+      providerPaymentId: 'pay_123',
+      reason: 'capture failed',
+    });
+    const expectation = expect(promise).rejects.toThrow('Dodo refund request timed out');
     await vi.advanceTimersByTimeAsync(5_000);
     await expectation;
     vi.useRealTimers();

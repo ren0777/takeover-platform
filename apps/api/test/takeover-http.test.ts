@@ -225,6 +225,30 @@ function paymentSucceededPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function refundPayload(
+  type: 'refund.succeeded' | 'refund.failed',
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    business_id: 'bus_123',
+    data: {
+      amount: 1500,
+      currency: 'USD',
+      metadata: {
+        amount_minor: 1500,
+        currency: 'USD',
+        payment_id: 'payment-row-1',
+      },
+      payment_id: 'pay_123',
+      refund_id: 'ref_123',
+      status: type === 'refund.succeeded' ? 'succeeded' : 'failed',
+      ...overrides,
+    },
+    timestamp: '2026-09-03T10:00:00.000Z',
+    type,
+  };
+}
+
 describe('Dodo payment webhook route', () => {
   it('accepts a valid raw-body signed payment webhook without management cookies', async () => {
     const harness = buildTakeoverApp();
@@ -354,5 +378,58 @@ describe('Dodo payment webhook route', () => {
 
     expect(response.statusCode).toBe(400);
     expect(harness.takeoverService.processVerifiedProviderWebhook).not.toHaveBeenCalled();
+  });
+
+  it('accepts signed refund success webhooks as authoritative refund evidence', async () => {
+    const harness = buildTakeoverApp();
+    const payload = refundPayload('refund.succeeded');
+    const { headers, rawPayload } = signedWebhook(payload, { 'webhook-id': 'msg_refund' });
+
+    const response = await harness.app.inject({
+      headers,
+      method: 'POST',
+      payload: rawPayload,
+      url: '/api/payment/webhooks/dodo',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(harness.takeoverService.processVerifiedProviderWebhook).toHaveBeenCalledWith({
+      amountMinor: 1500n,
+      currency: 'USD',
+      eventType: 'refund.succeeded',
+      metadata: {
+        amount_minor: 1500,
+        currency: 'USD',
+        payment_id: 'payment-row-1',
+      },
+      payload,
+      provider: 'DODO',
+      providerEventId: 'msg_refund',
+      providerPaymentId: 'pay_123',
+      providerRefundId: 'ref_123',
+      signatureDigest: expect.any(Uint8Array),
+    });
+  });
+
+  it('accepts signed refund failed webhooks without capture side effects', async () => {
+    const harness = buildTakeoverApp();
+    const payload = refundPayload('refund.failed');
+    const { headers, rawPayload } = signedWebhook(payload, { 'webhook-id': 'msg_refund_failed' });
+
+    const response = await harness.app.inject({
+      headers,
+      method: 'POST',
+      payload: rawPayload,
+      url: '/api/payment/webhooks/dodo',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(harness.takeoverService.processVerifiedProviderWebhook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'refund.failed',
+        providerPaymentId: 'pay_123',
+        providerRefundId: 'ref_123',
+      }),
+    );
   });
 });

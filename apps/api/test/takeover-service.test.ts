@@ -3,6 +3,7 @@ import type { AttemptStatus } from '@takeover/shared';
 import {
   CheckoutQuoteExpiredError,
   InvalidStatusTokenError,
+  PaymentProviderRefundError,
   TakeoverService,
   TakeoverStaleTerritoryVersionError,
   type PaymentProvider,
@@ -111,6 +112,47 @@ function createRepository(): TakeoverRepository {
       slug: 'ai-coding',
       version: 7n,
     })),
+    beginRefundForReconciliation: vi.fn(async () => ({ payment: null, status: null })),
+    recordRefundRequestFailure: vi.fn(async () => ({
+      capture: {
+        completedAt: null,
+        failureCode: 'STALE_TERRITORY_VERSION',
+        newOwnerCompanyId: companyId,
+        status: 'FAILED' as const,
+      },
+      checkout: { id: checkoutId, status: 'PENDING' as const, updatedAt: later },
+      payment: {
+        amountMinor: 1500n,
+        confirmedAt: now,
+        currency: 'USD',
+        failedAt: null,
+        status: 'CONFIRMED' as const,
+      },
+      quote: { expiresAt: later, territoryVersion: 7n },
+      reconciliation: { action: 'REFUND', status: 'FAILED' },
+      territory: { ownerCompanyId: null, version: 8n },
+      token: { expiresAt: later, revokedAt: null },
+    })),
+    recordRefundRequestResult: vi.fn(async () => ({
+      capture: {
+        completedAt: null,
+        failureCode: 'STALE_TERRITORY_VERSION',
+        newOwnerCompanyId: companyId,
+        status: 'FAILED' as const,
+      },
+      checkout: { id: checkoutId, status: 'PENDING' as const, updatedAt: later },
+      payment: {
+        amountMinor: 1500n,
+        confirmedAt: now,
+        currency: 'USD',
+        failedAt: null,
+        status: 'CONFIRMED' as const,
+      },
+      quote: { expiresAt: later, territoryVersion: 7n },
+      reconciliation: { action: 'REFUND', status: 'PENDING' },
+      territory: { ownerCompanyId: null, version: 8n },
+      token: { expiresAt: later, revokedAt: null },
+    })),
   };
 }
 
@@ -120,6 +162,10 @@ function createProvider(): PaymentProvider {
     createCheckout: vi.fn(async () => ({
       providerCheckoutId: 'provider-checkout-1',
       providerCheckoutUrl: 'https://pay.example/checkout',
+    })),
+    refundPayment: vi.fn(async () => ({
+      providerRefundId: 'ref_123',
+      status: 'pending' as const,
     })),
   };
 }
@@ -350,6 +396,103 @@ describe('TakeoverService quote and checkout orchestration', () => {
         providerPaymentId: 'pay_123',
       }),
     );
+  });
+
+  it('requests a refund only after repository eligibility succeeds', async () => {
+    const repository = createRepository();
+    const provider = createProvider();
+    vi.mocked(repository.beginRefundForReconciliation).mockResolvedValueOnce({
+      payment: {
+        amountMinor: 1500n,
+        checkoutId,
+        currency: 'USD',
+        id: 'payment-row-1',
+        provider: 'TEST_PROVIDER',
+        providerPaymentId: 'pay_123',
+      },
+      status: null,
+    });
+    const service = createService(repository, provider);
+
+    const status = await service.requestRefundForReconciliation('payment-row-1');
+
+    expect(provider.refundPayment).toHaveBeenCalledWith({
+      amount: { amountMinor: 1500, currency: 'USD' },
+      paymentId: 'payment-row-1',
+      providerPaymentId: 'pay_123',
+      reason: 'Takeover ownership capture could not be completed safely',
+    });
+    expect(repository.recordRefundRequestResult).toHaveBeenCalledWith({
+      paymentId: 'payment-row-1',
+      providerRefundId: 'ref_123',
+      status: 'pending',
+    });
+    expect(status).toMatchObject({ state: 'REFUND_PENDING', terminal: false });
+  });
+
+  it('does not call the provider when refund eligibility was already consumed', async () => {
+    const repository = createRepository();
+    const provider = createProvider();
+    vi.mocked(repository.beginRefundForReconciliation).mockResolvedValueOnce({
+      payment: null,
+      status: {
+        capture: {
+          completedAt: null,
+          failureCode: 'STALE_TERRITORY_VERSION',
+          newOwnerCompanyId: companyId,
+          status: 'FAILED',
+        },
+        checkout: { id: checkoutId, status: 'PENDING', updatedAt: later },
+        payment: {
+          amountMinor: 1500n,
+          confirmedAt: now,
+          currency: 'USD',
+          failedAt: null,
+          status: 'CONFIRMED',
+        },
+        quote: { expiresAt: later, territoryVersion: 7n },
+        reconciliation: { action: 'REFUND', status: 'PENDING' },
+        territory: { ownerCompanyId: null, version: 8n },
+        token: { expiresAt: later, revokedAt: null },
+      },
+    });
+    const service = createService(repository, provider);
+
+    const status = await service.requestRefundForReconciliation('payment-row-1');
+
+    expect(provider.refundPayment).not.toHaveBeenCalled();
+    expect(status).toMatchObject({ state: 'REFUND_PENDING' });
+  });
+
+  it('keeps reconciliation visible when the refund request fails', async () => {
+    const repository = createRepository();
+    const provider = createProvider();
+    vi.mocked(repository.beginRefundForReconciliation).mockResolvedValueOnce({
+      payment: {
+        amountMinor: 1500n,
+        checkoutId,
+        currency: 'USD',
+        id: 'payment-row-1',
+        provider: 'TEST_PROVIDER',
+        providerPaymentId: 'pay_123',
+      },
+      status: null,
+    });
+    vi.mocked(provider.refundPayment).mockRejectedValueOnce(
+      new PaymentProviderRefundError('Dodo refund request failed with status 400', {
+        retryable: false,
+      }),
+    );
+    const service = createService(repository, provider);
+
+    const status = await service.requestRefundForReconciliation('payment-row-1');
+
+    expect(repository.recordRefundRequestFailure).toHaveBeenCalledWith({
+      paymentId: 'payment-row-1',
+      reason: 'Dodo refund request failed with status 400',
+      status: 'FAILED',
+    });
+    expect(status).toMatchObject({ state: 'RECONCILIATION_REQUIRED', terminal: false });
   });
 
   it('rejects expired quotes before provider checkout creation', async () => {

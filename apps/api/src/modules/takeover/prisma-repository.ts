@@ -20,6 +20,7 @@ import type {
   TakeoverRepository,
   TerritoryQuoteRecord,
   VerifiedProviderWebhookInput,
+  RefundRequestResult,
 } from './service.js';
 
 type TakeoverPrismaClient = Pick<
@@ -333,6 +334,10 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
           },
         });
 
+        if (input.eventType.startsWith('refund.')) {
+          return this.ingestVerifiedRefundWebhookInTransaction(transaction, event.id, input);
+        }
+
         if (input.providerCheckoutId === undefined) {
           await transaction.paymentWebhookEvent.update({
             data: { errorCode: 'MISSING_CHECKOUT_SESSION_ID', processingStatus: 'FAILED' },
@@ -497,6 +502,174 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
     );
   }
 
+  private async ingestVerifiedRefundWebhookInTransaction(
+    transaction: TakeoverTransactionClient,
+    eventId: string,
+    input: VerifiedProviderWebhookInput,
+  ): Promise<StatusAttemptRecord | null> {
+    if (input.providerPaymentId === undefined) {
+      await transaction.paymentWebhookEvent.update({
+        data: { errorCode: 'MISSING_PAYMENT_ID', processingStatus: 'FAILED' },
+        where: { id: eventId },
+      });
+      return null;
+    }
+    const payment = await transaction.payment.findUnique({
+      where: {
+        provider_providerPaymentId: {
+          provider: input.provider,
+          providerPaymentId: input.providerPaymentId,
+        },
+      },
+    });
+    if (payment === null) {
+      await transaction.paymentWebhookEvent.update({
+        data: { errorCode: 'UNKNOWN_PAYMENT', processingStatus: 'FAILED' },
+        where: { id: eventId },
+      });
+      return null;
+    }
+    const capture = await transaction.ownershipCapture.findUnique({
+      where: { paymentId: payment.id },
+    });
+    if (capture?.status === 'COMPLETED') {
+      await transaction.paymentWebhookEvent.update({
+        data: {
+          errorCode: 'REFUND_FOR_CAPTURED_PAYMENT',
+          paymentId: payment.id,
+          processedAt: new Date(),
+          processingStatus: 'RECONCILED',
+        },
+        where: { id: eventId },
+      });
+      await transaction.paymentReconciliationAction.upsert({
+        create: {
+          action: 'RECONCILE',
+          paymentId: payment.id,
+          reason: 'REFUND_FOR_CAPTURED_PAYMENT',
+          requestedByActorType: 'SYSTEM',
+          status: 'PENDING',
+        },
+        update: {},
+        where: { paymentId_action: { action: 'RECONCILE', paymentId: payment.id } },
+      });
+      return requireStatusAttempt(
+        await this.findStatusAttemptByCheckoutId(transaction, payment.checkoutId),
+      );
+    }
+
+    const moneyMismatch =
+      (input.amountMinor !== undefined && input.amountMinor !== payment.amountMinor) ||
+      (input.currency !== undefined && input.currency !== payment.currency);
+    if (moneyMismatch) {
+      await transaction.paymentWebhookEvent.update({
+        data: {
+          errorCode: 'REFUND_MONEY_MISMATCH',
+          paymentId: payment.id,
+          processedAt: new Date(),
+          processingStatus: 'RECONCILED',
+        },
+        where: { id: eventId },
+      });
+      await transaction.paymentReconciliationAction.upsert({
+        create: {
+          action: 'RECONCILE',
+          paymentId: payment.id,
+          reason: 'REFUND_MONEY_MISMATCH',
+          requestedByActorType: 'SYSTEM',
+          status: 'PENDING',
+        },
+        update: {},
+        where: { paymentId_action: { action: 'RECONCILE', paymentId: payment.id } },
+      });
+      return requireStatusAttempt(
+        await this.findStatusAttemptByCheckoutId(transaction, payment.checkoutId),
+      );
+    }
+
+    if (input.eventType === 'refund.succeeded') {
+      await transaction.payment.update({
+        data: { status: 'REFUNDED' },
+        where: { id: payment.id },
+      });
+      if (capture?.status === 'FAILED') {
+        await transaction.ownershipCapture.update({
+          data: { status: 'REFUNDED' },
+          where: { id: capture.id },
+        });
+      }
+      await transaction.paymentReconciliationAction.upsert({
+        create: {
+          action: 'REFUND',
+          paymentId: payment.id,
+          ...(input.providerRefundId === undefined
+            ? {}
+            : { providerRefundReference: input.providerRefundId }),
+          reason: 'REFUND_SUCCEEDED',
+          requestedByActorType: 'SYSTEM',
+          status: 'COMPLETED',
+        },
+        update: {
+          ...(input.providerRefundId === undefined
+            ? {}
+            : { providerRefundReference: input.providerRefundId }),
+          reason: 'REFUND_SUCCEEDED',
+          status: 'COMPLETED',
+        },
+        where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+      });
+      await transaction.paymentWebhookEvent.update({
+        data: {
+          paymentId: payment.id,
+          processedAt: new Date(),
+          processingStatus: 'PROCESSED',
+        },
+        where: { id: eventId },
+      });
+    } else if (input.eventType === 'refund.failed') {
+      await transaction.paymentReconciliationAction.upsert({
+        create: {
+          action: 'REFUND',
+          paymentId: payment.id,
+          ...(input.providerRefundId === undefined
+            ? {}
+            : { providerRefundReference: input.providerRefundId }),
+          reason: 'REFUND_FAILED',
+          requestedByActorType: 'SYSTEM',
+          status: 'FAILED',
+        },
+        update: {
+          ...(input.providerRefundId === undefined
+            ? {}
+            : { providerRefundReference: input.providerRefundId }),
+          reason: 'REFUND_FAILED',
+          status: 'FAILED',
+        },
+        where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+      });
+      await transaction.paymentWebhookEvent.update({
+        data: {
+          paymentId: payment.id,
+          processedAt: new Date(),
+          processingStatus: 'PROCESSED',
+        },
+        where: { id: eventId },
+      });
+    } else {
+      await transaction.paymentWebhookEvent.update({
+        data: {
+          paymentId: payment.id,
+          processedAt: new Date(),
+          processingStatus: 'IGNORED',
+        },
+        where: { id: eventId },
+      });
+    }
+    return requireStatusAttempt(
+      await this.findStatusAttemptByCheckoutId(transaction, payment.checkoutId),
+    );
+  }
+
   private metadataMismatch(
     metadata: Record<string, unknown>,
     expected: { amountMinor: bigint; checkoutId: string; currency: string; quoteId: string },
@@ -653,6 +826,123 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
     const attempt = await this.findStatusAttemptByCheckoutId(this.prisma, token.checkoutId);
     if (attempt === null) return null;
     return { ...attempt, token: { expiresAt: token.expiresAt, revokedAt: token.revokedAt } };
+  }
+
+  async beginRefundForReconciliation(paymentId: string): Promise<RefundRequestResult> {
+    return this.prisma.$transaction(
+      async (transaction) => {
+        const payment = await transaction.payment.findUnique({ where: { id: paymentId } });
+        if (payment === null) return { payment: null, status: null };
+        const capture = await transaction.ownershipCapture.findUnique({
+          where: { paymentId: payment.id },
+        });
+        const existingRefund = await transaction.paymentReconciliationAction.findUnique({
+          where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+        });
+        if (
+          payment.status === 'REFUNDED' ||
+          existingRefund?.status === 'COMPLETED' ||
+          existingRefund?.status === 'PENDING'
+        ) {
+          return {
+            payment: null,
+            status: requireStatusAttempt(
+              await this.findStatusAttemptByCheckoutId(transaction, payment.checkoutId),
+            ),
+          };
+        }
+        const hasPendingReconciliation =
+          (
+            await transaction.paymentReconciliationAction.findUnique({
+              where: { paymentId_action: { action: 'RECONCILE', paymentId: payment.id } },
+            })
+          )?.status === 'PENDING';
+        if (
+          payment.status !== 'CONFIRMED' ||
+          payment.providerPaymentId.length === 0 ||
+          capture?.status === 'COMPLETED' ||
+          !hasPendingReconciliation
+        ) {
+          return {
+            payment: null,
+            status: requireStatusAttempt(
+              await this.findStatusAttemptByCheckoutId(transaction, payment.checkoutId),
+            ),
+          };
+        }
+        await transaction.paymentReconciliationAction.upsert({
+          create: {
+            action: 'REFUND',
+            paymentId: payment.id,
+            reason: 'REFUND_REQUESTED',
+            requestedByActorType: 'SYSTEM',
+            status: 'PENDING',
+          },
+          update: {
+            reason: 'REFUND_REQUESTED',
+            status: 'PENDING',
+          },
+          where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+        });
+        return {
+          payment: {
+            amountMinor: payment.amountMinor,
+            checkoutId: payment.checkoutId,
+            currency: payment.currency,
+            id: payment.id,
+            provider: payment.provider,
+            providerPaymentId: payment.providerPaymentId,
+          },
+          status: null,
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  async recordRefundRequestResult(input: {
+    paymentId: string;
+    providerRefundId?: string;
+    status: 'succeeded' | 'failed' | 'pending' | 'review';
+  }): Promise<StatusAttemptRecord> {
+    return this.prisma.$transaction(async (transaction) => {
+      const payment = await transaction.payment.findUnique({ where: { id: input.paymentId } });
+      if (payment === null) throw new Error('Payment was not found');
+      await transaction.paymentReconciliationAction.update({
+        data: {
+          ...(input.providerRefundId === undefined
+            ? {}
+            : { providerRefundReference: input.providerRefundId }),
+          reason: `DODO_REFUND_${input.status.toUpperCase()}`,
+          status: input.status === 'failed' ? 'FAILED' : 'PENDING',
+        },
+        where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+      });
+      return requireStatusAttempt(
+        await this.findStatusAttemptByCheckoutId(transaction, payment.checkoutId),
+      );
+    });
+  }
+
+  async recordRefundRequestFailure(input: {
+    paymentId: string;
+    reason: string;
+    status: 'FAILED' | 'PENDING';
+  }): Promise<StatusAttemptRecord> {
+    return this.prisma.$transaction(async (transaction) => {
+      const payment = await transaction.payment.findUnique({ where: { id: input.paymentId } });
+      if (payment === null) throw new Error('Payment was not found');
+      await transaction.paymentReconciliationAction.update({
+        data: {
+          reason: input.reason.slice(0, 3000),
+          status: input.status,
+        },
+        where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+      });
+      return requireStatusAttempt(
+        await this.findStatusAttemptByCheckoutId(transaction, payment.checkoutId),
+      );
+    });
   }
 
   private async findStatusAttemptByCheckoutId(

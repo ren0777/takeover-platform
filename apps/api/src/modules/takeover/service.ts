@@ -26,6 +26,18 @@ export type PaymentProviderCheckoutResult = {
   providerCheckoutUrl: string;
 };
 
+export type PaymentProviderRefundInput = {
+  amount: Money;
+  paymentId: string;
+  providerPaymentId: string;
+  reason: string;
+};
+
+export type PaymentProviderRefundResult = {
+  providerRefundId: string;
+  status: 'succeeded' | 'failed' | 'pending' | 'review';
+};
+
 export type PaymentProvider = {
   name: string;
   /**
@@ -33,6 +45,7 @@ export type PaymentProvider = {
    * this call after reserving a checkout but before the provider URL is stored.
    */
   createCheckout(input: PaymentProviderCheckoutInput): Promise<PaymentProviderCheckoutResult>;
+  refundPayment(input: PaymentProviderRefundInput): Promise<PaymentProviderRefundResult>;
 };
 
 export type TerritoryQuoteRecord = {
@@ -115,7 +128,22 @@ export type VerifiedProviderWebhookInput = {
   providerCheckoutId?: string;
   providerEventId: string;
   providerPaymentId?: string;
+  providerRefundId?: string;
   signatureDigest: Uint8Array;
+};
+
+export type RefundablePaymentRecord = {
+  amountMinor: bigint;
+  checkoutId: string;
+  currency: string;
+  id: string;
+  provider: string;
+  providerPaymentId: string;
+};
+
+export type RefundRequestResult = {
+  payment: RefundablePaymentRecord | null;
+  status: StatusAttemptRecord | null;
 };
 
 export type CreateQuoteInput = {
@@ -172,6 +200,17 @@ export interface TakeoverRepository {
   ingestVerifiedProviderWebhook(
     input: VerifiedProviderWebhookInput,
   ): Promise<StatusAttemptRecord | null>;
+  beginRefundForReconciliation(paymentId: string): Promise<RefundRequestResult>;
+  recordRefundRequestResult(input: {
+    paymentId: string;
+    providerRefundId?: string;
+    status: 'succeeded' | 'failed' | 'pending' | 'review';
+  }): Promise<StatusAttemptRecord>;
+  recordRefundRequestFailure(input: {
+    paymentId: string;
+    reason: string;
+    status: 'FAILED' | 'PENDING';
+  }): Promise<StatusAttemptRecord>;
   findStatusAttemptByTokenDigest(
     digest: Uint8Array,
     now: Date,
@@ -245,6 +284,16 @@ export class InvalidStatusTokenError extends Error {
   constructor() {
     super('Takeover status was not found');
     this.name = 'InvalidStatusTokenError';
+  }
+}
+
+export class PaymentProviderRefundError extends Error {
+  readonly retryable: boolean;
+
+  constructor(message: string, options: { retryable: boolean }) {
+    super(message);
+    this.name = 'PaymentProviderRefundError';
+    this.retryable = options.retryable;
   }
 }
 
@@ -482,5 +531,38 @@ export class TakeoverService {
   ): Promise<AttemptStatus | undefined> {
     const attempt = await this.dependencies.repository.ingestVerifiedProviderWebhook(input);
     return attempt === null ? undefined : mapAttempt(attempt, this.dependencies.clock.now());
+  }
+
+  async requestRefundForReconciliation(paymentId: string): Promise<AttemptStatus | undefined> {
+    const prepared = await this.dependencies.repository.beginRefundForReconciliation(paymentId);
+    if (prepared.status !== null && prepared.payment === null) {
+      return mapAttempt(prepared.status, this.dependencies.clock.now());
+    }
+    if (prepared.payment === null) return undefined;
+
+    let refund: PaymentProviderRefundResult;
+    try {
+      refund = await this.dependencies.provider.refundPayment({
+        amount: mapMoney(prepared.payment.amountMinor, prepared.payment.currency),
+        paymentId: prepared.payment.id,
+        providerPaymentId: prepared.payment.providerPaymentId,
+        reason: 'Takeover ownership capture could not be completed safely',
+      });
+    } catch (error) {
+      const attempt = await this.dependencies.repository.recordRefundRequestFailure({
+        paymentId: prepared.payment.id,
+        reason: error instanceof Error ? error.message : 'Refund request failed',
+        status:
+          error instanceof PaymentProviderRefundError && !error.retryable ? 'FAILED' : 'PENDING',
+      });
+      return mapAttempt(attempt, this.dependencies.clock.now());
+    }
+
+    const attempt = await this.dependencies.repository.recordRefundRequestResult({
+      paymentId: prepared.payment.id,
+      providerRefundId: refund.providerRefundId,
+      status: refund.status,
+    });
+    return mapAttempt(attempt, this.dependencies.clock.now());
   }
 }

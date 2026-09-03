@@ -1,5 +1,9 @@
 import { ERROR_CODES } from '@takeover/shared';
-import type { PaymentProvider, PaymentProviderCheckoutInput } from './service.js';
+import type {
+  PaymentProvider,
+  PaymentProviderCheckoutInput,
+  PaymentProviderRefundInput,
+} from './service.js';
 
 export class PaymentProviderUnavailableError extends Error {
   readonly code = ERROR_CODES.SERVICE_UNAVAILABLE;
@@ -15,6 +19,10 @@ export class UnavailablePaymentProvider implements PaymentProvider {
   readonly name = 'UNCONFIGURED';
 
   createCheckout(_input: PaymentProviderCheckoutInput): Promise<never> {
+    throw new PaymentProviderUnavailableError();
+  }
+
+  refundPayment(_input: PaymentProviderRefundInput): Promise<never> {
     throw new PaymentProviderUnavailableError();
   }
 }

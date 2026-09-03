@@ -17,7 +17,7 @@ import {
 import type { TakeoverService } from './service.js';
 
 export type TakeoverRoutesOptions = {
-  config: { webAppOrigin: string };
+  config: { dodoWebhookSecret?: string; webAppOrigin: string };
   identityService: CompanyIdentityService;
   service: TakeoverService;
 };
@@ -69,7 +69,10 @@ export async function takeoverRoutes(
   app.post('/api/takeover-quotes', async (request) => {
     const body = quoteRequestSchema.parse(request.body);
     const companyId = await resolveMutationCompanyId(request, options);
-    const data = await options.service.createQuote({ companyId, territorySlug: body.territorySlug });
+    const data = await options.service.createQuote({
+      companyId,
+      territorySlug: body.territorySlug,
+    });
     quoteResponseSchema.parse(data);
     const response: ApiSuccess<typeof data> = { data, meta: { requestId: request.id } };
     return response;

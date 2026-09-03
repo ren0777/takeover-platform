@@ -1,4 +1,8 @@
-import type { PaymentProvider, PaymentProviderCheckoutInput, PaymentProviderCheckoutResult } from '../service.js';
+import type {
+  PaymentProvider,
+  PaymentProviderCheckoutInput,
+  PaymentProviderCheckoutResult,
+} from '../../service.js';
 import { URL } from 'node:url';
 
 /**
@@ -23,7 +27,9 @@ export class DodoPaymentProvider implements PaymentProvider {
   /**
    * Create a checkout session with Dodo.
    */
-  async createCheckout(input: PaymentProviderCheckoutInput): Promise<PaymentProviderCheckoutResult> {
+  async createCheckout(
+    input: PaymentProviderCheckoutInput,
+  ): Promise<PaymentProviderCheckoutResult> {
     const productId = this.productIds[input.amount.currency];
     if (!productId) {
       throw new Error(`Unsupported currency for Dodo checkout: ${input.amount.currency}`);
@@ -48,27 +54,36 @@ export class DodoPaymentProvider implements PaymentProvider {
     };
 
     const endpoint = `${this.baseUrl}/checkouts`;
-    const fetchPromise = fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-    });
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('Dodo checkout request timed out')), 5_000);
-    });
-    const response = await Promise.race([fetchPromise, timeoutPromise]) as Response;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Dodo checkout request timed out');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
     if (!response.ok) {
       const errorBody = await response.text();
       throw new Error(`Dodo checkout failed: ${response.status} ${errorBody}`);
     }
 
-    const data = await response.json();
-    const providerCheckoutId = data.session_id ?? data.checkout_id ?? data.id ?? data.provider_checkout_id;
-    const providerCheckoutUrl = data.checkout_url ?? data.session_url ?? data.url ?? data.provider_checkout_url;
+    const data = (await response.json()) as { checkout_url?: unknown; session_id?: unknown };
+    const providerCheckoutId = data.session_id;
+    const providerCheckoutUrl = data.checkout_url;
 
     if (typeof providerCheckoutId !== 'string' || providerCheckoutId.length === 0) {
       throw new Error('Dodo checkout response missing providerCheckoutId');

@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { Webhook } from 'standardwebhooks';
 import { z } from 'zod';
 
 const DEVELOPMENT_TOKEN_SECRET = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY';
@@ -9,6 +10,15 @@ function decodedSecret(value: string): Uint8Array | null {
   if (!/^[A-Za-z0-9_-]+$/.test(value)) return null;
   const bytes = Buffer.from(value, 'base64url');
   return bytes.length >= 32 ? new Uint8Array(bytes) : null;
+}
+
+function isValidWebhookSecret(value: string): boolean {
+  try {
+    new Webhook(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const apiEnvironmentSchema = z
@@ -38,9 +48,9 @@ const apiEnvironmentSchema = z
     WEB_APP_ORIGIN: z.url().default('http://localhost:3000'),
     DODO_API_KEY: z.string().nonempty().optional(),
     DODO_BASE_URL: z.string().url().default('https://test.dodopayments.com/'),
-     DODO_PRODUCT_IDS: z.string().optional(),
+    DODO_PRODUCT_IDS: z.string().optional(),
     DODO_DEFAULT_PRODUCT_ID: z.string().nonempty().optional(),
-
+    DODO_WEBHOOK_SECRET: z.string().nonempty().optional(),
   })
   .superRefine((value, context) => {
     if (decodedSecret(value.TOKEN_HMAC_SECRET) === null) {
@@ -90,6 +100,16 @@ const apiEnvironmentSchema = z
         });
       }
     }
+    if (
+      value.DODO_WEBHOOK_SECRET !== undefined &&
+      !isValidWebhookSecret(value.DODO_WEBHOOK_SECRET)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'must be a valid Standard Webhooks signing secret',
+        path: ['DODO_WEBHOOK_SECRET'],
+      });
+    }
   });
 
 export type IdentityConfig = Readonly<{
@@ -119,6 +139,7 @@ export type DodoConfig = Readonly<{
   apiKey: string;
   baseUrl: string;
   productIds?: Record<string, string>;
+  webhookSecret?: string;
 }>;
 
 export type ApiConfig = {
@@ -176,20 +197,25 @@ export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
       throw new Error(`Invalid DODO_PRODUCT_IDS JSON: ${(e as Error).message}`);
     }
   }
-// Validate DODO configuration
-if (result.data.DODO_API_KEY) {
-  if (!productIds || Object.keys(productIds).length === 0) {
-    throw new Error('DODO_PRODUCT_IDS must be a non-empty JSON object when DODO_API_KEY is configured');
+  // Validate DODO configuration
+  if (result.data.DODO_API_KEY) {
+    if (!productIds || Object.keys(productIds).length === 0) {
+      throw new Error(
+        'DODO_PRODUCT_IDS must be a non-empty JSON object when DODO_API_KEY is configured',
+      );
+    }
+    if (result.data.DODO_WEBHOOK_SECRET === undefined) {
+      throw new Error('DODO_WEBHOOK_SECRET must be configured when DODO_API_KEY is configured');
+    }
   }
-}
-try {
-  const baseUrlObj = new URL(result.data.DODO_BASE_URL);
-  if (baseUrlObj.protocol !== 'https:') {
-    throw new Error('DODO_BASE_URL must be HTTPS');
+  try {
+    const baseUrlObj = new URL(result.data.DODO_BASE_URL);
+    if (baseUrlObj.protocol !== 'https:') {
+      throw new Error('DODO_BASE_URL must be HTTPS');
+    }
+  } catch (e) {
+    throw new Error(`Invalid DODO_BASE_URL: ${(e as Error).message}`);
   }
-} catch (e) {
-  throw new Error(`Invalid DODO_BASE_URL: ${(e as Error).message}`);
-}
 
   const identity: IdentityConfig = Object.freeze({
     accessRequestTtlSeconds: result.data.ACCESS_REQUEST_TTL_SECONDS,
@@ -210,14 +236,20 @@ try {
     logLevel: result.data.LOG_LEVEL,
     nodeEnv: result.data.NODE_ENV,
     port: result.data.API_PORT,
-    dodo: result.data.DODO_API_KEY
-      ? {
-          apiKey: result.data.DODO_API_KEY,
-          baseUrl: result.data.DODO_BASE_URL,
-          productIds,
-        }
-      : undefined,
   };
+
+  if (result.data.DODO_API_KEY !== undefined) {
+    const webhookSecret = result.data.DODO_WEBHOOK_SECRET;
+    if (webhookSecret === undefined) {
+      throw new Error('DODO_WEBHOOK_SECRET must be configured when DODO_API_KEY is configured');
+    }
+    config.dodo = {
+      apiKey: result.data.DODO_API_KEY,
+      baseUrl: result.data.DODO_BASE_URL,
+      productIds: productIds ?? {},
+      webhookSecret,
+    };
+  }
 
   if (result.data.DATABASE_URL !== undefined) config.databaseUrl = result.data.DATABASE_URL;
   return config;

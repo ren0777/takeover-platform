@@ -35,7 +35,7 @@ export type BuildAppOptions = {
     service: TerritoryService;
   };
   takeover?: {
-    config: { webAppOrigin: string };
+    config: { dodoWebhookSecret?: string; webAppOrigin: string };
     identityService: CompanyIdentityService;
     service: TakeoverService;
   };
@@ -53,6 +53,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
           'req.body.token',
           'req.headers.authorization',
           'req.headers.cookie',
+          'req.headers.webhook-signature',
           'req.headers.x-csrf-token',
           'res.headers.set-cookie',
         ],
@@ -182,14 +183,15 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
         repository: new PrismaCompanyIdentityRepository(takeoverApp.database),
         tokens: createOpaqueTokenService(runtimeConfig.identity.tokenHmacSecret),
       });
-       // Determine which payment provider to use.
-       const provider = runtimeConfig?.dodo?.apiKey && runtimeConfig?.dodo?.baseUrl
-         ? new DodoPaymentProvider({
-             apiKey: runtimeConfig.dodo.apiKey,
-             baseUrl: runtimeConfig.dodo.baseUrl,
-             productIds: runtimeConfig.dodo.productIds ?? {},
-           })
-         : new UnavailablePaymentProvider();
+      // Determine which payment provider to use.
+      const provider =
+        runtimeConfig?.dodo?.apiKey && runtimeConfig?.dodo?.baseUrl
+          ? new DodoPaymentProvider({
+              apiKey: runtimeConfig.dodo.apiKey,
+              baseUrl: runtimeConfig.dodo.baseUrl,
+              productIds: runtimeConfig.dodo.productIds ?? {},
+            })
+          : new UnavailablePaymentProvider();
 
       const service = new TakeoverService({
         clock: { now: () => new Date() },
@@ -201,7 +203,12 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
         trustedWebOrigin: runtimeConfig.identity.webAppOrigin,
       });
       await takeoverPlugin(takeoverApp, {
-        config: { webAppOrigin: runtimeConfig.identity.webAppOrigin },
+        config: {
+          ...(runtimeConfig.dodo?.webhookSecret === undefined
+            ? {}
+            : { dodoWebhookSecret: runtimeConfig.dodo.webhookSecret }),
+          webAppOrigin: runtimeConfig.identity.webAppOrigin,
+        },
         identityService,
         service,
       });

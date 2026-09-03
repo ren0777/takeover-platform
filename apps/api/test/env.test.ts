@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { parseApiConfig } from '../src/config/env.js';
 
+const dodoWebhookSecret = `whsec_${Buffer.from('takeover-dodo-webhook-secret').toString('base64')}`;
+
 describe('parseApiConfig', () => {
   it('applies safe development defaults', () => {
     const config = parseApiConfig({});
@@ -90,7 +92,6 @@ describe('parseApiConfig', () => {
   });
 });
 
-
 // Dodo configuration tests
 
 describe('Dodo configuration', () => {
@@ -99,64 +100,99 @@ describe('Dodo configuration', () => {
       DODO_API_KEY: 'test-key',
       DODO_BASE_URL: 'https://example.com',
       DODO_PRODUCT_IDS: '{"USD":"prod_usd","INR":"prod_inr"}',
+      DODO_WEBHOOK_SECRET: dodoWebhookSecret,
     });
     expect(config.dodo?.productIds).toEqual({ USD: 'prod_usd', INR: 'prod_inr' });
     expect(config.dodo?.apiKey).toBe('test-key');
     expect(config.dodo?.baseUrl).toBe('https://example.com');
+    expect(config.dodo?.webhookSecret).toBe(dodoWebhookSecret);
+  });
+
+  it('rejects missing DODO_WEBHOOK_SECRET when DODO_API_KEY set', () => {
+    expect(() =>
+      parseApiConfig({
+        DODO_API_KEY: 'test-key',
+        DODO_BASE_URL: 'https://example.com',
+        DODO_PRODUCT_IDS: '{"USD":"prod_usd"}',
+      }),
+    ).toThrow('DODO_WEBHOOK_SECRET must be configured when DODO_API_KEY is configured');
+  });
+
+  it('rejects invalid DODO_WEBHOOK_SECRET values', () => {
+    expect(() =>
+      parseApiConfig({
+        DODO_WEBHOOK_SECRET: 'not-a-standard-webhooks-secret',
+      }),
+    ).toThrow('DODO_WEBHOOK_SECRET');
   });
 
   it('rejects missing DODO_PRODUCT_IDS when DODO_API_KEY set', () => {
-    expect(() => parseApiConfig({
-      DODO_API_KEY: 'test-key',
-      DODO_BASE_URL: 'https://example.com',
-    })).toThrow('DODO_PRODUCT_IDS must be a non-empty JSON object when DODO_API_KEY is configured');
+    expect(() =>
+      parseApiConfig({
+        DODO_API_KEY: 'test-key',
+        DODO_BASE_URL: 'https://example.com',
+      }),
+    ).toThrow('DODO_PRODUCT_IDS must be a non-empty JSON object when DODO_API_KEY is configured');
   });
 
   it('rejects empty DODO_PRODUCT_IDS object', () => {
-    expect(() => parseApiConfig({
-      DODO_API_KEY: 'test-key',
-      DODO_BASE_URL: 'https://example.com',
-      DODO_PRODUCT_IDS: '{}',
-    })).toThrow('DODO_PRODUCT_IDS must be a non-empty JSON object when DODO_API_KEY is configured');
+    expect(() =>
+      parseApiConfig({
+        DODO_API_KEY: 'test-key',
+        DODO_BASE_URL: 'https://example.com',
+        DODO_PRODUCT_IDS: '{}',
+      }),
+    ).toThrow('DODO_PRODUCT_IDS must be a non-empty JSON object when DODO_API_KEY is configured');
   });
 
   it('rejects malformed JSON in DODO_PRODUCT_IDS', () => {
-    expect(() => parseApiConfig({
-      DODO_API_KEY: 'test-key',
-      DODO_BASE_URL: 'https://example.com',
-      DODO_PRODUCT_IDS: '{invalid',
-    })).toThrow('Invalid DODO_PRODUCT_IDS JSON');
+    expect(() =>
+      parseApiConfig({
+        DODO_API_KEY: 'test-key',
+        DODO_BASE_URL: 'https://example.com',
+        DODO_PRODUCT_IDS: '{invalid',
+      }),
+    ).toThrow('Invalid DODO_PRODUCT_IDS JSON');
   });
 
   it('rejects array in DODO_PRODUCT_IDS', () => {
-    expect(() => parseApiConfig({
-      DODO_API_KEY: 'test-key',
-      DODO_BASE_URL: 'https://example.com',
-      DODO_PRODUCT_IDS: '["USD","INR"]',
-    })).toThrow('DODO_PRODUCT_IDS must be a JSON object');
+    expect(() =>
+      parseApiConfig({
+        DODO_API_KEY: 'test-key',
+        DODO_BASE_URL: 'https://example.com',
+        DODO_PRODUCT_IDS: '["USD","INR"]',
+      }),
+    ).toThrow('DODO_PRODUCT_IDS must be a JSON object');
   });
 
   it('rejects invalid currency key in DODO_PRODUCT_IDS', () => {
-    expect(() => parseApiConfig({
-      DODO_API_KEY: 'test-key',
-      DODO_BASE_URL: 'https://example.com',
-      DODO_PRODUCT_IDS: '{"usd":"prod_usd"}',
-    })).toThrow('Invalid currency code in DODO_PRODUCT_IDS: usd');
+    expect(() =>
+      parseApiConfig({
+        DODO_API_KEY: 'test-key',
+        DODO_BASE_URL: 'https://example.com',
+        DODO_PRODUCT_IDS: '{"usd":"prod_usd"}',
+      }),
+    ).toThrow('Invalid currency code in DODO_PRODUCT_IDS: usd');
   });
 
   it('rejects empty product ID in DODO_PRODUCT_IDS', () => {
-    expect(() => parseApiConfig({
-      DODO_API_KEY: 'test-key',
-      DODO_BASE_URL: 'https://example.com',
-      DODO_PRODUCT_IDS: '{"USD":""}',
-    })).toThrow('Invalid product ID for currency USD in DODO_PRODUCT_IDS');
+    expect(() =>
+      parseApiConfig({
+        DODO_API_KEY: 'test-key',
+        DODO_BASE_URL: 'https://example.com',
+        DODO_PRODUCT_IDS: '{"USD":""}',
+      }),
+    ).toThrow('Invalid product ID for currency USD in DODO_PRODUCT_IDS');
   });
 
   it('rejects non‑HTTPS DODO_BASE_URL', () => {
-    expect(() => parseApiConfig({
-      DODO_API_KEY: 'test-key',
-      DODO_BASE_URL: 'http://example.com',
-      DODO_PRODUCT_IDS: '{"USD":"prod_usd"}',
-    })).toThrow('DODO_BASE_URL must be HTTPS');
+    expect(() =>
+      parseApiConfig({
+        DODO_API_KEY: 'test-key',
+        DODO_BASE_URL: 'http://example.com',
+        DODO_PRODUCT_IDS: '{"USD":"prod_usd"}',
+        DODO_WEBHOOK_SECRET: dodoWebhookSecret,
+      }),
+    ).toThrow('DODO_BASE_URL must be HTTPS');
   });
 });

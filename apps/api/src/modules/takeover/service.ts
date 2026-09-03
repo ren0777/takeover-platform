@@ -105,6 +105,19 @@ export type ConfirmProviderPaymentInput = {
   providerPaymentId: string;
 };
 
+export type VerifiedProviderWebhookInput = {
+  amountMinor?: bigint;
+  currency?: string;
+  eventType: string;
+  metadata: Record<string, unknown>;
+  payload: unknown;
+  provider: string;
+  providerCheckoutId?: string;
+  providerEventId: string;
+  providerPaymentId?: string;
+  signatureDigest: Uint8Array;
+};
+
 export type CreateQuoteInput = {
   companyId: string;
   currency: string;
@@ -150,9 +163,19 @@ export interface TakeoverRepository {
     created: boolean;
     statusTokenDigest: Uint8Array;
   }>;
-  completeCheckoutProviderResult(input: CompleteCheckoutProviderResultInput): Promise<CheckoutRecord>;
-  confirmProviderPaymentAndCapture(input: ConfirmProviderPaymentInput): Promise<StatusAttemptRecord>;
-  findStatusAttemptByTokenDigest(digest: Uint8Array, now: Date): Promise<StatusAttemptRecord | null>;
+  completeCheckoutProviderResult(
+    input: CompleteCheckoutProviderResultInput,
+  ): Promise<CheckoutRecord>;
+  confirmProviderPaymentAndCapture(
+    input: ConfirmProviderPaymentInput,
+  ): Promise<StatusAttemptRecord>;
+  ingestVerifiedProviderWebhook(
+    input: VerifiedProviderWebhookInput,
+  ): Promise<StatusAttemptRecord | null>;
+  findStatusAttemptByTokenDigest(
+    digest: Uint8Array,
+    now: Date,
+  ): Promise<StatusAttemptRecord | null>;
 }
 
 export class TakeoverTerritoryNotFoundError extends Error {
@@ -296,7 +319,9 @@ function isTerminal(state: AttemptStatus['state'], amountCharged: Money | undefi
 
 function mapAttempt(record: StatusAttemptRecord, now: Date): AttemptStatus {
   const amountCharged =
-    record.payment === null ? undefined : mapMoney(record.payment.amountMinor, record.payment.currency);
+    record.payment === null
+      ? undefined
+      : mapMoney(record.payment.amountMinor, record.payment.currency);
   let state: AttemptStatus['state'] = 'PENDING_PAYMENT';
   let capturedAt: string | undefined;
   let newOwnerCompanyId: string | undefined;
@@ -309,7 +334,8 @@ function mapAttempt(record: StatusAttemptRecord, now: Date): AttemptStatus {
     capturedAt = record.capture.completedAt?.toISOString();
     newOwnerCompanyId = record.capture.newOwnerCompanyId;
   } else if (record.reconciliation !== null && record.reconciliation.status === 'PENDING') {
-    state = record.reconciliation.action === 'REFUND' ? 'REFUND_PENDING' : 'RECONCILIATION_REQUIRED';
+    state =
+      record.reconciliation.action === 'REFUND' ? 'REFUND_PENDING' : 'RECONCILIATION_REQUIRED';
   } else if (record.capture?.status === 'FAILED') {
     state = 'RECONCILIATION_REQUIRED';
     failureReason = record.capture.failureCode ?? undefined;
@@ -319,7 +345,10 @@ function mapAttempt(record: StatusAttemptRecord, now: Date): AttemptStatus {
     state = 'PAYMENT_CONFIRMED';
   } else if (record.payment?.status === 'FAILED') {
     state = 'PAYMENT_FAILED';
-  } else if (record.payment === null && record.territory.version !== record.quote.territoryVersion) {
+  } else if (
+    record.payment === null &&
+    record.territory.version !== record.quote.territoryVersion
+  ) {
     state = 'LOST_TERRITORY_RACE';
   } else if (record.payment === null && record.quote.expiresAt <= now) {
     state = 'QUOTE_EXPIRED';
@@ -419,7 +448,9 @@ export class TakeoverService {
     });
     const checkout = await this.dependencies.repository.completeCheckoutProviderResult({
       checkoutId: reserved.checkout.id,
-      ...(providerCheckout.expiresAt === undefined ? {} : { expiresAt: providerCheckout.expiresAt }),
+      ...(providerCheckout.expiresAt === undefined
+        ? {}
+        : { expiresAt: providerCheckout.expiresAt }),
       providerCheckoutId: providerCheckout.providerCheckoutId,
       providerCheckoutUrl: providerCheckout.providerCheckoutUrl,
     });
@@ -444,5 +475,12 @@ export class TakeoverService {
   async confirmProviderPayment(input: ConfirmProviderPaymentInput): Promise<AttemptStatus> {
     const attempt = await this.dependencies.repository.confirmProviderPaymentAndCapture(input);
     return mapAttempt(attempt, this.dependencies.clock.now());
+  }
+
+  async processVerifiedProviderWebhook(
+    input: VerifiedProviderWebhookInput,
+  ): Promise<AttemptStatus | undefined> {
+    const attempt = await this.dependencies.repository.ingestVerifiedProviderWebhook(input);
+    return attempt === null ? undefined : mapAttempt(attempt, this.dependencies.clock.now());
   }
 }

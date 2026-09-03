@@ -20,9 +20,9 @@ type Fixture = {
 
 let fixture: Fixture;
 
-function createProvider(): PaymentProvider {
+function createProvider(name = 'TEST_PROVIDER'): PaymentProvider {
   return {
-    name: 'TEST_PROVIDER',
+    name,
     createCheckout: vi.fn(async (input) => ({
       providerCheckoutId: `provider-${input.checkoutId}`,
       providerCheckoutUrl: `https://pay.example/${input.checkoutId}`,
@@ -109,7 +109,11 @@ afterEach(async () => {
   const paymentIds = payments.map((payment) => payment.id);
   await prisma.paymentReconciliationAction.deleteMany({ where: { paymentId: { in: paymentIds } } });
   await prisma.ownershipCapture.deleteMany({ where: { paymentId: { in: paymentIds } } });
-  await prisma.paymentWebhookEvent.deleteMany({ where: { paymentId: { in: paymentIds } } });
+  await prisma.paymentWebhookEvent.deleteMany({
+    where: {
+      OR: [{ paymentId: { in: paymentIds } }, { providerEventId: { contains: fixture.suffix } }],
+    },
+  });
   await prisma.payment.deleteMany({ where: { checkoutId: { in: checkoutIds } } });
   await prisma.checkoutStatusToken.deleteMany({ where: { checkoutId: { in: checkoutIds } } });
   await prisma.checkoutSession.deleteMany({
@@ -144,7 +148,9 @@ describe('TakeoverService with real PostgreSQL repository', () => {
       minimumAmount: { amountMinor: 1500, currency: 'USD' },
       territoryVersion: '9',
     });
-    await expect(prisma.takeoverQuote.count({ where: { territoryId: fixture.territoryId } })).resolves.toBe(1);
+    await expect(
+      prisma.takeoverQuote.count({ where: { territoryId: fixture.territoryId } }),
+    ).resolves.toBe(1);
   });
 
   it('stores only status token digests and returns status through the raw capability', async () => {
@@ -154,13 +160,21 @@ describe('TakeoverService with real PostgreSQL repository', () => {
       territorySlug: fixture.territorySlug,
     });
 
-    const checkout = await service.createCheckout({ companyId: fixture.companyId, quoteId: quote.quoteId });
-    const repeated = await service.createCheckout({ companyId: fixture.companyId, quoteId: quote.quoteId });
+    const checkout = await service.createCheckout({
+      companyId: fixture.companyId,
+      quoteId: quote.quoteId,
+    });
+    const repeated = await service.createCheckout({
+      companyId: fixture.companyId,
+      quoteId: quote.quoteId,
+    });
 
     expect(repeated.checkoutId).toBe(checkout.checkoutId);
     expect(provider.createCheckout).toHaveBeenCalledTimes(1);
     expect(await prisma.checkoutSession.count({ where: { quoteId: quote.quoteId } })).toBe(1);
-    expect(await prisma.checkoutStatusToken.count({ where: { checkoutId: checkout.checkoutId } })).toBe(2);
+    expect(
+      await prisma.checkoutStatusToken.count({ where: { checkoutId: checkout.checkoutId } }),
+    ).toBe(2);
     const rawJson = JSON.stringify(
       await prisma.checkoutStatusToken.findMany({ where: { checkoutId: checkout.checkoutId } }),
     );
@@ -185,7 +199,9 @@ describe('TakeoverService with real PostgreSQL repository', () => {
     ]);
 
     expect(second.checkoutId).toBe(first.checkoutId);
-    await expect(prisma.checkoutSession.count({ where: { quoteId: quote.quoteId } })).resolves.toBe(1);
+    await expect(prisma.checkoutSession.count({ where: { quoteId: quote.quoteId } })).resolves.toBe(
+      1,
+    );
   });
 
   it('keeps checkout creation unavailable when no payment provider is configured', async () => {
@@ -206,7 +222,10 @@ describe('TakeoverService with real PostgreSQL repository', () => {
       companyId: fixture.companyId,
       territorySlug: fixture.territorySlug,
     });
-    const checkout = await service.createCheckout({ companyId: fixture.companyId, quoteId: quote.quoteId });
+    const checkout = await service.createCheckout({
+      companyId: fixture.companyId,
+      quoteId: quote.quoteId,
+    });
 
     const status = await service.confirmProviderPayment({
       amountMinor: 1500n,
@@ -231,7 +250,9 @@ describe('TakeoverService with real PostgreSQL repository', () => {
       source: 'PAID_CAPTURE',
       territoryVersion: 10n,
     });
-    await expect(prisma.payment.findFirstOrThrow({ where: { checkoutId: checkout.checkoutId } })).resolves.toMatchObject({
+    await expect(
+      prisma.payment.findFirstOrThrow({ where: { checkoutId: checkout.checkoutId } }),
+    ).resolves.toMatchObject({
       amountMinor: 1500n,
       currency: 'USD',
       status: 'CONFIRMED',
@@ -244,7 +265,10 @@ describe('TakeoverService with real PostgreSQL repository', () => {
       companyId: fixture.companyId,
       territorySlug: fixture.territorySlug,
     });
-    const checkout = await service.createCheckout({ companyId: fixture.companyId, quoteId: quote.quoteId });
+    const checkout = await service.createCheckout({
+      companyId: fixture.companyId,
+      quoteId: quote.quoteId,
+    });
     const input = {
       amountMinor: 1500n,
       checkoutId: checkout.checkoutId,
@@ -260,7 +284,9 @@ describe('TakeoverService with real PostgreSQL repository', () => {
 
     expect(first.state).toBe('CAPTURED');
     expect(second.state).toBe('CAPTURED');
-    await expect(prisma.payment.count({ where: { checkoutId: checkout.checkoutId } })).resolves.toBe(1);
+    await expect(
+      prisma.payment.count({ where: { checkoutId: checkout.checkoutId } }),
+    ).resolves.toBe(1);
     const payments = await prisma.payment.findMany({
       select: { id: true },
       where: { checkoutId: checkout.checkoutId },
@@ -278,7 +304,10 @@ describe('TakeoverService with real PostgreSQL repository', () => {
       companyId: fixture.companyId,
       territorySlug: fixture.territorySlug,
     });
-    const checkout = await service.createCheckout({ companyId: fixture.companyId, quoteId: quote.quoteId });
+    const checkout = await service.createCheckout({
+      companyId: fixture.companyId,
+      quoteId: quote.quoteId,
+    });
     await prisma.territory.update({
       data: { version: { increment: 1 } },
       where: { id: fixture.territoryId },
@@ -297,7 +326,9 @@ describe('TakeoverService with real PostgreSQL repository', () => {
       state: 'RECONCILIATION_REQUIRED',
       terminal: false,
     });
-    await expect(prisma.payment.findFirstOrThrow({ where: { checkoutId: checkout.checkoutId } })).resolves.toMatchObject({
+    await expect(
+      prisma.payment.findFirstOrThrow({ where: { checkoutId: checkout.checkoutId } }),
+    ).resolves.toMatchObject({
       status: 'CONFIRMED',
     });
     const payment = await prisma.payment.findFirstOrThrow({
@@ -307,5 +338,154 @@ describe('TakeoverService with real PostgreSQL repository', () => {
     await expect(
       prisma.paymentReconciliationAction.count({ where: { paymentId: payment.id } }),
     ).resolves.toBe(1);
+  });
+
+  it('ingests a verified Dodo payment webhook once and captures ownership', async () => {
+    const { service } = createService(createProvider('DODO'));
+    const quote = await service.createQuote({
+      companyId: fixture.companyId,
+      territorySlug: fixture.territorySlug,
+    });
+    const checkout = await service.createCheckout({
+      companyId: fixture.companyId,
+      quoteId: quote.quoteId,
+    });
+    const providerCheckoutId = `provider-${checkout.checkoutId}`;
+
+    const [first, second] = await Promise.all([
+      service.processVerifiedProviderWebhook({
+        amountMinor: 1500n,
+        currency: 'USD',
+        eventType: 'payment.succeeded',
+        metadata: {
+          amount_minor: 1500,
+          checkout_id: checkout.checkoutId,
+          currency: 'USD',
+          quote_id: quote.quoteId,
+        },
+        payload: { data: { payment_id: `pay-${fixture.suffix}` }, type: 'payment.succeeded' },
+        provider: 'DODO',
+        providerCheckoutId,
+        providerEventId: `msg-${fixture.suffix}`,
+        providerPaymentId: `pay-${fixture.suffix}`,
+        signatureDigest: new Uint8Array(32).fill(8),
+      }),
+      service.processVerifiedProviderWebhook({
+        amountMinor: 1500n,
+        currency: 'USD',
+        eventType: 'payment.succeeded',
+        metadata: {
+          amount_minor: 1500,
+          checkout_id: checkout.checkoutId,
+          currency: 'USD',
+          quote_id: quote.quoteId,
+        },
+        payload: { data: { payment_id: `pay-${fixture.suffix}` }, type: 'payment.succeeded' },
+        provider: 'DODO',
+        providerCheckoutId,
+        providerEventId: `msg-${fixture.suffix}`,
+        providerPaymentId: `pay-${fixture.suffix}`,
+        signatureDigest: new Uint8Array(32).fill(8),
+      }),
+    ]);
+
+    expect(first?.state ?? second?.state).toBe('CAPTURED');
+    await expect(
+      prisma.paymentWebhookEvent.count({
+        where: { provider: 'DODO', providerEventId: `msg-${fixture.suffix}` },
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.payment.count({ where: { checkoutId: checkout.checkoutId } }),
+    ).resolves.toBe(1);
+    const payment = await prisma.payment.findFirstOrThrow({
+      where: { checkoutId: checkout.checkoutId },
+    });
+    await expect(prisma.ownershipCapture.count({ where: { paymentId: payment.id } })).resolves.toBe(
+      1,
+    );
+  });
+
+  it('records Dodo money mismatch for reconciliation without capture', async () => {
+    const { service } = createService(createProvider('DODO'));
+    const quote = await service.createQuote({
+      companyId: fixture.companyId,
+      territorySlug: fixture.territorySlug,
+    });
+    const checkout = await service.createCheckout({
+      companyId: fixture.companyId,
+      quoteId: quote.quoteId,
+    });
+
+    const status = await service.processVerifiedProviderWebhook({
+      amountMinor: 1499n,
+      currency: 'USD',
+      eventType: 'payment.succeeded',
+      metadata: {
+        amount_minor: 1499,
+        checkout_id: checkout.checkoutId,
+        currency: 'USD',
+        quote_id: quote.quoteId,
+      },
+      payload: {
+        data: { payment_id: `pay-mismatch-${fixture.suffix}` },
+        type: 'payment.succeeded',
+      },
+      provider: 'DODO',
+      providerCheckoutId: `provider-${checkout.checkoutId}`,
+      providerEventId: `msg-mismatch-${fixture.suffix}`,
+      providerPaymentId: `pay-mismatch-${fixture.suffix}`,
+      signatureDigest: new Uint8Array(32).fill(9),
+    });
+
+    expect(status).toMatchObject({
+      checkoutId: checkout.checkoutId,
+      state: 'RECONCILIATION_REQUIRED',
+    });
+    const payment = await prisma.payment.findFirstOrThrow({
+      where: { checkoutId: checkout.checkoutId },
+    });
+    expect(payment).toMatchObject({
+      amountMinor: 1499n,
+      currency: 'USD',
+      status: 'RECONCILED',
+    });
+    await expect(prisma.ownershipCapture.count({ where: { paymentId: payment.id } })).resolves.toBe(
+      0,
+    );
+    await expect(
+      prisma.paymentReconciliationAction.count({ where: { paymentId: payment.id } }),
+    ).resolves.toBe(1);
+  });
+
+  it('records unknown Dodo checkout events without payment side effects', async () => {
+    const { service } = createService();
+
+    await expect(
+      service.processVerifiedProviderWebhook({
+        amountMinor: 1500n,
+        currency: 'USD',
+        eventType: 'payment.succeeded',
+        metadata: {},
+        payload: {
+          data: { payment_id: `pay-unknown-${fixture.suffix}` },
+          type: 'payment.succeeded',
+        },
+        provider: 'DODO',
+        providerCheckoutId: `unknown-${fixture.suffix}`,
+        providerEventId: `msg-unknown-${fixture.suffix}`,
+        providerPaymentId: `pay-unknown-${fixture.suffix}`,
+        signatureDigest: new Uint8Array(32).fill(10),
+      }),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      prisma.paymentWebhookEvent.count({
+        where: { provider: 'DODO', providerEventId: `msg-unknown-${fixture.suffix}` },
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.payment.count({ where: { providerPaymentId: `pay-unknown-${fixture.suffix}` } }),
+    ).resolves.toBe(0);
   });
 });

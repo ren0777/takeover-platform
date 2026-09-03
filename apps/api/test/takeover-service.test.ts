@@ -50,6 +50,7 @@ function createRepository(): TakeoverRepository {
       territory: { ownerCompanyId: companyId, version: 8n },
       token: { expiresAt: later, revokedAt: null },
     })),
+    ingestVerifiedProviderWebhook: vi.fn(async () => null),
     reserveCheckout: vi.fn(async (input) => ({
       checkout: {
         companyId,
@@ -60,7 +61,7 @@ function createRepository(): TakeoverRepository {
         providerCheckoutId: input.providerCheckoutId,
         providerCheckoutUrl: null,
         quoteId,
-      status: 'CREATED' as const,
+        status: 'CREATED' as const,
         updatedAt: now,
       },
       created: true,
@@ -319,6 +320,36 @@ describe('TakeoverService quote and checkout orchestration', () => {
       state: 'QUOTE_EXPIRED',
       terminal: true,
     });
+  });
+
+  it('passes verified successful provider webhooks to the repository for confirmation and capture', async () => {
+    const repository = createRepository();
+    const service = createService(repository);
+
+    await service.processVerifiedProviderWebhook({
+      amountMinor: 1500n,
+      currency: 'USD',
+      eventType: 'payment.succeeded',
+      metadata: { checkout_id: checkoutId, quote_id: quoteId },
+      payload: { type: 'payment.succeeded', data: { payment_id: 'pay_123' } },
+      provider: 'DODO',
+      providerCheckoutId: 'provider-checkout-1',
+      providerEventId: 'msg_123',
+      providerPaymentId: 'pay_123',
+      signatureDigest: new Uint8Array(32).fill(4),
+    });
+
+    expect(repository.ingestVerifiedProviderWebhook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amountMinor: 1500n,
+        currency: 'USD',
+        eventType: 'payment.succeeded',
+        provider: 'DODO',
+        providerCheckoutId: 'provider-checkout-1',
+        providerEventId: 'msg_123',
+        providerPaymentId: 'pay_123',
+      }),
+    );
   });
 
   it('rejects expired quotes before provider checkout creation', async () => {

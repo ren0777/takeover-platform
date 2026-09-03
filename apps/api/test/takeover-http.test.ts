@@ -1,3 +1,4 @@
+import { Webhook } from 'standardwebhooks';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
@@ -11,6 +12,7 @@ const config = parseApiConfig({
   NODE_ENV: 'test',
   WEB_APP_ORIGIN: 'https://app.example',
 });
+const webhookSecret = `whsec_${Buffer.from('takeover-dodo-webhook-secret').toString('base64')}`;
 const companyId = '11111111-1111-4111-8111-111111111111';
 const quoteId = '33333333-3333-4333-8333-333333333333';
 
@@ -35,7 +37,10 @@ function createIdentityService(): Pick<CompanyIdentityService, 'getManagementCon
   };
 }
 
-function createTakeoverService(): Pick<TakeoverService, 'createQuote' | 'createCheckout' | 'getStatus'> {
+function createTakeoverService(): Pick<
+  TakeoverService,
+  'createQuote' | 'createCheckout' | 'getStatus' | 'processVerifiedProviderWebhook'
+> {
   return {
     createCheckout: vi.fn(async () => ({
       checkoutId: '44444444-4444-4444-8444-444444444444',
@@ -59,6 +64,7 @@ function createTakeoverService(): Pick<TakeoverService, 'createQuote' | 'createC
       terminal: false,
       updatedAt: '2026-09-03T10:00:00.000Z',
     })),
+    processVerifiedProviderWebhook: vi.fn(async () => undefined),
   };
 }
 
@@ -75,13 +81,16 @@ function buildTakeoverApp(
 ): {
   app: FastifyInstance;
   identityService: Pick<CompanyIdentityService, 'getManagementContext'>;
-  takeoverService: Pick<TakeoverService, 'createQuote' | 'createCheckout' | 'getStatus'>;
+  takeoverService: Pick<
+    TakeoverService,
+    'createQuote' | 'createCheckout' | 'getStatus' | 'processVerifiedProviderWebhook'
+  >;
 } {
   app = buildApp({
     logger: false,
     nodeEnv: 'test',
     takeover: {
-      config: { webAppOrigin: config.identity.webAppOrigin },
+      config: { dodoWebhookSecret: webhookSecret, webAppOrigin: config.identity.webAppOrigin },
       identityService: identityService as CompanyIdentityService,
       service: takeoverService as TakeoverService,
     },
@@ -174,5 +183,176 @@ describe('provider-neutral takeover HTTP routes', () => {
       meta: { requestId: expect.any(String) },
     });
     expect(harness.identityService.getManagementContext).not.toHaveBeenCalled();
+  });
+});
+
+function signedWebhook(payload: unknown, overrides: Record<string, string> = {}) {
+  const rawPayload = JSON.stringify(payload);
+  const webhookId = overrides['webhook-id'] ?? 'msg_valid';
+  const timestamp = new Date();
+  const signature = new Webhook(webhookSecret).sign(webhookId, timestamp, rawPayload);
+  return {
+    headers: {
+      'content-type': 'application/json',
+      'webhook-id': webhookId,
+      'webhook-signature': overrides['webhook-signature'] ?? signature,
+      'webhook-timestamp':
+        overrides['webhook-timestamp'] ?? String(Math.floor(timestamp.getTime() / 1000)),
+    },
+    rawPayload,
+  };
+}
+
+function paymentSucceededPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    business_id: 'bus_123',
+    data: {
+      checkout_session_id: 'checkout-session-1',
+      currency: 'USD',
+      metadata: {
+        amount_minor: 1500,
+        checkout_id: '44444444-4444-4444-8444-444444444444',
+        currency: 'USD',
+        quote_id: quoteId,
+      },
+      payment_id: 'pay_123',
+      status: 'succeeded',
+      total_amount: 1500,
+      ...overrides,
+    },
+    timestamp: '2026-09-03T10:00:00.000Z',
+    type: 'payment.succeeded',
+  };
+}
+
+describe('Dodo payment webhook route', () => {
+  it('accepts a valid raw-body signed payment webhook without management cookies', async () => {
+    const harness = buildTakeoverApp();
+    const { headers, rawPayload } = signedWebhook(paymentSucceededPayload());
+
+    const response = await harness.app.inject({
+      headers,
+      method: 'POST',
+      payload: rawPayload,
+      url: '/api/payment/webhooks/dodo',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(harness.identityService.getManagementContext).not.toHaveBeenCalled();
+    expect(harness.takeoverService.processVerifiedProviderWebhook).toHaveBeenCalledWith({
+      amountMinor: 1500n,
+      currency: 'USD',
+      eventType: 'payment.succeeded',
+      metadata: {
+        amount_minor: 1500,
+        checkout_id: '44444444-4444-4444-8444-444444444444',
+        currency: 'USD',
+        quote_id: quoteId,
+      },
+      payload: paymentSucceededPayload(),
+      provider: 'DODO',
+      providerCheckoutId: 'checkout-session-1',
+      providerEventId: 'msg_valid',
+      providerPaymentId: 'pay_123',
+      signatureDigest: expect.any(Uint8Array),
+    });
+  });
+
+  it.each([['webhook-id'], ['webhook-signature'], ['webhook-timestamp']])(
+    'rejects a Dodo webhook missing %s',
+    async (missingHeader) => {
+      const harness = buildTakeoverApp();
+      const { headers, rawPayload } = signedWebhook(paymentSucceededPayload());
+      delete headers[missingHeader as keyof typeof headers];
+
+      const response = await harness.app.inject({
+        headers,
+        method: 'POST',
+        payload: rawPayload,
+        url: '/api/payment/webhooks/dodo',
+      });
+
+      expect(response.statusCode).toBe(401);
+      expect(harness.takeoverService.processVerifiedProviderWebhook).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects invalid signatures before trusting event data', async () => {
+    const harness = buildTakeoverApp();
+    const { headers, rawPayload } = signedWebhook(paymentSucceededPayload(), {
+      'webhook-signature': 'v1,not-valid',
+    });
+
+    const response = await harness.app.inject({
+      headers,
+      method: 'POST',
+      payload: rawPayload,
+      url: '/api/payment/webhooks/dodo',
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(harness.takeoverService.processVerifiedProviderWebhook).not.toHaveBeenCalled();
+  });
+
+  it('rejects body tampering because verification uses exact raw bytes', async () => {
+    const harness = buildTakeoverApp();
+    const { headers } = signedWebhook(paymentSucceededPayload());
+    const tampered = JSON.stringify(paymentSucceededPayload({ total_amount: 1499 }));
+
+    const response = await harness.app.inject({
+      headers,
+      method: 'POST',
+      payload: tampered,
+      url: '/api/payment/webhooks/dodo',
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(harness.takeoverService.processVerifiedProviderWebhook).not.toHaveBeenCalled();
+  });
+
+  it('rejects stale and malformed timestamps', async () => {
+    const stale = Math.floor(Date.now() / 1000) - 301;
+    const cases = [String(stale), 'not-a-timestamp'];
+
+    for (const webhookTimestamp of cases) {
+      const harness = buildTakeoverApp();
+      const { headers, rawPayload } = signedWebhook(paymentSucceededPayload(), {
+        'webhook-timestamp': webhookTimestamp,
+      });
+
+      const response = await harness.app.inject({
+        headers,
+        method: 'POST',
+        payload: rawPayload,
+        url: '/api/payment/webhooks/dodo',
+      });
+
+      expect(response.statusCode).toBe(401);
+      expect(harness.takeoverService.processVerifiedProviderWebhook).not.toHaveBeenCalled();
+      await harness.app.close();
+      app = undefined;
+    }
+  });
+
+  it('fails malformed JSON safely only after signature verification', async () => {
+    const harness = buildTakeoverApp();
+    const rawPayload = '{"type":"payment.succeeded",';
+    const timestamp = new Date();
+    const headers = {
+      'content-type': 'application/json',
+      'webhook-id': 'msg_malformed',
+      'webhook-signature': new Webhook(webhookSecret).sign('msg_malformed', timestamp, rawPayload),
+      'webhook-timestamp': String(Math.floor(timestamp.getTime() / 1000)),
+    };
+
+    const response = await harness.app.inject({
+      headers,
+      method: 'POST',
+      payload: rawPayload,
+      url: '/api/payment/webhooks/dodo',
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(harness.takeoverService.processVerifiedProviderWebhook).not.toHaveBeenCalled();
   });
 });

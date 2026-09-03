@@ -14,7 +14,10 @@ describe('DodoPaymentProvider', () => {
   });
 
   it('creates checkout (USD)', async () => {
-    const mockResponse = { session_id: 'sess_usd', checkout_url: 'https://checkout.example.com/sess_usd' };
+    const mockResponse = {
+      session_id: 'sess_usd',
+      checkout_url: 'https://checkout.example.com/sess_usd',
+    };
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => mockResponse });
     global.fetch = fetchMock;
 
@@ -26,11 +29,14 @@ describe('DodoPaymentProvider', () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, opts] = fetchMock.mock.calls[0];
+    const call = fetchMock.mock.calls[0];
+    expect(call).toBeDefined();
+    const [url, opts] = call as [string, RequestInit];
     expect(url).toBe(`${baseUrl}/checkouts`);
     expect(opts?.method).toBe('POST');
-    expect(opts?.headers?.Authorization).toBe(`Bearer ${apiKey}`);
-    const body = JSON.parse(opts?.body);
+    const headers = opts.headers as Record<string, string>;
+    expect(headers.Authorization).toBe(`Bearer ${apiKey}`);
+    const body = JSON.parse(opts.body as string);
     expect(body).toMatchObject({
       product_cart: [{ product_id: productIds.USD, quantity: 1, amount: amountUsd.amountMinor }],
       return_url: 'https://app.example/return',
@@ -58,13 +64,18 @@ describe('DodoPaymentProvider', () => {
         checkoutId: 'chk-eur',
         quoteId: 'qt-eur',
         returnUrl: 'https://app.example/return',
-      })
+      }),
     ).rejects.toThrow('Unsupported currency for Dodo checkout: EUR');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('missing session_id', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ checkout_url: 'https://checkout.example.com/sess' }) });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ checkout_url: 'https://checkout.example.com/sess' }),
+      });
     global.fetch = fetchMock;
     await expect(
       provider.createCheckout({
@@ -72,12 +83,36 @@ describe('DodoPaymentProvider', () => {
         checkoutId: 'chk-1',
         quoteId: 'qt-1',
         returnUrl: 'https://app.example/return',
-      })
+      }),
+    ).rejects.toThrow('Dodo checkout response missing providerCheckoutId');
+  });
+
+  it('rejects undocumented checkout response identifier fallbacks', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        checkout_id: 'chk_fallback',
+        url: 'https://checkout.example.com/fallback',
+      }),
+    });
+    global.fetch = fetchMock;
+    await expect(
+      provider.createCheckout({
+        amount: amountUsd,
+        checkoutId: 'chk-1',
+        quoteId: 'qt-1',
+        returnUrl: 'https://app.example/return',
+      }),
     ).rejects.toThrow('Dodo checkout response missing providerCheckoutId');
   });
 
   it('null checkout_url', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ session_id: 'sess', checkout_url: null }) });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ session_id: 'sess', checkout_url: null }),
+      });
     global.fetch = fetchMock;
     await expect(
       provider.createCheckout({
@@ -85,12 +120,17 @@ describe('DodoPaymentProvider', () => {
         checkoutId: 'chk-1',
         quoteId: 'qt-1',
         returnUrl: 'https://app.example/return',
-      })
+      }),
     ).rejects.toThrow('Dodo checkout response missing providerCheckoutUrl');
   });
 
   it('non‑HTTPS checkout URL', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ session_id: 'sess', checkout_url: 'http://insecure/sess' }) });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ session_id: 'sess', checkout_url: 'http://insecure/sess' }),
+      });
     global.fetch = fetchMock;
     await expect(
       provider.createCheckout({
@@ -98,12 +138,14 @@ describe('DodoPaymentProvider', () => {
         checkoutId: 'chk-1',
         quoteId: 'qt-1',
         returnUrl: 'https://app.example/return',
-      })
+      }),
     ).rejects.toThrow('Provider checkout URL is not HTTPS');
   });
 
   it('non‑200 response', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => 'Internal error' });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: false, status: 500, text: async () => 'Internal error' });
     global.fetch = fetchMock;
     await expect(
       provider.createCheckout({
@@ -111,7 +153,7 @@ describe('DodoPaymentProvider', () => {
         checkoutId: 'chk-1',
         quoteId: 'qt-1',
         returnUrl: 'https://app.example/return',
-      })
+      }),
     ).rejects.toThrow('Dodo checkout failed: 500 Internal error');
   });
 
@@ -124,23 +166,30 @@ describe('DodoPaymentProvider', () => {
         checkoutId: 'chk-1',
         quoteId: 'qt-1',
         returnUrl: 'https://app.example/return',
-      })
+      }),
     ).rejects.toThrow('Network failure');
   });
 
   it('timeout', async () => {
-    const fetchMock = vi.fn().mockImplementation(() => new Promise(() => {}));
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        });
+      });
+    });
     global.fetch = fetchMock;
-    const origSetTimeout = setTimeout;
-    global.setTimeout = (cb, _: number) => origSetTimeout(cb, 10);
-    await expect(
-      provider.createCheckout({
-        amount: amountUsd,
-        checkoutId: 'chk-1',
-        quoteId: 'qt-1',
-        returnUrl: 'https://app.example/return',
-      })
-    ).rejects.toThrow('Dodo checkout request timed out');
-    global.setTimeout = origSetTimeout;
+    const promise = provider.createCheckout({
+      amount: amountUsd,
+      checkoutId: 'chk-1',
+      quoteId: 'qt-1',
+      returnUrl: 'https://app.example/return',
+    });
+    const expectation = expect(promise).rejects.toThrow('Dodo checkout request timed out');
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expectation;
+    vi.useRealTimers();
   });
 });

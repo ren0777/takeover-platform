@@ -19,6 +19,7 @@ import type {
   StatusAttemptRecord,
   TakeoverRepository,
   TerritoryQuoteRecord,
+  VerifiedProviderWebhookInput,
 } from './service.js';
 
 type TakeoverPrismaClient = Pick<
@@ -104,6 +105,10 @@ function isUniqueActiveQuoteError(error: unknown): boolean {
 
 function isRetryableTransactionError(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
 
 function requireStatusAttempt(attempt: StatusAttemptRecord | null): StatusAttemptRecord {
@@ -294,41 +299,183 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
   ): Promise<StatusAttemptRecord> {
     return this.prisma.$transaction(
       async (transaction) => {
-        const checkout = await transaction.checkoutSession.findUnique({
-          where: { id: input.checkoutId },
-        });
-        if (checkout === null) throw new Error('Checkout was not found');
-        const quote = await transaction.takeoverQuote.findUnique({ where: { id: checkout.quoteId } });
-        if (quote === null) throw new Error('Quote was not found');
-        const territory = await transaction.territory.findUnique({
-          select: {
-            availabilityStatus: true,
-            currency: true,
-            id: true,
-            minimumTakeoverAmountMinor: true,
-            version: true,
+        return this.confirmProviderPaymentAndCaptureInTransaction(transaction, input);
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  async ingestVerifiedProviderWebhook(
+    input: VerifiedProviderWebhookInput,
+  ): Promise<StatusAttemptRecord | null> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await this.ingestVerifiedProviderWebhookOnce(input);
+      } catch (error) {
+        if (isUniqueConstraintError(error)) return null;
+        if (!isRetryableTransactionError(error) || attempt === 2) throw error;
+      }
+    }
+    throw new Error('Unreachable webhook ingestion retry state');
+  }
+
+  private async ingestVerifiedProviderWebhookOnce(
+    input: VerifiedProviderWebhookInput,
+  ): Promise<StatusAttemptRecord | null> {
+    return this.prisma.$transaction(
+      async (transaction) => {
+        const event = await transaction.paymentWebhookEvent.create({
+          data: {
+            payload: input.payload as Prisma.InputJsonValue,
+            provider: input.provider,
+            providerEventId: input.providerEventId,
+            signatureDigest: Buffer.from(input.signatureDigest),
           },
-          where: { id: quote.territoryId },
         });
-        if (territory === null) throw new Error('Territory was not found');
-        if (input.amountMinor !== quote.minimumAmountMinor || input.currency !== quote.currency) {
-          throw new Error('Provider payment amount does not match quote');
+
+        if (input.providerCheckoutId === undefined) {
+          await transaction.paymentWebhookEvent.update({
+            data: { errorCode: 'MISSING_CHECKOUT_SESSION_ID', processingStatus: 'FAILED' },
+            where: { id: event.id },
+          });
+          return null;
         }
 
-        const payment = await transaction.payment.upsert({
-          create: {
-            amountMinor: input.amountMinor,
-            checkoutId: checkout.id,
-            confirmedAt: new Date(),
-            currency: input.currency,
-            provider: input.provider,
-            providerPaymentId: input.providerPaymentId,
-            status: 'CONFIRMED',
+        const checkout = await transaction.checkoutSession.findUnique({
+          where: {
+            provider_providerCheckoutId: {
+              provider: input.provider,
+              providerCheckoutId: input.providerCheckoutId,
+            },
           },
-          update: {
-            confirmedAt: new Date(),
-            status: 'CONFIRMED',
-          },
+        });
+        if (checkout === null) {
+          await transaction.paymentWebhookEvent.update({
+            data: { errorCode: 'UNKNOWN_CHECKOUT', processingStatus: 'FAILED' },
+            where: { id: event.id },
+          });
+          return null;
+        }
+
+        const quote = await transaction.takeoverQuote.findUnique({
+          where: { id: checkout.quoteId },
+        });
+        if (quote === null) throw new Error('Quote was not found');
+
+        if (input.providerPaymentId === undefined) {
+          await transaction.paymentWebhookEvent.update({
+            data: { errorCode: 'MISSING_PAYMENT_ID', processingStatus: 'FAILED' },
+            where: { id: event.id },
+          });
+          return null;
+        }
+
+        if (
+          input.eventType !== 'payment.succeeded' ||
+          input.amountMinor === undefined ||
+          input.currency === undefined
+        ) {
+          const payment =
+            input.amountMinor === undefined || input.currency === undefined
+              ? null
+              : await transaction.payment.upsert({
+                  create: {
+                    amountMinor: input.amountMinor,
+                    checkoutId: checkout.id,
+                    currency: input.currency,
+                    failedAt: new Date(),
+                    provider: input.provider,
+                    providerPaymentId: input.providerPaymentId,
+                    status: 'FAILED',
+                  },
+                  update: {
+                    failedAt: new Date(),
+                    status: 'FAILED',
+                  },
+                  where: {
+                    provider_providerPaymentId: {
+                      provider: input.provider,
+                      providerPaymentId: input.providerPaymentId,
+                    },
+                  },
+                });
+          await transaction.paymentWebhookEvent.update({
+            data: {
+              ...(payment === null ? {} : { paymentId: payment.id }),
+              processedAt: new Date(),
+              processingStatus: 'IGNORED',
+            },
+            where: { id: event.id },
+          });
+          return requireStatusAttempt(
+            await this.findStatusAttemptByCheckoutId(transaction, checkout.id),
+          );
+        }
+
+        const metadataError = this.metadataMismatch(input.metadata, {
+          amountMinor: quote.minimumAmountMinor,
+          checkoutId: checkout.id,
+          currency: quote.currency,
+          quoteId: quote.id,
+        });
+        const moneyError =
+          input.amountMinor !== quote.minimumAmountMinor || input.currency !== quote.currency
+            ? 'MONEY_MISMATCH'
+            : null;
+        const reconciliationReason = metadataError ?? moneyError;
+        if (reconciliationReason !== null) {
+          const payment = await transaction.payment.upsert({
+            create: {
+              amountMinor: input.amountMinor,
+              checkoutId: checkout.id,
+              currency: input.currency,
+              provider: input.provider,
+              providerPaymentId: input.providerPaymentId,
+              status: 'RECONCILED',
+            },
+            update: {
+              status: 'RECONCILED',
+            },
+            where: {
+              provider_providerPaymentId: {
+                provider: input.provider,
+                providerPaymentId: input.providerPaymentId,
+              },
+            },
+          });
+          await transaction.paymentReconciliationAction.upsert({
+            create: {
+              action: 'RECONCILE',
+              paymentId: payment.id,
+              reason: reconciliationReason,
+              requestedByActorType: 'SYSTEM',
+              status: 'PENDING',
+            },
+            update: {},
+            where: { paymentId_action: { action: 'RECONCILE', paymentId: payment.id } },
+          });
+          await transaction.paymentWebhookEvent.update({
+            data: {
+              errorCode: reconciliationReason,
+              paymentId: payment.id,
+              processedAt: new Date(),
+              processingStatus: 'RECONCILED',
+            },
+            where: { id: event.id },
+          });
+          return requireStatusAttempt(
+            await this.findStatusAttemptByCheckoutId(transaction, checkout.id),
+          );
+        }
+
+        const attempt = await this.confirmProviderPaymentAndCaptureInTransaction(transaction, {
+          amountMinor: input.amountMinor,
+          checkoutId: checkout.id,
+          currency: input.currency,
+          provider: input.provider,
+          providerPaymentId: input.providerPaymentId,
+        });
+        const payment = await transaction.payment.findUnique({
           where: {
             provider_providerPaymentId: {
               provider: input.provider,
@@ -336,79 +483,163 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
             },
           },
         });
-
-        const existingCapture = await transaction.ownershipCapture.findUnique({
-          where: { paymentId: payment.id },
+        await transaction.paymentWebhookEvent.update({
+          data: {
+            ...(payment === null ? {} : { paymentId: payment.id }),
+            processedAt: new Date(),
+            processingStatus: 'PROCESSED',
+          },
+          where: { id: event.id },
         });
-        if (existingCapture?.status === 'COMPLETED') {
-          return requireStatusAttempt(await this.findStatusAttemptByCheckoutId(transaction, checkout.id));
-        }
-        if (existingCapture?.status === 'FAILED') {
-          return requireStatusAttempt(await this.findStatusAttemptByCheckoutId(transaction, checkout.id));
-        }
-
-        const capture =
-          existingCapture ??
-          (await transaction.ownershipCapture.create({
-            data: {
-              expectedTerritoryVersion: quote.territoryVersion,
-              newOwnerCompanyId: quote.companyId,
-              paymentId: payment.id,
-              status: 'PENDING',
-              territoryId: quote.territoryId,
-            },
-          }));
-
-        try {
-          const ownership = new PrismaTerritoryOwnershipRepository(
-            createTerritoryOwnershipTransactionClient(transaction),
-          );
-          await ownership.replaceActiveOwnership({
-            expectedTerritoryVersion: quote.territoryVersion,
-            newOwnerCompanyId: quote.companyId,
-            reason: 'phase3_payment_capture',
-            source: 'PAID_CAPTURE',
-            territoryId: quote.territoryId,
-            transitionAt: new Date(),
-          });
-          await transaction.ownershipCapture.update({
-            data: { completedAt: new Date(), status: 'COMPLETED' },
-            where: { id: capture.id },
-          });
-          await transaction.checkoutSession.update({
-            data: { status: 'COMPLETED' },
-            where: { id: checkout.id },
-          });
-        } catch (error) {
-          const failureCode =
-            error instanceof StaleTerritoryVersionError
-              ? 'STALE_TERRITORY_VERSION'
-              : error instanceof TerritoryDisabledError
-                ? 'TERRITORY_DISABLED'
-                : error instanceof OwnershipConflictError
-                  ? 'OWNERSHIP_CONFLICT'
-                  : 'CAPTURE_FAILED';
-          await transaction.ownershipCapture.update({
-            data: { failureCode, status: 'FAILED' },
-            where: { id: capture.id },
-          });
-          await transaction.paymentReconciliationAction.upsert({
-            create: {
-              action: 'RECONCILE',
-              paymentId: payment.id,
-              reason: failureCode,
-              requestedByActorType: 'SYSTEM',
-              status: 'PENDING',
-            },
-            update: {},
-            where: { paymentId_action: { action: 'RECONCILE', paymentId: payment.id } },
-          });
-        }
-
-        return requireStatusAttempt(await this.findStatusAttemptByCheckoutId(transaction, checkout.id));
+        return attempt;
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
+  }
+
+  private metadataMismatch(
+    metadata: Record<string, unknown>,
+    expected: { amountMinor: bigint; checkoutId: string; currency: string; quoteId: string },
+  ): string | null {
+    if (typeof metadata.checkout_id === 'string' && metadata.checkout_id !== expected.checkoutId) {
+      return 'METADATA_MISMATCH';
+    }
+    if (typeof metadata.quote_id === 'string' && metadata.quote_id !== expected.quoteId) {
+      return 'METADATA_MISMATCH';
+    }
+    if (typeof metadata.currency === 'string' && metadata.currency !== expected.currency) {
+      return 'METADATA_MISMATCH';
+    }
+    if (
+      typeof metadata.amount_minor === 'number' &&
+      Number.isSafeInteger(metadata.amount_minor) &&
+      BigInt(metadata.amount_minor) !== expected.amountMinor
+    ) {
+      return 'METADATA_MISMATCH';
+    }
+    return null;
+  }
+
+  private async confirmProviderPaymentAndCaptureInTransaction(
+    transaction: TakeoverTransactionClient,
+    input: ConfirmProviderPaymentInput,
+  ): Promise<StatusAttemptRecord> {
+    const checkout = await transaction.checkoutSession.findUnique({
+      where: { id: input.checkoutId },
+    });
+    if (checkout === null) throw new Error('Checkout was not found');
+    const quote = await transaction.takeoverQuote.findUnique({ where: { id: checkout.quoteId } });
+    if (quote === null) throw new Error('Quote was not found');
+    const territory = await transaction.territory.findUnique({
+      select: {
+        availabilityStatus: true,
+        currency: true,
+        id: true,
+        minimumTakeoverAmountMinor: true,
+        version: true,
+      },
+      where: { id: quote.territoryId },
+    });
+    if (territory === null) throw new Error('Territory was not found');
+    if (input.amountMinor !== quote.minimumAmountMinor || input.currency !== quote.currency) {
+      throw new Error('Provider payment amount does not match quote');
+    }
+
+    const payment = await transaction.payment.upsert({
+      create: {
+        amountMinor: input.amountMinor,
+        checkoutId: checkout.id,
+        confirmedAt: new Date(),
+        currency: input.currency,
+        provider: input.provider,
+        providerPaymentId: input.providerPaymentId,
+        status: 'CONFIRMED',
+      },
+      update: {
+        confirmedAt: new Date(),
+        status: 'CONFIRMED',
+      },
+      where: {
+        provider_providerPaymentId: {
+          provider: input.provider,
+          providerPaymentId: input.providerPaymentId,
+        },
+      },
+    });
+
+    const existingCapture = await transaction.ownershipCapture.findUnique({
+      where: { paymentId: payment.id },
+    });
+    if (existingCapture?.status === 'COMPLETED') {
+      return requireStatusAttempt(
+        await this.findStatusAttemptByCheckoutId(transaction, checkout.id),
+      );
+    }
+    if (existingCapture?.status === 'FAILED') {
+      return requireStatusAttempt(
+        await this.findStatusAttemptByCheckoutId(transaction, checkout.id),
+      );
+    }
+
+    const capture =
+      existingCapture ??
+      (await transaction.ownershipCapture.create({
+        data: {
+          expectedTerritoryVersion: quote.territoryVersion,
+          newOwnerCompanyId: quote.companyId,
+          paymentId: payment.id,
+          status: 'PENDING',
+          territoryId: quote.territoryId,
+        },
+      }));
+
+    try {
+      const ownership = new PrismaTerritoryOwnershipRepository(
+        createTerritoryOwnershipTransactionClient(transaction),
+      );
+      await ownership.replaceActiveOwnership({
+        expectedTerritoryVersion: quote.territoryVersion,
+        newOwnerCompanyId: quote.companyId,
+        reason: 'phase3_payment_capture',
+        source: 'PAID_CAPTURE',
+        territoryId: quote.territoryId,
+        transitionAt: new Date(),
+      });
+      await transaction.ownershipCapture.update({
+        data: { completedAt: new Date(), status: 'COMPLETED' },
+        where: { id: capture.id },
+      });
+      await transaction.checkoutSession.update({
+        data: { status: 'COMPLETED' },
+        where: { id: checkout.id },
+      });
+    } catch (error) {
+      const failureCode =
+        error instanceof StaleTerritoryVersionError
+          ? 'STALE_TERRITORY_VERSION'
+          : error instanceof TerritoryDisabledError
+            ? 'TERRITORY_DISABLED'
+            : error instanceof OwnershipConflictError
+              ? 'OWNERSHIP_CONFLICT'
+              : 'CAPTURE_FAILED';
+      await transaction.ownershipCapture.update({
+        data: { failureCode, status: 'FAILED' },
+        where: { id: capture.id },
+      });
+      await transaction.paymentReconciliationAction.upsert({
+        create: {
+          action: 'RECONCILE',
+          paymentId: payment.id,
+          reason: failureCode,
+          requestedByActorType: 'SYSTEM',
+          status: 'PENDING',
+        },
+        update: {},
+        where: { paymentId_action: { action: 'RECONCILE', paymentId: payment.id } },
+      });
+    }
+
+    return requireStatusAttempt(await this.findStatusAttemptByCheckoutId(transaction, checkout.id));
   }
 
   async findStatusAttemptByTokenDigest(

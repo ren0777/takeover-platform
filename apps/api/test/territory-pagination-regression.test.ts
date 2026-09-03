@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import type {
-  CompanyTerritoriesResult,
   TerritoryService,
 } from '../src/modules/territories/service.js';
 import type { CompanyPublicSummary, TerritorySummary } from '@takeover/shared';
@@ -65,13 +64,13 @@ function createService(): TerritoryService {
     slug: 'ai-coding-2',
   } as unknown as TerritorySummary;
 
-  let callIndex = 0;
+
   return {
     getCompany: vi.fn(async () => company),
     listCompanyTerritories: vi.fn(async (slug: string, query: { cursor?: string; limit: number }) => {
       // First page (no cursor)
       if (!query?.cursor) {
-        callIndex++;
+
         return {
           company,
           currentTerritoryCount: 2,
@@ -81,7 +80,6 @@ function createService(): TerritoryService {
         };
       }
       // Second page (cursor present)
-      callIndex++;
       return {
         company,
         currentTerritoryCount: 2,

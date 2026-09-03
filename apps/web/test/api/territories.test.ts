@@ -181,6 +181,7 @@ describe('fetchCompanyTerritories', () => {
           currentTerritoryCount: owned.length,
           territories: owned,
         },
+        meta: { requestId: 'req-1', limit: 50, nextCursor: null },
       }),
     );
 

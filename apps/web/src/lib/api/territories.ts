@@ -1,6 +1,5 @@
 import {
   companyPublicSummarySchema,
-  companyTerritoriesSchema,
   companyTerritoriesPageSchema,
   territoryCategorySchema,
   territoryDetailSchema,

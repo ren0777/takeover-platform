@@ -1,5 +1,7 @@
 import { attemptStatusSchema } from '../src/attempt-state.js';
 import { describe, it, expect } from 'vitest';
+import type { AttemptStatus } from '../src/attempt-state.js';
+
 
 describe('AttemptStatus terminal flag validation', () => {
   const base = {
@@ -25,11 +27,11 @@ describe('AttemptStatus terminal flag validation', () => {
   ];
 
   it.each(cases)('state $state with terminal $terminal should be valid', ({ state, terminal, amountCharged }) => {
-    const obj: any = {
+    const obj = {
       ...base,
       state,
       terminal,
-    };
+    } as unknown as AttemptStatus;
     if (amountCharged !== undefined) {
       obj.amountCharged = amountCharged;
     }
@@ -38,11 +40,11 @@ describe('AttemptStatus terminal flag validation', () => {
   });
 
   it.each(cases)('state $state with opposite terminal should be invalid', ({ state, terminal, amountCharged }) => {
-    const obj: any = {
+    const obj = {
       ...base,
       state,
       terminal: !terminal,
-    };
+    } as unknown as AttemptStatus;
     if (amountCharged !== undefined) {
       obj.amountCharged = amountCharged;
     }

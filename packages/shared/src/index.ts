@@ -36,6 +36,7 @@ export {
 export {
   companyPublicSummarySchema,
   companyTerritoriesSchema,
+  companyTerritoriesPageSchema,
   displayWeightSchema,
   ownershipSourceSchema,
   pageMetaSchema,
@@ -54,6 +55,7 @@ export {
   territoryVisualMetadataSchema,
   type CompanyPublicSummary,
   type CompanyTerritories,
+  type CompanyTerritoriesPage,
   type PageMeta,
   type PaginationQuery,
   type TerritoryCategory,

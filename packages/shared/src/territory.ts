@@ -113,14 +113,14 @@ export type CompanyTerritories = z.infer<typeof companyTerritoriesSchema>;
 //   .object({
 //     requestId: z.string().min(1),
 //     limit: z.number().int().min(1).max(100),
-//     nextCursor: z.string().min(1).optional(),
+//     nextCursor: z.string().min(1).nullable().optional(),
 //   })
 //   .strict();
 export const pageMetaSchema = z
   .object({
     requestId: z.string().min(1),
     limit: z.number().int().min(1).max(100),
-    nextCursor: z.string().min(1).optional(),
+    nextCursor: z.string().min(1).nullable().optional(),
   })
   .strict();
 export type PageMeta = z.infer<typeof pageMetaSchema>;

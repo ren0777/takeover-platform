@@ -1,4 +1,4 @@
-// Checkout creation request and response contracts for Phase 3
+// Checkout creation request and response contracts for Phase 3
 import { z } from 'zod'; import { uuidSchema } from './uuid-schema.js';
 
 export const checkoutRequestSchema = z.object({

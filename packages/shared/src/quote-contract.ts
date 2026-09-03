@@ -1,4 +1,4 @@
-// Quote response contract for Phase 3
+// Quote response contract for Phase 3
 import { z } from 'zod'; import { uuidSchema } from './uuid-schema.js';
 import { moneySchema } from './money.js';
 import { territoryVersionSchema } from './territory.js';

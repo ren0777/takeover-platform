@@ -182,6 +182,11 @@ export type CreateCheckoutInput = {
   statusTokenExpiresAt: Date;
 };
 
+export type ReleaseCheckoutReservationInput = {
+  checkoutId: string;
+  quoteId: string;
+};
+
 export type CompleteCheckoutProviderResultInput = {
   checkoutId: string;
   expiresAt?: Date;
@@ -204,6 +209,12 @@ export interface TakeoverRepository {
     created: boolean;
     statusTokenDigest: Uint8Array;
   }>;
+  /**
+   * Best-effort removal of a checkout reservation whose provider call failed
+   * before any provider session could be persisted. Only a CREATED checkout
+   * with no provider URL may be removed.
+   */
+  releaseCheckoutReservation(input: ReleaseCheckoutReservationInput): Promise<void>;
   completeCheckoutProviderResult(
     input: CompleteCheckoutProviderResultInput,
   ): Promise<CheckoutRecord>;
@@ -294,6 +305,16 @@ export class CheckoutNotFoundError extends Error {
   }
 }
 
+export class CheckoutCreationPendingError extends Error {
+  readonly code = ERROR_CODES.CONFLICT;
+  readonly statusCode = 409;
+
+  constructor() {
+    super('Checkout creation is already in progress; retry shortly');
+    this.name = 'CheckoutCreationPendingError';
+  }
+}
+
 export class InvalidStatusTokenError extends Error {
   readonly code = ERROR_CODES.NOT_FOUND;
   readonly statusCode = 404;
@@ -322,6 +343,13 @@ type TakeoverServiceDependencies = {
   statusTokenSecret: Uint8Array;
   statusTokenTtlSeconds: number;
   trustedWebOrigin: string;
+  /**
+   * How long a checkout request may wait for another in-flight creation of the
+   * same quote to publish its provider URL before failing with a conflict.
+   * Defaults cover the provider timeout (5s); tests shrink the window.
+   */
+  checkoutReusePollAttempts?: number;
+  checkoutReusePollIntervalMs?: number;
 };
 
 function addSeconds(now: Date, seconds: number): Date {
@@ -458,12 +486,16 @@ function mapAttempt(record: StatusAttemptRecord, now: Date): AttemptStatus {
 
 export class TakeoverService {
   private readonly quoteTtlSeconds: number;
+  private readonly checkoutReusePollAttempts: number;
+  private readonly checkoutReusePollIntervalMs: number;
 
   constructor(private readonly dependencies: TakeoverServiceDependencies) {
     if (dependencies.statusTokenSecret.byteLength < 32) {
       throw new Error('Status token secret must contain at least 32 bytes');
     }
     this.quoteTtlSeconds = dependencies.quoteTtlSeconds ?? 300;
+    this.checkoutReusePollAttempts = dependencies.checkoutReusePollAttempts ?? 40;
+    this.checkoutReusePollIntervalMs = dependencies.checkoutReusePollIntervalMs ?? 150;
   }
 
   async createQuote(input: { companyId: string; territorySlug: string }): Promise<QuoteResponse> {
@@ -506,19 +538,60 @@ export class TakeoverService {
     if (quote.companyId !== input.companyId) throw new CheckoutNotFoundError();
     assertCheckoutQuoteCurrent(quote, now);
 
-    const token = issueStatusToken(this.dependencies.statusTokenSecret);
-    const checkoutId = randomUUID();
-    const reserved = await this.dependencies.repository.reserveCheckout({
-      checkoutId,
-      companyId: input.companyId,
-      provider: this.dependencies.provider.name,
-      providerCheckoutId: checkoutId,
-      providerCheckoutUrl: '',
-      quoteId: quote.id,
-      statusTokenDigest: token.digest,
-      statusTokenExpiresAt: addSeconds(now, this.dependencies.statusTokenTtlSeconds),
-    });
-    if (!reserved.created) {
+    // The provider must observe at most one creation call per quote: either
+    // this request reserves a fresh checkout, or it waits for the winner to
+    // publish the provider URL. A reused reservation without a URL is another
+    // in-flight creation — re-calling the provider here would hand two clients
+    // two live payment sessions for one intent.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const token = issueStatusToken(this.dependencies.statusTokenSecret);
+      const checkoutId = randomUUID();
+      const reserved = await this.dependencies.repository.reserveCheckout({
+        checkoutId,
+        companyId: input.companyId,
+        provider: this.dependencies.provider.name,
+        providerCheckoutId: checkoutId,
+        providerCheckoutUrl: '',
+        quoteId: quote.id,
+        statusTokenDigest: token.digest,
+        statusTokenExpiresAt: addSeconds(now, this.dependencies.statusTokenTtlSeconds),
+      });
+
+      if (reserved.created) {
+        try {
+          const amount = mapMoney(quote.minimumAmountMinor, quote.currency);
+          const providerCheckout = await this.dependencies.provider.createCheckout({
+            amount,
+            checkoutId: reserved.checkout.id,
+            quoteId: quote.id,
+            returnUrl: `${this.dependencies.trustedWebOrigin}/takeover/${token.rawToken}`,
+          });
+          const checkout = await this.dependencies.repository.completeCheckoutProviderResult({
+            checkoutId: reserved.checkout.id,
+            ...(providerCheckout.expiresAt === undefined
+              ? {}
+              : { expiresAt: providerCheckout.expiresAt }),
+            providerCheckoutId: providerCheckout.providerCheckoutId,
+            providerCheckoutUrl: providerCheckout.providerCheckoutUrl,
+          });
+          return checkoutResponseSchema.parse({
+            checkoutId: checkout.id,
+            providerCheckoutUrl: checkout.providerCheckoutUrl,
+            statusToken: token.rawToken,
+          });
+        } catch (error) {
+          // The provider never returned a payable session for this
+          // reservation, so release it and let a retry start over.
+          await this.dependencies.repository
+            .releaseCheckoutReservation({
+              checkoutId: reserved.checkout.id,
+              quoteId: quote.id,
+            })
+            .catch(() => undefined);
+          throw error;
+        }
+      }
+
       if (reserved.checkout.providerCheckoutUrl !== null) {
         return checkoutResponseSchema.parse({
           checkoutId: reserved.checkout.id,
@@ -526,28 +599,33 @@ export class TakeoverService {
           statusToken: token.rawToken,
         });
       }
-    }
 
-    const amount = mapMoney(quote.minimumAmountMinor, quote.currency);
-    const providerCheckout = await this.dependencies.provider.createCheckout({
-      amount,
-      checkoutId: reserved.checkout.id,
-      quoteId: quote.id,
-      returnUrl: `${this.dependencies.trustedWebOrigin}/takeover/${token.rawToken}`,
-    });
-    const checkout = await this.dependencies.repository.completeCheckoutProviderResult({
-      checkoutId: reserved.checkout.id,
-      ...(providerCheckout.expiresAt === undefined
-        ? {}
-        : { expiresAt: providerCheckout.expiresAt }),
-      providerCheckoutId: providerCheckout.providerCheckoutId,
-      providerCheckoutUrl: providerCheckout.providerCheckoutUrl,
-    });
-    return checkoutResponseSchema.parse({
-      checkoutId: checkout.id,
-      providerCheckoutUrl: checkout.providerCheckoutUrl,
-      statusToken: token.rawToken,
-    });
+      const poll = await this.pollForReservedCheckoutUrl(quote.id);
+      if (poll.kind === 'ready') {
+        return checkoutResponseSchema.parse({
+          checkoutId: poll.checkout.id,
+          providerCheckoutUrl: poll.checkout.providerCheckoutUrl,
+          statusToken: token.rawToken,
+        });
+      }
+      if (poll.kind === 'vanished') continue;
+      throw new CheckoutCreationPendingError();
+    }
+    throw new CheckoutCreationPendingError();
+  }
+
+  private async pollForReservedCheckoutUrl(
+    quoteId: string,
+  ): Promise<{ kind: 'pending' } | { kind: 'vanished' } | { checkout: CheckoutRecord; kind: 'ready' }> {
+    for (let poll = 0; poll < this.checkoutReusePollAttempts; poll += 1) {
+      const row = await this.dependencies.repository.findCheckoutByQuote(quoteId);
+      if (row === null) return { kind: 'vanished' };
+      if (row.providerCheckoutUrl !== null) return { checkout: row, kind: 'ready' };
+      if (poll + 1 < this.checkoutReusePollAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, this.checkoutReusePollIntervalMs));
+      }
+    }
+    return { kind: 'pending' };
   }
 
   async getStatus(rawToken: string): Promise<AttemptStatus> {

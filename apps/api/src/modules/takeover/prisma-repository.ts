@@ -304,6 +304,25 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
     return mapCheckout(checkout);
   }
 
+  async releaseCheckoutReservation(input: {
+    checkoutId: string;
+    quoteId: string;
+  }): Promise<void> {
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.checkoutStatusToken.deleteMany({
+        where: { checkoutId: input.checkoutId },
+      });
+      await transaction.checkoutSession.deleteMany({
+        where: {
+          id: input.checkoutId,
+          providerCheckoutUrl: null,
+          quoteId: input.quoteId,
+          status: 'CREATED',
+        },
+      });
+    });
+  }
+
   async confirmProviderPaymentAndCapture(
     input: ConfirmProviderPaymentInput,
   ): Promise<StatusAttemptRecord> {

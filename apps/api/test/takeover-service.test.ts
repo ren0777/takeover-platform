@@ -104,6 +104,7 @@ function createRepository(): TakeoverRepository {
       territoryVersion: 7n,
     })),
     findStatusAttemptByTokenDigest: vi.fn(async () => null),
+    releaseCheckoutReservation: vi.fn(async () => undefined),
     findTerritoryForQuote: vi.fn(async () => ({
       availabilityStatus: 'ACTIVE' as const,
       currency: 'USD',
@@ -294,6 +295,179 @@ describe('TakeoverService quote and checkout orchestration', () => {
       providerCheckoutUrl: 'https://pay.example/checkout',
     });
     expect(provider.createCheckout).not.toHaveBeenCalled();
+  });
+
+  it('waits for an in-flight reservation and reuses its provider URL without a second provider call', async () => {
+    const repository = createRepository();
+    const provider = createProvider();
+    vi.mocked(repository.reserveCheckout).mockResolvedValue({
+      checkout: {
+        companyId,
+        createdAt: now,
+        expiresAt: later,
+        id: checkoutId,
+        provider: 'TEST_PROVIDER',
+        providerCheckoutId: checkoutId,
+        providerCheckoutUrl: null,
+        quoteId,
+        status: 'CREATED',
+        updatedAt: now,
+      },
+      created: false,
+      statusTokenDigest: new Uint8Array(32).fill(1),
+    });
+    vi.mocked(repository.findCheckoutByQuote)
+      .mockResolvedValueOnce({
+        companyId,
+        createdAt: now,
+        expiresAt: later,
+        id: checkoutId,
+        provider: 'TEST_PROVIDER',
+        providerCheckoutId: checkoutId,
+        providerCheckoutUrl: null,
+        quoteId,
+        status: 'CREATED',
+        updatedAt: now,
+      })
+      .mockResolvedValueOnce({
+        companyId,
+        createdAt: now,
+        expiresAt: later,
+        id: checkoutId,
+        provider: 'TEST_PROVIDER',
+        providerCheckoutId: 'provider-checkout-1',
+        providerCheckoutUrl: 'https://pay.example/checkout',
+        quoteId,
+        status: 'PENDING',
+        updatedAt: later,
+      });
+    const service = new TakeoverService({
+      checkoutReusePollAttempts: 5,
+      checkoutReusePollIntervalMs: 1,
+      clock: { now: () => now },
+      provider,
+      repository,
+      statusTokenSecret: new Uint8Array(32).fill(9),
+      statusTokenTtlSeconds: 86_400,
+      trustedWebOrigin: 'https://app.example',
+    });
+
+    await expect(service.createCheckout({ companyId, quoteId })).resolves.toMatchObject({
+      checkoutId,
+      providerCheckoutUrl: 'https://pay.example/checkout',
+    });
+    expect(provider.createCheckout).not.toHaveBeenCalled();
+  });
+
+  it('fails with a conflict when the in-flight reservation never publishes a provider URL', async () => {
+    const repository = createRepository();
+    const provider = createProvider();
+    vi.mocked(repository.reserveCheckout).mockResolvedValue({
+      checkout: {
+        companyId,
+        createdAt: now,
+        expiresAt: later,
+        id: checkoutId,
+        provider: 'TEST_PROVIDER',
+        providerCheckoutId: checkoutId,
+        providerCheckoutUrl: null,
+        quoteId,
+        status: 'CREATED',
+        updatedAt: now,
+      },
+      created: false,
+      statusTokenDigest: new Uint8Array(32).fill(1),
+    });
+    vi.mocked(repository.findCheckoutByQuote).mockResolvedValue({
+      companyId,
+      createdAt: now,
+      expiresAt: later,
+      id: checkoutId,
+      provider: 'TEST_PROVIDER',
+      providerCheckoutId: checkoutId,
+      providerCheckoutUrl: null,
+      quoteId,
+      status: 'CREATED',
+      updatedAt: now,
+    });
+    const service = new TakeoverService({
+      checkoutReusePollAttempts: 3,
+      checkoutReusePollIntervalMs: 1,
+      clock: { now: () => now },
+      provider,
+      repository,
+      statusTokenSecret: new Uint8Array(32).fill(9),
+      statusTokenTtlSeconds: 86_400,
+      trustedWebOrigin: 'https://app.example',
+    });
+
+    await expect(service.createCheckout({ companyId, quoteId })).rejects.toMatchObject({
+      code: 'CONFLICT',
+      statusCode: 409,
+    });
+    expect(provider.createCheckout).not.toHaveBeenCalled();
+    expect(repository.releaseCheckoutReservation).not.toHaveBeenCalled();
+  });
+
+  it('retries reservation when the in-flight checkout disappears before publishing a URL', async () => {
+    const repository = createRepository();
+    const provider = createProvider();
+    vi.mocked(repository.reserveCheckout).mockResolvedValueOnce({
+      checkout: {
+        companyId,
+        createdAt: now,
+        expiresAt: later,
+        id: checkoutId,
+        provider: 'TEST_PROVIDER',
+        providerCheckoutId: checkoutId,
+        providerCheckoutUrl: null,
+        quoteId,
+        status: 'CREATED',
+        updatedAt: now,
+      },
+      created: false,
+      statusTokenDigest: new Uint8Array(32).fill(1),
+    });
+    // The released reservation leaves no checkout row behind.
+    vi.mocked(repository.findCheckoutByQuote).mockResolvedValue(null);
+    const service = new TakeoverService({
+      checkoutReusePollAttempts: 2,
+      checkoutReusePollIntervalMs: 1,
+      clock: { now: () => now },
+      provider,
+      repository,
+      statusTokenSecret: new Uint8Array(32).fill(9),
+      statusTokenTtlSeconds: 86_400,
+      trustedWebOrigin: 'https://app.example',
+    });
+
+    await expect(service.createCheckout({ companyId, quoteId })).resolves.toMatchObject({
+      providerCheckoutUrl: 'https://pay.example/checkout',
+    });
+    expect(provider.createCheckout).toHaveBeenCalledTimes(1);
+    expect(repository.reserveCheckout).toHaveBeenCalledTimes(2);
+  });
+
+  it('releases the reservation when the provider call fails so a retry can start over', async () => {
+    const repository = createRepository();
+    const provider = createProvider();
+    vi.mocked(provider.createCheckout).mockRejectedValueOnce(
+      new Error('Dodo checkout failed: 503'),
+    );
+    const service = createService(repository, provider);
+
+    await expect(service.createCheckout({ companyId, quoteId })).rejects.toThrow(
+      'Dodo checkout failed: 503',
+    );
+    expect(repository.releaseCheckoutReservation).toHaveBeenCalledWith({
+      checkoutId: expect.any(String),
+      quoteId,
+    });
+
+    await expect(service.createCheckout({ companyId, quoteId })).resolves.toMatchObject({
+      providerCheckoutUrl: 'https://pay.example/checkout',
+    });
+    expect(provider.createCheckout).toHaveBeenCalledTimes(2);
   });
 
   it('returns not found for unknown, expired, or revoked status tokens', async () => {

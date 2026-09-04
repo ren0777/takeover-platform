@@ -1382,4 +1382,148 @@ describe('TakeoverService with real PostgreSQL repository', () => {
       ).resolves.toBe(1);
     },
   );
+
+  it('invokes the payment provider at most once when two instances race one quote', async () => {
+    const providerCalls: Array<Promise<{
+      providerCheckoutId: string;
+      providerCheckoutUrl: string;
+    }>> = [];
+    let releaseGate: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    const gatedProvider: PaymentProvider = {
+      name: 'GATED_PROVIDER',
+      createCheckout: vi.fn(() => {
+        const result = gate.then(() => ({
+          providerCheckoutId: `provider-race-${providerCalls.length + 1}`,
+          providerCheckoutUrl: `https://pay.example/race-${providerCalls.length + 1}`,
+        }));
+        providerCalls.push(result);
+        return result;
+      }),
+      refundPayment: vi.fn(async () => ({
+        providerRefundId: `refund-${fixture.suffix}`,
+        status: 'pending' as const,
+      })),
+      lookupRefund: vi.fn(async () => null),
+    };
+    const serviceOptions = {
+      clock: { now: () => now },
+      provider: gatedProvider,
+      statusTokenSecret: new Uint8Array(32).fill(7),
+      statusTokenTtlSeconds: 86_400,
+      trustedWebOrigin: 'https://app.example',
+    } as const;
+    // Two fully independent service/repository pairs over one shared Postgres,
+    // mirroring two API replicas racing the same quote.
+    const first = new TakeoverService({
+      ...serviceOptions,
+      repository: new PrismaTakeoverRepository(prisma),
+    });
+    const second = new TakeoverService({
+      ...serviceOptions,
+      repository: new PrismaTakeoverRepository(prisma),
+    });
+    const quote = await first.createQuote({
+      companyId: fixture.companyId,
+      territorySlug: fixture.territorySlug,
+    });
+
+    const settled = Promise.all([
+      first.createCheckout({ companyId: fixture.companyId, quoteId: quote.quoteId }),
+      second.createCheckout({ companyId: fixture.companyId, quoteId: quote.quoteId }),
+    ]);
+    // Release the provider gate once both racing calls have arrived, or after a
+    // bounded wait when the fixed implementation only ever makes one call.
+    const deadline = Date.now() + 400;
+    while (providerCalls.length < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    releaseGate();
+    const [checkoutA, checkoutB] = await settled;
+
+    expect(gatedProvider.createCheckout).toHaveBeenCalledTimes(1);
+    expect(checkoutB.checkoutId).toBe(checkoutA.checkoutId);
+    expect(checkoutB.providerCheckoutUrl).toBe(checkoutA.providerCheckoutUrl);
+    await expect(
+      prisma.checkoutSession.count({ where: { quoteId: quote.quoteId } }),
+    ).resolves.toBe(1);
+  });
+
+  it('rejects a racing checkout with a conflict while the first creation is still in flight', async () => {
+    let releaseGate: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    const gatedProvider: PaymentProvider = {
+      name: 'GATED_PROVIDER',
+      createCheckout: vi.fn(
+        async (input: { checkoutId: string }) =>
+          gate.then(() => ({
+            providerCheckoutId: `provider-stuck-${input.checkoutId.slice(0, 8)}`,
+            providerCheckoutUrl: `https://pay.example/stuck-${input.checkoutId.slice(0, 8)}`,
+          })),
+      ),
+      refundPayment: vi.fn(async () => ({
+        providerRefundId: `refund-${fixture.suffix}`,
+        status: 'pending' as const,
+      })),
+      lookupRefund: vi.fn(async () => null),
+    };
+    const first = new TakeoverService({
+      clock: { now: () => now },
+      provider: gatedProvider,
+      repository: new PrismaTakeoverRepository(prisma),
+      statusTokenSecret: new Uint8Array(32).fill(7),
+      statusTokenTtlSeconds: 86_400,
+      trustedWebOrigin: 'https://app.example',
+    });
+    const second = new TakeoverService({
+      clock: { now: () => now },
+      checkoutReusePollAttempts: 4,
+      checkoutReusePollIntervalMs: 5,
+      provider: gatedProvider,
+      repository: new PrismaTakeoverRepository(prisma),
+      statusTokenSecret: new Uint8Array(32).fill(7),
+      statusTokenTtlSeconds: 86_400,
+      trustedWebOrigin: 'https://app.example',
+    });
+    const quote = await first.createQuote({
+      companyId: fixture.companyId,
+      territorySlug: fixture.territorySlug,
+    });
+
+    const firstCheckout = first.createCheckout({
+      companyId: fixture.companyId,
+      quoteId: quote.quoteId,
+    });
+    // Wait until the creator has actually reached the provider before racing.
+    const creatorReachedProvider = vi.mocked(gatedProvider.createCheckout).mock.calls.length;
+    const deadline = Date.now() + 5_000;
+    while (
+      vi.mocked(gatedProvider.createCheckout).mock.calls.length === creatorReachedProvider &&
+      Date.now() < deadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    // The creator never resolves within the racer's bounded poll window; a
+    // safety release keeps the test fast even while the bug is present.
+    const safetyRelease = setTimeout(releaseGate, 500);
+
+    await expect(
+      second.createCheckout({ companyId: fixture.companyId, quoteId: quote.quoteId }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', statusCode: 409 });
+
+    releaseGate();
+    clearTimeout(safetyRelease);
+    const checkout = await firstCheckout;
+    expect(gatedProvider.createCheckout).toHaveBeenCalledTimes(1);
+    expect(checkout.providerCheckoutUrl).toMatch(/^https:\/\/pay\.example\/stuck-/);
+    await expect(
+      prisma.checkoutSession.count({ where: { quoteId: quote.quoteId } }),
+    ).resolves.toBe(1);
+  });
+
 });

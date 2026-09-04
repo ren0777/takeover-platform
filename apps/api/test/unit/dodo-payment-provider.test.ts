@@ -287,4 +287,61 @@ describe('DodoPaymentProvider', () => {
     await expectation;
     vi.useRealTimers();
   });
+
+  it('looks up existing refunds through the documented payment detail endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        payment_id: 'pay_123',
+        refunds: [
+          {
+            payment_id: 'pay_123',
+            refund_id: 'ref_123',
+            status: 'pending',
+          },
+        ],
+      }),
+    });
+    global.fetch = fetchMock;
+
+    const result = await provider.lookupRefund({
+      paymentId: 'payment-row-1',
+      providerPaymentId: 'pay_123',
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${baseUrl}/payments/pay_123`);
+    expect(opts.method).toBe('GET');
+    expect(opts.signal).toBeInstanceOf(AbortSignal);
+    expect(opts.headers).toMatchObject({
+      Authorization: `Bearer ${apiKey}`,
+      Accept: 'application/json',
+    });
+    expect(result).toEqual({ providerRefundId: 'ref_123', status: 'pending' });
+  });
+
+  it('returns null when payment detail has no refunds', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ payment_id: 'pay_123', refunds: [] }),
+    });
+    global.fetch = fetchMock;
+
+    await expect(
+      provider.lookupRefund({ paymentId: 'payment-row-1', providerPaymentId: 'pay_123' }),
+    ).resolves.toBeNull();
+  });
+
+  it('treats refund lookup transport failures as inconclusive', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+    });
+    global.fetch = fetchMock;
+
+    await expect(
+      provider.lookupRefund({ paymentId: 'payment-row-1', providerPaymentId: 'pay_123' }),
+    ).rejects.toMatchObject({ retryable: true });
+  });
 });

@@ -4,7 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getDatabaseClient } from '@takeover/database';
 import { UnavailablePaymentProvider } from '../../src/modules/takeover/payment-provider.js';
 import { PrismaTakeoverRepository } from '../../src/modules/takeover/prisma-repository.js';
-import { TakeoverService, type PaymentProvider } from '../../src/modules/takeover/service.js';
+import {
+  PaymentProviderRefundError,
+  TakeoverService,
+  type PaymentProvider,
+} from '../../src/modules/takeover/service.js';
 
 const prisma = getDatabaseClient();
 const now = new Date('2026-09-03T10:00:00.000Z');
@@ -633,7 +637,7 @@ describe('TakeoverService with real PostgreSQL repository', () => {
     expect(first).toMatchObject({ state: 'REFUND_PENDING', terminal: false });
     expect(second).toMatchObject({ state: 'REFUND_PENDING', terminal: false });
     expect(provider.refundPayment).toHaveBeenCalledTimes(1);
-    expect(provider.lookupRefund).toHaveBeenCalledTimes(2);
+    expect(provider.lookupRefund).toHaveBeenCalledTimes(1);
     await expect(
       prisma.paymentReconciliationAction.findUniqueOrThrow({
         where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
@@ -685,6 +689,9 @@ describe('TakeoverService with real PostgreSQL repository', () => {
     expect(status).toMatchObject({ state: 'REFUND_PENDING', terminal: false });
     expect(provider.lookupRefund).toHaveBeenCalledTimes(1);
     expect(provider.refundPayment).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(provider.lookupRefund).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(provider.refundPayment).mock.invocationCallOrder[0] ?? 0,
+    );
     await expect(
       prisma.paymentReconciliationAction.findUniqueOrThrow({
         where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
@@ -693,6 +700,51 @@ describe('TakeoverService with real PostgreSQL repository', () => {
       providerRefundReference: `refund-${fixture.suffix}`,
       status: 'PENDING',
     });
+  });
+
+  it('does not double post when an accepted refund is temporarily invisible to lookup', async () => {
+    const provider = createProvider('DODO');
+    vi.mocked(provider.lookupRefund).mockResolvedValue(null);
+    vi.mocked(provider.refundPayment).mockImplementationOnce(async () => {
+      throw new PaymentProviderRefundError('refund request timed out', { retryable: true });
+    });
+    const { service: firstService } = createService(provider);
+    const { service: secondService } = createService(provider);
+    const quote = await firstService.createQuote({
+      companyId: fixture.companyId,
+      territorySlug: fixture.territorySlug,
+    });
+    const checkout = await firstService.createCheckout({
+      companyId: fixture.companyId,
+      quoteId: quote.quoteId,
+    });
+    await prisma.territory.update({
+      data: { version: { increment: 1 } },
+      where: { id: fixture.territoryId },
+    });
+    await firstService.confirmProviderPayment({
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      provider: 'DODO',
+      providerPaymentId: `pay-invisible-refund-${fixture.suffix}`,
+    });
+    const payment = await prisma.payment.findFirstOrThrow({
+      where: { checkoutId: checkout.checkoutId },
+    });
+
+    const first = await firstService.requestRefundForReconciliation(payment.id);
+    const second = await secondService.requestRefundForReconciliation(payment.id);
+
+    expect(first).toMatchObject({ state: 'RECONCILIATION_REQUIRED', terminal: false });
+    expect(second).toMatchObject({ state: 'RECONCILIATION_REQUIRED', terminal: false });
+    expect(provider.lookupRefund).toHaveBeenCalledTimes(2);
+    expect(provider.refundPayment).toHaveBeenCalledTimes(1);
+    const action = await prisma.paymentReconciliationAction.findUniqueOrThrow({
+      where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+    });
+    expect(action.providerRefundReference).toMatch(/^CLAIMED_\d{13}_/);
+    expect(action.status).toBe('PENDING');
   });
 
   it('recovers an accepted provider refund after local reference persistence was lost', async () => {
@@ -992,6 +1044,75 @@ describe('TakeoverService with real PostgreSQL repository', () => {
       providerRefundReference: `ref-webhook-${fixture.suffix}`,
       status: 'COMPLETED',
     });
+  });
+
+  it('preserves completed refund truth over a later local failure handler', async () => {
+    const provider = createProvider('DODO');
+    const { service } = createService(provider);
+    const quote = await service.createQuote({
+      companyId: fixture.companyId,
+      territorySlug: fixture.territorySlug,
+    });
+    const checkout = await service.createCheckout({
+      companyId: fixture.companyId,
+      quoteId: quote.quoteId,
+    });
+    await prisma.territory.update({
+      data: { version: { increment: 1 } },
+      where: { id: fixture.territoryId },
+    });
+    await service.confirmProviderPayment({
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      provider: 'DODO',
+      providerPaymentId: `pay-refund-failure-race-${fixture.suffix}`,
+    });
+    const payment = await prisma.payment.findFirstOrThrow({
+      where: { checkoutId: checkout.checkoutId },
+    });
+    await new PrismaTakeoverRepository(prisma).beginRefundForReconciliation(payment.id);
+
+    await service.processVerifiedProviderWebhook({
+      amountMinor: 1500n,
+      currency: 'USD',
+      eventType: 'refund.succeeded',
+      metadata: {
+        amount_minor: 1500,
+        currency: 'USD',
+        payment_id: payment.id,
+      },
+      payload: {
+        data: { refund_id: `ref-completed-${fixture.suffix}` },
+        type: 'refund.succeeded',
+      },
+      provider: 'DODO',
+      providerEventId: `msg-refund-failure-race-${fixture.suffix}`,
+      providerPaymentId: `pay-refund-failure-race-${fixture.suffix}`,
+      providerRefundId: `ref-completed-${fixture.suffix}`,
+      signatureDigest: new Uint8Array(32).fill(16),
+    });
+    const lateFailureStatus = await new PrismaTakeoverRepository(prisma).recordRefundRequestFailure(
+      {
+        paymentId: payment.id,
+        reason: 'late local timeout handler',
+        status: 'PENDING',
+      },
+    );
+
+    expect(lateFailureStatus.payment).toMatchObject({ status: 'REFUNDED' });
+    await expect(
+      prisma.paymentReconciliationAction.findUniqueOrThrow({
+        where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+      }),
+    ).resolves.toMatchObject({
+      providerRefundReference: `ref-completed-${fixture.suffix}`,
+      reason: 'REFUND_SUCCEEDED',
+      status: 'COMPLETED',
+    });
+    await expect(
+      prisma.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+    ).resolves.toMatchObject({ status: 'REFUNDED' });
   });
 
   it('preserves out-of-order refund failure over later pending local result persistence', async () => {

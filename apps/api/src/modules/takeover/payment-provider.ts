@@ -3,6 +3,7 @@ import type {
   PaymentProvider,
   PaymentProviderCheckoutInput,
   PaymentProviderRefundInput,
+  PaymentProviderRefundLookupInput,
 } from './service.js';
 
 export class PaymentProviderUnavailableError extends Error {
@@ -23,6 +24,10 @@ export class UnavailablePaymentProvider implements PaymentProvider {
   }
 
   refundPayment(_input: PaymentProviderRefundInput): Promise<never> {
+    throw new PaymentProviderUnavailableError();
+  }
+
+  lookupRefund(_input: PaymentProviderRefundLookupInput): Promise<never> {
     throw new PaymentProviderUnavailableError();
   }
 }

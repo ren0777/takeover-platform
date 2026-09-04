@@ -3,10 +3,17 @@ import type {
   PaymentProviderCheckoutInput,
   PaymentProviderCheckoutResult,
   PaymentProviderRefundInput,
+  PaymentProviderRefundLookupInput,
   PaymentProviderRefundResult,
 } from '../../service.js';
 import { PaymentProviderRefundError } from '../../service.js';
 import { URL } from 'node:url';
+
+type DodoRefundResponse = {
+  payment_id: string;
+  refund_id: string;
+  status: 'succeeded' | 'failed' | 'pending' | 'review';
+};
 
 /**
  * Dodo Payments provider implementation.
@@ -167,13 +174,80 @@ export class DodoPaymentProvider implements PaymentProvider {
       status: data.status,
     };
   }
+
+  async lookupRefund(
+    input: PaymentProviderRefundLookupInput,
+  ): Promise<PaymentProviderRefundResult | null> {
+    const endpoint = `${this.baseUrl}/payments/${encodeURIComponent(input.providerPaymentId)}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          Accept: 'application/json',
+        },
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new PaymentProviderRefundError('Dodo refund lookup timed out', { retryable: true });
+      }
+      throw new PaymentProviderRefundError('Dodo refund lookup failed', { retryable: true });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!response.ok) {
+      throw new PaymentProviderRefundError(
+        `Dodo refund lookup failed with status ${response.status}`,
+        { retryable: response.status === 429 || response.status >= 500 },
+      );
+    }
+
+    let data: unknown;
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error('Dodo payment lookup response was malformed');
+    }
+
+    if (!isDodoPaymentLookupResponse(data)) {
+      throw new Error('Dodo payment lookup response was malformed');
+    }
+
+    // Filter matching refunds for the given providerPaymentId
+    const matching = data.refunds.filter(
+      (item): item is DodoRefundResponse =>
+        isDodoRefundResponse(item) && item.payment_id === input.providerPaymentId,
+    );
+    if (matching.length === 0) {
+      return null;
+    }
+    // Exclude refunds that contain amount or currency fields (cannot verify safely)
+    const clean = matching.filter((item) => !('amount' in item) && !('currency' in item));
+    if (clean.length === 0) {
+      return null;
+    }
+    // Separate non‑failed refunds
+    const nonFailed = clean.filter((item) => item.status !== 'failed');
+    if (nonFailed.length === 1) {
+      const item = nonFailed[0];
+      if (item === undefined) return null;
+      return { providerRefundId: item.refund_id, status: item.status };
+    }
+    // If multiple non‑failed refunds exist, ambiguity – return null
+    if (nonFailed.length > 1) {
+      return null;
+    }
+    // No non‑failed refunds – do not return a failed refund (unsafe)
+    return null;
+  }
 }
 
-function isDodoRefundResponse(value: unknown): value is {
-  payment_id: string;
-  refund_id: string;
-  status: 'succeeded' | 'failed' | 'pending' | 'review';
-} {
+function isDodoRefundResponse(value: unknown): value is DodoRefundResponse {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as Record<string, unknown>;
   return (
@@ -184,4 +258,10 @@ function isDodoRefundResponse(value: unknown): value is {
       record.status === 'pending' ||
       record.status === 'review')
   );
+}
+
+function isDodoPaymentLookupResponse(value: unknown): value is { refunds: unknown[] } {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return Array.isArray(record.refunds);
 }

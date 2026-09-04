@@ -1125,6 +1125,18 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
     return this.prisma.$transaction(async (transaction) => {
       const payment = await transaction.payment.findUnique({ where: { id: input.paymentId } });
       if (payment === null) throw new Error('Payment was not found');
+      const existingRefund = await transaction.paymentReconciliationAction.findUnique({
+        where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+      });
+      if (
+        payment.status === 'REFUNDED' ||
+        existingRefund?.status === 'COMPLETED' ||
+        (existingRefund?.status === 'FAILED' && input.status !== 'FAILED')
+      ) {
+        return requireStatusAttempt(
+          await this.findStatusAttemptByCheckoutId(transaction, payment.checkoutId),
+        );
+      }
       await transaction.paymentReconciliationAction.update({
         data: {
           reason: input.reason.slice(0, 3000),

@@ -602,8 +602,6 @@ export class TakeoverService {
     if (!claimed) {
       // In case of claim failure, attempt to lookup existing provider refund
       try {
-        console.log('lookupRefund called (claimed)');
-        console.log('lookupRefund called (unclaimed)');
         const existing = await this.dependencies.provider.lookupRefund({
           paymentId: prepared.payment.id,
           providerPaymentId: prepared.payment.providerPaymentId,
@@ -649,7 +647,9 @@ export class TakeoverService {
       });
       return mapAttempt(attempt, this.dependencies.clock.now());
     } catch (error) {
-      await this.dependencies.repository.clearRefundClaim(prepared.payment.id, claimPlaceholder);
+      if (error instanceof PaymentProviderRefundError && !error.retryable) {
+        await this.dependencies.repository.clearRefundClaim(prepared.payment.id, claimPlaceholder);
+      }
       const attempt = await this.dependencies.repository.recordRefundRequestFailure({
         paymentId: prepared.payment.id,
         reason: error instanceof Error ? error.message : 'Refund request failed',

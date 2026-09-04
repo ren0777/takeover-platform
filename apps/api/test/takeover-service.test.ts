@@ -129,7 +129,7 @@ function createRepository(): TakeoverRepository {
         status: 'CONFIRMED' as const,
       },
       quote: { expiresAt: later, territoryVersion: 7n },
-      reconciliation: { action: 'REFUND', status: 'FAILED' },
+      reconciliation: { action: 'REFUND', providerRefundReference: null, status: 'FAILED' },
       territory: { ownerCompanyId: null, version: 8n },
       token: { expiresAt: later, revokedAt: null },
     })),
@@ -149,10 +149,12 @@ function createRepository(): TakeoverRepository {
         status: 'CONFIRMED' as const,
       },
       quote: { expiresAt: later, territoryVersion: 7n },
-      reconciliation: { action: 'REFUND', status: 'PENDING' },
+      reconciliation: { action: 'REFUND', providerRefundReference: 'ref_123', status: 'PENDING' },
       territory: { ownerCompanyId: null, version: 8n },
       token: { expiresAt: later, revokedAt: null },
     })),
+    claimRefund: vi.fn(async () => true),
+    clearRefundClaim: vi.fn(async () => undefined),
   };
 }
 
@@ -167,6 +169,7 @@ function createProvider(): PaymentProvider {
       providerRefundId: 'ref_123',
       status: 'pending' as const,
     })),
+    lookupRefund: vi.fn(async () => null),
   };
 }
 
@@ -451,7 +454,7 @@ describe('TakeoverService quote and checkout orchestration', () => {
           status: 'CONFIRMED',
         },
         quote: { expiresAt: later, territoryVersion: 7n },
-        reconciliation: { action: 'REFUND', status: 'PENDING' },
+        reconciliation: { action: 'REFUND', providerRefundReference: 'ref_123', status: 'PENDING' },
         territory: { ownerCompanyId: null, version: 8n },
         token: { expiresAt: later, revokedAt: null },
       },

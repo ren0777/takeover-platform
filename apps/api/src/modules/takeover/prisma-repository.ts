@@ -1099,6 +1099,13 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
             ),
           };
         }
+        // A real (non-claim) refund reference on a non-completed action marks a
+        // definitively rejected attempt, not an active claim or accepted money:
+        // clear it so the obligation can be claimed and retried. Fresh claim
+        // placeholders of in-flight attempts are left untouched.
+        const rejectedReference =
+          existingRefund?.providerRefundReference != null &&
+          !isRefundClaimPlaceholder(existingRefund.providerRefundReference);
         await transaction.paymentReconciliationAction.upsert({
           create: {
             action: 'REFUND',
@@ -1110,6 +1117,7 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
           update: {
             reason: 'REFUND_REQUESTED',
             status: 'PENDING',
+            ...(rejectedReference ? { providerRefundReference: null } : {}),
           },
           where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
         });

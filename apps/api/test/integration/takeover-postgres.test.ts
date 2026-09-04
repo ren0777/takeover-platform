@@ -800,6 +800,79 @@ describe('TakeoverService with real PostgreSQL repository', () => {
     ).resolves.toBe(0);
   });
 
+  it('retries the refund obligation after a definite provider rejection', async () => {
+    const provider = createProvider('DODO');
+    vi.mocked(provider.refundPayment).mockImplementationOnce(async () => {
+      throw new PaymentProviderRefundError('Dodo refund request timed out', { retryable: true });
+    });
+    const { service: firstService } = createService(provider);
+    const { service: retryService } = createService(provider);
+    const quote = await firstService.createQuote({
+      companyId: fixture.companyId,
+      territorySlug: fixture.territorySlug,
+    });
+    const checkout = await firstService.createCheckout({
+      companyId: fixture.companyId,
+      quoteId: quote.quoteId,
+    });
+    await prisma.territory.update({
+      data: { version: { increment: 1 } },
+      where: { id: fixture.territoryId },
+    });
+    await firstService.confirmProviderPayment({
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      provider: 'DODO',
+      providerPaymentId: `pay-refund-retry-${fixture.suffix}`,
+    });
+    const payment = await prisma.payment.findFirstOrThrow({
+      where: { checkoutId: checkout.checkoutId },
+    });
+
+    // Holder claims, posts, and loses the response; the provider processes
+    // the refund attempt and definitively rejects it.
+    await expect(firstService.requestRefundForReconciliation(payment.id)).resolves.toMatchObject({
+      state: 'RECONCILIATION_REQUIRED',
+      terminal: false,
+    });
+    await ingestDodoWebhook(firstService, {
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      eventId: `msg-refund-rejected-${fixture.suffix}`,
+      eventType: 'refund.failed',
+      paymentId: `pay-refund-retry-${fixture.suffix}`,
+      providerCheckoutId: `provider-${checkout.checkoutId}`,
+      quoteId: quote.quoteId,
+      refundId: `ref-rejected-${fixture.suffix}`,
+    });
+    await expect(
+      prisma.paymentReconciliationAction.findUniqueOrThrow({
+        where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+      }),
+    ).resolves.toMatchObject({
+      providerRefundReference: `ref-rejected-${fixture.suffix}`,
+      status: 'FAILED',
+    });
+
+    // A rejected refund moved no money: the obligation must be claimable and
+    // retryable, not permanently blocked by the rejected attempt's reference.
+    await expect(retryService.requestRefundForReconciliation(payment.id)).resolves.toMatchObject({
+      state: 'REFUND_PENDING',
+      terminal: false,
+    });
+    expect(provider.refundPayment).toHaveBeenCalledTimes(2);
+    await expect(
+      prisma.paymentReconciliationAction.findUniqueOrThrow({
+        where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+      }),
+    ).resolves.toMatchObject({
+      providerRefundReference: `refund-${fixture.suffix}`,
+      status: 'PENDING',
+    });
+  });
+
   it('recovers a stale refund claim left before the provider call', async () => {
     const provider = createProvider('DODO');
     const { service: setupService } = createService(provider);

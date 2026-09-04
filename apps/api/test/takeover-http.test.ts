@@ -184,6 +184,23 @@ describe('provider-neutral takeover HTTP routes', () => {
     });
     expect(harness.identityService.getManagementContext).not.toHaveBeenCalled();
   });
+
+  it('exposes no mutating route on the browser-facing status endpoint', async () => {
+    const harness = buildTakeoverApp();
+
+    for (const method of ['POST', 'PUT', 'DELETE'] as const) {
+      const response = await harness.app.inject({
+        headers: mutationHeaders,
+        method,
+        payload: { state: 'CAPTURED' },
+        url: `/api/takeover-status/${'A'.repeat(43)}`,
+      });
+
+      expect(response.statusCode).toBe(404);
+    }
+    expect(harness.takeoverService.getStatus).not.toHaveBeenCalled();
+    expect(harness.identityService.getManagementContext).not.toHaveBeenCalled();
+  });
 });
 
 function signedWebhook(payload: unknown, overrides: Record<string, string> = {}) {

@@ -1383,6 +1383,87 @@ describe('TakeoverService with real PostgreSQL repository', () => {
     },
   );
 
+  it('rejects checkout of another company quote without provider side effects', async () => {
+    const { provider, service } = createService();
+    const quote = await service.createQuote({
+      companyId: fixture.companyId,
+      territorySlug: fixture.territorySlug,
+    });
+
+    await expect(
+      service.createCheckout({
+        companyId: fixture.secondCompanyId,
+        quoteId: quote.quoteId,
+      }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', statusCode: 404 });
+
+    expect(provider.createCheckout).not.toHaveBeenCalled();
+    await expect(prisma.checkoutSession.count()).resolves.toBe(0);
+    const storedQuote = await prisma.takeoverQuote.findUniqueOrThrow({
+      select: { consumedAt: true },
+      where: { id: quote.quoteId },
+    });
+    expect(storedQuote.consumedAt).toBeNull();
+  });
+
+  it('rejects checkout when the territory price changed after the quote was issued', async () => {
+    const { provider, service } = createService();
+    const quote = await service.createQuote({
+      companyId: fixture.companyId,
+      territorySlug: fixture.territorySlug,
+    });
+    await prisma.territory.update({
+      data: { minimumTakeoverAmountMinor: 2000n },
+      where: { id: fixture.territoryId },
+    });
+
+    await expect(
+      service.createCheckout({ companyId: fixture.companyId, quoteId: quote.quoteId }),
+    ).rejects.toMatchObject({ code: 'TAKEOVER_PRICE_CHANGED', statusCode: 409 });
+
+    expect(provider.createCheckout).not.toHaveBeenCalled();
+    await expect(prisma.checkoutSession.count()).resolves.toBe(0);
+  });
+
+  it('polls the browser status endpoint without mutating money or ownership state', async () => {
+    const { service } = createService(createProvider('DODO'));
+    const { checkout } = await createCheckoutForFixture(service);
+    await service.confirmProviderPayment({
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      provider: 'DODO',
+      providerPaymentId: `payment-poll-${fixture.suffix}`,
+    });
+
+    const snapshot = async () => {
+      const payments = await prisma.payment.findMany({
+        select: { id: true, status: true },
+        where: { checkoutId: checkout.checkoutId },
+      });
+      const captures = await prisma.ownershipCapture.findMany({
+        select: { id: true, status: true },
+        where: { paymentId: { in: payments.map((payment) => payment.id) } },
+      });
+      const ownership = await prisma.territoryOwnership.findMany({
+        select: { companyId: true, endedAt: true },
+        where: { territoryId: fixture.territoryId },
+      });
+      return { captures, ownership, payments };
+    };
+    const before = await snapshot();
+    for (let poll = 0; poll < 3; poll += 1) {
+      await expect(service.getStatus(checkout.statusToken)).resolves.toMatchObject({
+        state: 'CAPTURED',
+        terminal: true,
+      });
+    }
+    expect(await snapshot()).toEqual(before);
+    expect(before.payments).toHaveLength(1);
+    expect(before.captures).toHaveLength(1);
+    expect(before.ownership).toHaveLength(1);
+  });
+
   it('invokes the payment provider at most once when two instances race one quote', async () => {
     const providerCalls: Array<Promise<{
       providerCheckoutId: string;

@@ -600,7 +600,8 @@ export class TakeoverService {
       claimPlaceholder,
     );
     if (!claimed) {
-      // In case of claim failure, attempt to lookup existing provider refund
+      // Claim failed: another instance may have already claimed the refund.
+      // To avoid duplicate provider refunds, check if a refund already exists.
       try {
         const existing = await this.dependencies.provider.lookupRefund({
           paymentId: prepared.payment.id,
@@ -627,6 +628,8 @@ export class TakeoverService {
     }
 
     try {
+      // After successfully claiming the refund placeholder, double‑check the provider
+      // for any existing refund (e.g., a race where another instance already issued it).
       const existing = await this.dependencies.provider.lookupRefund({
         paymentId: prepared.payment.id,
         providerPaymentId: prepared.payment.providerPaymentId,

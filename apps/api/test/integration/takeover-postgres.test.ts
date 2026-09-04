@@ -738,15 +738,14 @@ describe('TakeoverService with real PostgreSQL repository', () => {
   it('uses one provider refund across two concurrent service instances', async () => {
     const provider = createProvider('DODO');
     let releaseRefund!: () => void;
-    vi.mocked(provider.refundPayment).mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          releaseRefund = () =>
-            resolve({
-              providerRefundId: `refund-${fixture.suffix}`,
-              status: 'pending' as const,
-            });
-        }),
+    const refundGate = new Promise<void>((resolve) => {
+      releaseRefund = resolve;
+    });
+    vi.mocked(provider.refundPayment).mockImplementationOnce(() =>
+      refundGate.then(() => ({
+        providerRefundId: `refund-${fixture.suffix}`,
+        status: 'pending' as const,
+      })),
     );
     const { service: setupService } = createService(provider);
     const { service: serviceA } = createService(provider);
@@ -776,17 +775,21 @@ describe('TakeoverService with real PostgreSQL repository', () => {
     });
 
     const firstPromise = serviceA.requestRefundForReconciliation(payment.id);
+    // Barrier 1: the claim holder has reached the provider.
     while (vi.mocked(provider.refundPayment).mock.calls.length === 0) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    const secondPromise = serviceB.requestRefundForReconciliation(payment.id);
+    // Barrier 2: the racer runs to completion while the holder is still in
+    // flight, so it deterministically observes the holder's fresh claim,
+    // fails to steal it, and records a pending outcome instead of posting.
+    const second = await serviceB.requestRefundForReconciliation(payment.id);
+    expect(second).toMatchObject({ state: 'RECONCILIATION_REQUIRED', terminal: false });
     releaseRefund();
-    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+    const first = await firstPromise;
 
     expect(first).toMatchObject({ state: 'REFUND_PENDING', terminal: false });
-    expect(second).toMatchObject({ state: 'REFUND_PENDING', terminal: false });
     expect(provider.refundPayment).toHaveBeenCalledTimes(1);
-    expect(provider.lookupRefund).toHaveBeenCalledTimes(1);
+    expect(provider.lookupRefund).toHaveBeenCalledTimes(2);
     await expect(
       prisma.paymentReconciliationAction.findUniqueOrThrow({
         where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
@@ -796,8 +799,158 @@ describe('TakeoverService with real PostgreSQL repository', () => {
       status: 'PENDING',
     });
     await expect(
+      prisma.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+    ).resolves.toMatchObject({ status: 'CONFIRMED' });
+    await expect(
       prisma.territoryOwnership.count({ where: { territoryId: fixture.territoryId } }),
     ).resolves.toBe(0);
+  });
+
+  it('keeps a completed refund terminal when a later refund.failed webhook arrives', async () => {
+    const { service } = createService(createProvider('DODO'));
+    const quote = await service.createQuote({
+      companyId: fixture.companyId,
+      territorySlug: fixture.territorySlug,
+    });
+    const checkout = await service.createCheckout({
+      companyId: fixture.companyId,
+      quoteId: quote.quoteId,
+    });
+    await prisma.territory.update({
+      data: { version: { increment: 1 } },
+      where: { id: fixture.territoryId },
+    });
+    await service.confirmProviderPayment({
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      provider: 'DODO',
+      providerPaymentId: `pay-refund-ordering-${fixture.suffix}`,
+    });
+    const payment = await prisma.payment.findFirstOrThrow({
+      where: { checkoutId: checkout.checkoutId },
+    });
+
+    await ingestDodoWebhook(service, {
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      eventId: `msg-refund-succeeded-${fixture.suffix}`,
+      eventType: 'refund.succeeded',
+      paymentId: `pay-refund-ordering-${fixture.suffix}`,
+      providerCheckoutId: `provider-${checkout.checkoutId}`,
+      quoteId: quote.quoteId,
+      refundId: `ref-succeeded-${fixture.suffix}`,
+    });
+    await expect(
+      prisma.paymentReconciliationAction.findUniqueOrThrow({
+        where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+      }),
+    ).resolves.toMatchObject({
+      providerRefundReference: `ref-succeeded-${fixture.suffix}`,
+      status: 'COMPLETED',
+    });
+
+    await ingestDodoWebhook(service, {
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      eventId: `msg-refund-failed-${fixture.suffix}`,
+      eventType: 'refund.failed',
+      paymentId: `pay-refund-ordering-${fixture.suffix}`,
+      providerCheckoutId: `provider-${checkout.checkoutId}`,
+      quoteId: quote.quoteId,
+      refundId: `ref-failed-${fixture.suffix}`,
+    });
+
+    await expect(
+      prisma.paymentReconciliationAction.findUniqueOrThrow({
+        where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+      }),
+    ).resolves.toMatchObject({
+      providerRefundReference: `ref-succeeded-${fixture.suffix}`,
+      status: 'COMPLETED',
+    });
+    await expect(
+      prisma.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+    ).resolves.toMatchObject({ status: 'REFUNDED' });
+    await expect(
+      prisma.ownershipCapture.findUniqueOrThrow({ where: { paymentId: payment.id } }),
+    ).resolves.toMatchObject({ status: 'REFUNDED' });
+    await expect(service.getStatus(checkout.statusToken)).resolves.toMatchObject({
+      state: 'REFUNDED',
+      terminal: true,
+    });
+  });
+
+  it('completes the refund obligation when provider success follows a recorded failure', async () => {
+    const { service } = createService(createProvider('DODO'));
+    const quote = await service.createQuote({
+      companyId: fixture.companyId,
+      territorySlug: fixture.territorySlug,
+    });
+    const checkout = await service.createCheckout({
+      companyId: fixture.companyId,
+      quoteId: quote.quoteId,
+    });
+    await prisma.territory.update({
+      data: { version: { increment: 1 } },
+      where: { id: fixture.territoryId },
+    });
+    await service.confirmProviderPayment({
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      provider: 'DODO',
+      providerPaymentId: `pay-refund-forward-${fixture.suffix}`,
+    });
+    const payment = await prisma.payment.findFirstOrThrow({
+      where: { checkoutId: checkout.checkoutId },
+    });
+
+    await ingestDodoWebhook(service, {
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      eventId: `msg-refund-forward-failed-${fixture.suffix}`,
+      eventType: 'refund.failed',
+      paymentId: `pay-refund-forward-${fixture.suffix}`,
+      providerCheckoutId: `provider-${checkout.checkoutId}`,
+      quoteId: quote.quoteId,
+      refundId: `ref-failed-first-${fixture.suffix}`,
+    });
+    await expect(
+      prisma.paymentReconciliationAction.findUniqueOrThrow({
+        where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+      }),
+    ).resolves.toMatchObject({
+      providerRefundReference: `ref-failed-first-${fixture.suffix}`,
+      status: 'FAILED',
+    });
+
+    await ingestDodoWebhook(service, {
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      eventId: `msg-refund-forward-succeeded-${fixture.suffix}`,
+      eventType: 'refund.succeeded',
+      paymentId: `pay-refund-forward-${fixture.suffix}`,
+      providerCheckoutId: `provider-${checkout.checkoutId}`,
+      quoteId: quote.quoteId,
+      refundId: `ref-late-success-${fixture.suffix}`,
+    });
+
+    await expect(
+      prisma.paymentReconciliationAction.findUniqueOrThrow({
+        where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+      }),
+    ).resolves.toMatchObject({
+      providerRefundReference: `ref-late-success-${fixture.suffix}`,
+      status: 'COMPLETED',
+    });
+    await expect(
+      prisma.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+    ).resolves.toMatchObject({ status: 'REFUNDED' });
   });
 
   it('retries the refund obligation after a definite provider rejection', async () => {

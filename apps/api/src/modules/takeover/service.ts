@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { Prisma } from '@takeover/database';
 import {
   ERROR_CODES,
   attemptStatusSchema,
@@ -38,6 +39,11 @@ export type PaymentProviderRefundResult = {
   status: 'succeeded' | 'failed' | 'pending' | 'review';
 };
 
+export type PaymentProviderRefundLookupInput = {
+  paymentId: string;
+  providerPaymentId: string;
+};
+
 export type PaymentProvider = {
   name: string;
   /**
@@ -46,12 +52,9 @@ export type PaymentProvider = {
    */
   createCheckout(input: PaymentProviderCheckoutInput): Promise<PaymentProviderCheckoutResult>;
   refundPayment(input: PaymentProviderRefundInput): Promise<PaymentProviderRefundResult>;
-  /**
-   * Lookup an existing refund for a given provider payment ID. Returns null if no refund exists.
-   * This method enables recovery from crashes where the refund was processed by the provider
-   * but the local state was not persisted.
-   */
-  lookupRefund(input: { providerPaymentId: string; paymentId: string }): Promise<PaymentProviderRefundResult | null>;
+  lookupRefund(
+    input: PaymentProviderRefundLookupInput,
+  ): Promise<PaymentProviderRefundResult | null>;
 };
 
 export type TerritoryQuoteRecord = {
@@ -111,7 +114,11 @@ export type StatusAttemptRecord = {
     status: 'PENDING' | 'CONFIRMED' | 'FAILED' | 'REFUNDED' | 'RECONCILED';
   } | null;
   quote: Pick<QuoteRecord, 'expiresAt' | 'territoryVersion'>;
-  reconciliation: { action: string; status: string } | null;
+  reconciliation: {
+    action: string;
+    providerRefundReference: string | null;
+    status: string;
+  } | null;
   territory: { ownerCompanyId: string | null; version: bigint };
   token: { expiresAt: Date; revokedAt: Date | null };
 };
@@ -217,6 +224,10 @@ export interface TakeoverRepository {
     reason: string;
     status: 'FAILED' | 'PENDING';
   }): Promise<StatusAttemptRecord>;
+  // DB-level claim for refund processing
+  claimRefund(paymentId: string, placeholder: string): Promise<boolean>;
+  // Clear the claim placeholder (e.g., after failure or success)
+  clearRefundClaim(paymentId: string, placeholder: string): Promise<void>;
   findStatusAttemptByTokenDigest(
     digest: Uint8Array,
     now: Date,
@@ -372,6 +383,27 @@ function isTerminal(state: AttemptStatus['state'], amountCharged: Money | undefi
   return false;
 }
 
+const REFUND_CLAIM_PREFIX = 'CLAIMED_';
+
+function refundClaimTimestamp(now: Date): string {
+  return String(now.getTime()).padStart(13, '0');
+}
+
+function createRefundClaimPlaceholder(now: Date): string {
+  return `${REFUND_CLAIM_PREFIX}${refundClaimTimestamp(now)}_${randomUUID()}`;
+}
+
+function isRefundClaimPlaceholder(reference: string | null | undefined): boolean {
+  return typeof reference === 'string' && reference.startsWith(REFUND_CLAIM_PREFIX);
+}
+
+function hasProviderRefundReference(record: StatusAttemptRecord): boolean {
+  const reference = record.reconciliation?.providerRefundReference;
+  return (
+    typeof reference === 'string' && reference.length > 0 && !isRefundClaimPlaceholder(reference)
+  );
+}
+
 function mapAttempt(record: StatusAttemptRecord, now: Date): AttemptStatus {
   const amountCharged =
     record.payment === null
@@ -390,7 +422,9 @@ function mapAttempt(record: StatusAttemptRecord, now: Date): AttemptStatus {
     newOwnerCompanyId = record.capture.newOwnerCompanyId;
   } else if (record.reconciliation !== null && record.reconciliation.status === 'PENDING') {
     state =
-      record.reconciliation.action === 'REFUND' ? 'REFUND_PENDING' : 'RECONCILIATION_REQUIRED';
+      record.reconciliation.action === 'REFUND' && hasProviderRefundReference(record)
+        ? 'REFUND_PENDING'
+        : 'RECONCILIATION_REQUIRED';
   } else if (record.capture?.status === 'FAILED') {
     state = 'RECONCILIATION_REQUIRED';
     failureReason = record.capture.failureCode ?? undefined;
@@ -408,10 +442,6 @@ function mapAttempt(record: StatusAttemptRecord, now: Date): AttemptStatus {
   } else if (record.payment === null && record.quote.expiresAt <= now) {
     state = 'QUOTE_EXPIRED';
   }
-     // Ensure REFUND_PENDING is only set when providerRefundReference exists
-     if (record.reconciliation?.action === 'REFUND' && record.reconciliation?.status === 'PENDING' && !(record.reconciliation as any).providerRefundReference) {
-       state = 'RECONCILIATION_REQUIRED';
-     }
 
   return attemptStatusSchema.parse({
     ...(amountCharged === undefined ? {} : { amountCharged }),
@@ -544,57 +574,82 @@ export class TakeoverService {
   }
 
   async requestRefundForReconciliation(paymentId: string): Promise<AttemptStatus | undefined> {
-    const prepared = await this.dependencies.repository.beginRefundForReconciliation(paymentId);
+    // Begin refund preparation with retry on transaction conflicts (P2034)
+    let prepared;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        prepared = await this.dependencies.repository.beginRefundForReconciliation(paymentId);
+        break;
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
+          // Retryable transaction conflict, try again
+          continue;
+        }
+        throw error;
+      }
+    }
+    if (!prepared) throw new Error('Failed to prepare refund after retries');
     if (prepared.status !== null && prepared.payment === null) {
       return mapAttempt(prepared.status, this.dependencies.clock.now());
     }
     if (prepared.payment === null) return undefined;
 
-     let refundResult: PaymentProviderRefundResult | null = null;
-     // try {
-       // First, attempt to look up any existing refund on the provider side.
-       const existing = await this.dependencies.provider.lookupRefund({
-         providerPaymentId: prepared.payment.providerPaymentId,
-         paymentId: prepared.payment.id,
-       });
-       if (existing) {
-         refundResult = existing;
-       } else {
-         // No existing refund, issue a new one.
-         refundResult = await this.dependencies.provider.refundPayment({
-           amount: mapMoney(prepared.payment.amountMinor, prepared.payment.currency),
-           paymentId: prepared.payment.id,
-           providerPaymentId: prepared.payment.providerPaymentId,
-           reason: 'Takeover ownership capture could not be completed safely',
-         });
-       }
-     } catch (error) {
-       const attempt = await this.dependencies.repository.recordRefundRequestFailure({
-         paymentId: prepared.payment.id,
-         reason: error instanceof Error ? error.message : 'Refund request failed',
-         status:
-           error instanceof PaymentProviderRefundError && !error.retryable ? 'FAILED' : 'PENDING',
-       });
-       return mapAttempt(attempt, this.dependencies.clock.now());
-     }
+    const claimPlaceholder = createRefundClaimPlaceholder(this.dependencies.clock.now());
+    const claimed = await this.dependencies.repository.claimRefund(
+      prepared.payment.id,
+      claimPlaceholder,
+    );
+    if (!claimed) {
+      // In case of claim failure, attempt to lookup existing provider refund
+      try {
+        console.log('lookupRefund called (claimed)');
+        console.log('lookupRefund called (unclaimed)');
+        const existing = await this.dependencies.provider.lookupRefund({
+          paymentId: prepared.payment.id,
+          providerPaymentId: prepared.payment.providerPaymentId,
+        });
+        if (existing !== null) {
+          const attempt = await this.dependencies.repository.recordRefundRequestResult({
+            paymentId: prepared.payment.id,
+            providerRefundId: existing.providerRefundId,
+            status: existing.status,
+          });
+          return mapAttempt(attempt, this.dependencies.clock.now());
+        }
+      } catch {
+        // Inconclusive lookup: do not issue another provider refund from an unclaimed worker.
+      }
+      // Record a pending refund request result for the current payment
+      const attempt = await this.dependencies.repository.recordRefundRequestResult({
+        paymentId: prepared.payment.id,
+        // providerRefundId omitted
+        status: 'pending',
+      });
+      return mapAttempt(attempt, this.dependencies.clock.now());
+    }
 
-     // At this point, refundResult is guaranteed to be non‑null.
-     const attempt = await this.dependencies.repository.recordRefundRequestResult({
-       paymentId: prepared.payment.id,
-       providerRefundId: refundResult.providerRefundId,
-       status: refundResult.status,
-     });
-     return mapAttempt(attempt, this.dependencies.clock.now());
-     /*
-    let //refund: PaymentProviderRefundResult;
     try {
-      refund = await this.dependencies.provider.refundPayment({
-        amount: mapMoney(prepared.payment.amountMinor, prepared.payment.currency),
+      const existing = await this.dependencies.provider.lookupRefund({
         paymentId: prepared.payment.id,
         providerPaymentId: prepared.payment.providerPaymentId,
-        reason: 'Takeover ownership capture could not be completed safely',
       });
+      const refund =
+        existing ??
+        (await this.dependencies.provider.refundPayment({
+          amount: mapMoney(prepared.payment.amountMinor, prepared.payment.currency),
+          paymentId: prepared.payment.id,
+          providerPaymentId: prepared.payment.providerPaymentId,
+          reason: 'Takeover ownership capture could not be completed safely',
+        }));
+
+      const attempt = await this.dependencies.repository.recordRefundRequestResult({
+        paymentId: prepared.payment.id,
+        providerRefundId: refund.providerRefundId,
+        status: refund.status,
+      });
+      return mapAttempt(attempt, this.dependencies.clock.now());
     } catch (error) {
+      await this.dependencies.repository.clearRefundClaim(prepared.payment.id, claimPlaceholder);
       const attempt = await this.dependencies.repository.recordRefundRequestFailure({
         paymentId: prepared.payment.id,
         reason: error instanceof Error ? error.message : 'Refund request failed',
@@ -603,13 +658,5 @@ export class TakeoverService {
       });
       return mapAttempt(attempt, this.dependencies.clock.now());
     }
-
-    const attempt = await this.dependencies.repository.recordRefundRequestResult({
-      paymentId: prepared.payment.id,
-      providerRefundId: refund.providerRefundId,
-      status: refund.status,
-    });
-     */
-    return mapAttempt(attempt, this.dependencies.clock.now());
   }
 }

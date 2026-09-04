@@ -49,6 +49,20 @@ type ProviderPaymentTransitionRecord = {
   status: 'PENDING' | 'CONFIRMED' | 'FAILED' | 'REFUNDED' | 'RECONCILED';
 };
 
+const REFUND_CLAIM_PREFIX = 'CLAIMED_';
+const REFUND_CLAIM_LEASE_MS = 5 * 60 * 1_000;
+
+function isRefundClaimPlaceholder(reference: string | null): boolean {
+  return typeof reference === 'string' && reference.startsWith(REFUND_CLAIM_PREFIX);
+}
+
+function staleRefundClaimCutoff(placeholder: string): string | null {
+  if (!placeholder.startsWith(REFUND_CLAIM_PREFIX)) return null;
+  const timestamp = Number(placeholder.slice(REFUND_CLAIM_PREFIX.length, 21));
+  if (!Number.isSafeInteger(timestamp)) return null;
+  return `${REFUND_CLAIM_PREFIX}${String(timestamp - REFUND_CLAIM_LEASE_MS).padStart(13, '0')}_~`;
+}
+
 function mapTerritory(row: {
   availabilityStatus: 'ACTIVE' | 'DISABLED';
   currency: string;
@@ -384,11 +398,11 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
         }
 
         const existingPaymentOutcome = await this.resolveExistingProviderPaymentEvent(transaction, {
-          amountMinor: input.amountMinor,
           checkoutId: checkout.id,
-          currency: input.currency,
           eventId: event.id,
           eventType: input.eventType,
+          ...(input.amountMinor === undefined ? {} : { amountMinor: input.amountMinor }),
+          ...(input.currency === undefined ? {} : { currency: input.currency }),
           provider: input.provider,
           providerPaymentId: input.providerPaymentId,
         });
@@ -1008,7 +1022,9 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
         if (
           payment.status === 'REFUNDED' ||
           existingRefund?.status === 'COMPLETED' ||
-          (existingRefund?.status === 'PENDING' && existingRefund.providerRefundReference !== null)
+          (existingRefund?.status === 'PENDING' &&
+            existingRefund.providerRefundReference !== null &&
+            !isRefundClaimPlaceholder(existingRefund.providerRefundReference))
         ) {
           return {
             payment: null,
@@ -1074,6 +1090,17 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
     return this.prisma.$transaction(async (transaction) => {
       const payment = await transaction.payment.findUnique({ where: { id: input.paymentId } });
       if (payment === null) throw new Error('Payment was not found');
+      const existingRefund = await transaction.paymentReconciliationAction.findUnique({
+        where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+      });
+      if (
+        existingRefund?.status === 'COMPLETED' ||
+        (existingRefund?.status === 'FAILED' && input.status !== 'succeeded')
+      ) {
+        return requireStatusAttempt(
+          await this.findStatusAttemptByCheckoutId(transaction, payment.checkoutId),
+        );
+      }
       await transaction.paymentReconciliationAction.update({
         data: {
           ...(input.providerRefundId === undefined
@@ -1108,6 +1135,48 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
       return requireStatusAttempt(
         await this.findStatusAttemptByCheckoutId(transaction, payment.checkoutId),
       );
+    });
+  }
+
+  // Atomic DB-level refund claim. Stale placeholders can be reclaimed by lease.
+  async claimRefund(paymentId: string, placeholder: string): Promise<boolean> {
+    const staleClaimCutoff = staleRefundClaimCutoff(placeholder);
+    const result = await this.prisma.paymentReconciliationAction.updateMany({
+      where: {
+        paymentId,
+        action: 'REFUND',
+        OR: [
+          { providerRefundReference: null },
+          ...(staleClaimCutoff === null
+            ? []
+            : [
+                {
+                  providerRefundReference: {
+                    lt: staleClaimCutoff,
+                    startsWith: REFUND_CLAIM_PREFIX,
+                  },
+                },
+              ]),
+        ],
+      },
+      data: {
+        providerRefundReference: placeholder,
+      },
+    });
+    return result.count > 0;
+  }
+
+  // Clear the claim placeholder if it still matches.
+  async clearRefundClaim(paymentId: string, placeholder: string): Promise<void> {
+    await this.prisma.paymentReconciliationAction.updateMany({
+      where: {
+        paymentId,
+        action: 'REFUND',
+        providerRefundReference: placeholder,
+      },
+      data: {
+        providerRefundReference: null,
+      },
     });
   }
 
@@ -1169,7 +1238,11 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
       reconciliation:
         reconciliation === null
           ? null
-          : { action: reconciliation.action, status: reconciliation.status, providerRefundReference: (reconciliation as any).providerRefundReference },
+          : {
+              action: reconciliation.action,
+              providerRefundReference: reconciliation.providerRefundReference,
+              status: reconciliation.status,
+            },
       territory: {
         ownerCompanyId: activeOwnership?.companyId ?? null,
         version: territory.version,

@@ -292,15 +292,24 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
   async completeCheckoutProviderResult(
     input: CompleteCheckoutProviderResultInput,
   ): Promise<CheckoutRecord> {
-    const checkout = await this.prisma.checkoutSession.update({
+    // COMPLETED is terminal truth set by a verified capture; a late provider
+    // result must never move the checkout backwards.
+    const updated = await this.prisma.checkoutSession.updateMany({
       data: {
         ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
         providerCheckoutId: input.providerCheckoutId,
         providerCheckoutUrl: input.providerCheckoutUrl,
         status: 'PENDING',
       },
+      where: { id: input.checkoutId, status: { in: ['CREATED', 'PENDING'] } },
+    });
+    const checkout = await this.prisma.checkoutSession.findUnique({
       where: { id: input.checkoutId },
     });
+    if (checkout === null) throw new Error('Checkout was not found');
+    if (updated.count === 0 && checkout.status === 'CREATED') {
+      throw new Error('Checkout could not accept the provider result');
+    }
     return mapCheckout(checkout);
   }
 

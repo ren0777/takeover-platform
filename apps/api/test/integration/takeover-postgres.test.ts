@@ -1526,4 +1526,29 @@ describe('TakeoverService with real PostgreSQL repository', () => {
     ).resolves.toBe(1);
   });
 
+  it('keeps a completed checkout terminal when a late provider result arrives', async () => {
+    const { service } = createService(createProvider('DODO'));
+    const { checkout } = await createCheckoutForFixture(service);
+    await service.confirmProviderPayment({
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      provider: 'DODO',
+      providerPaymentId: `payment-late-complete-${fixture.suffix}`,
+    });
+
+    const repository = new PrismaTakeoverRepository(prisma);
+    await repository.completeCheckoutProviderResult({
+      checkoutId: checkout.checkoutId,
+      providerCheckoutId: 'late-provider-session',
+      providerCheckoutUrl: 'https://pay.example/late',
+    });
+
+    await expect(
+      prisma.checkoutSession.findUniqueOrThrow({
+        select: { providerCheckoutId: true, status: true },
+        where: { id: checkout.checkoutId },
+      }),
+    ).resolves.toMatchObject({ providerCheckoutId: `provider-${checkout.checkoutId}`, status: 'COMPLETED' });
+  });
 });

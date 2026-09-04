@@ -699,34 +699,53 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
         where: { id: eventId },
       });
     } else if (input.eventType === 'refund.failed') {
-      await transaction.paymentReconciliationAction.upsert({
-        create: {
-          action: 'REFUND',
-          paymentId: payment.id,
-          ...(input.providerRefundId === undefined
-            ? {}
-            : { providerRefundReference: input.providerRefundId }),
-          reason: 'REFUND_FAILED',
-          requestedByActorType: 'SYSTEM',
-          status: 'FAILED',
-        },
-        update: {
-          ...(input.providerRefundId === undefined
-            ? {}
-            : { providerRefundReference: input.providerRefundId }),
-          reason: 'REFUND_FAILED',
-          status: 'FAILED',
-        },
+      const existingAction = await transaction.paymentReconciliationAction.findUnique({
+        select: { status: true },
         where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
       });
-      await transaction.paymentWebhookEvent.update({
-        data: {
-          paymentId: payment.id,
-          processedAt: new Date(),
-          processingStatus: 'PROCESSED',
-        },
-        where: { id: eventId },
-      });
+      if (existingAction?.status === 'COMPLETED') {
+        // A verified succeeded webhook already completed this obligation; a
+        // later failed event is stale provider history and must not demote
+        // terminal refund truth.
+        await transaction.paymentWebhookEvent.update({
+          data: {
+            errorCode: 'REFUND_ALREADY_COMPLETED',
+            paymentId: payment.id,
+            processedAt: new Date(),
+            processingStatus: 'IGNORED',
+          },
+          where: { id: eventId },
+        });
+      } else {
+        await transaction.paymentReconciliationAction.upsert({
+          create: {
+            action: 'REFUND',
+            paymentId: payment.id,
+            ...(input.providerRefundId === undefined
+              ? {}
+              : { providerRefundReference: input.providerRefundId }),
+            reason: 'REFUND_FAILED',
+            requestedByActorType: 'SYSTEM',
+            status: 'FAILED',
+          },
+          update: {
+            ...(input.providerRefundId === undefined
+              ? {}
+              : { providerRefundReference: input.providerRefundId }),
+            reason: 'REFUND_FAILED',
+            status: 'FAILED',
+          },
+          where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+        });
+        await transaction.paymentWebhookEvent.update({
+          data: {
+            paymentId: payment.id,
+            processedAt: new Date(),
+            processingStatus: 'PROCESSED',
+          },
+          where: { id: eventId },
+        });
+      }
     } else {
       await transaction.paymentWebhookEvent.update({
         data: {

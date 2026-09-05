@@ -678,8 +678,12 @@ export class TakeoverService {
       claimPlaceholder,
     );
     if (!claimed) {
-      // Claim failed: another instance may have already claimed the refund.
-      // To avoid duplicate provider refunds, check if a refund already exists.
+      // Another instance holds a live claim, and the atomic claim is the only
+      // permission to POST a refund: this worker cannot issue one and cannot
+      // steal a fresh lease. This lookup is a liveness shortcut, not a
+      // duplicate-refund guard — if the holder crashed after the provider
+      // accepted the refund but before persisting the reference, adopting the
+      // real refund here resolves the obligation without waiting out the lease.
       try {
         const existing = await this.dependencies.provider.lookupRefund({
           paymentId: prepared.payment.id,
@@ -706,8 +710,12 @@ export class TakeoverService {
     }
 
     try {
-      // After successfully claiming the refund placeholder, double‑check the provider
-      // for any existing refund (e.g., a race where another instance already issued it).
+      // After acquiring or reclaiming the claim, check provider state before
+      // POSTing. The atomic claim and the begin-refund state checks are the
+      // primary local duplicate gate; this lookup covers what they cannot see —
+      // a prior refund whose provider outcome succeeded but was never persisted
+      // locally (a crashed holder, or an unknown-outcome retry after the lease
+      // expired).
       const existing = await this.dependencies.provider.lookupRefund({
         paymentId: prepared.payment.id,
         providerPaymentId: prepared.payment.providerPaymentId,

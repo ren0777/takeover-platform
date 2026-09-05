@@ -45,6 +45,9 @@ const apiEnvironmentSchema = z
     TOKEN_EXCHANGE_ATTEMPTS_PER_IP_PER_HOUR: positiveSeconds.default(60),
     TOKEN_EXCHANGE_FAILURES_PER_SELECTOR: positiveSeconds.default(10),
     TOKEN_HMAC_SECRET: z.string().default(DEVELOPMENT_TOKEN_SECRET),
+    TAKEOVER_RECONCILIATION_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(25),
+    TAKEOVER_RECONCILIATION_ENABLED: booleanString.default(true),
+    TAKEOVER_RECONCILIATION_INTERVAL_SECONDS: positiveSeconds.default(300),
     WEB_APP_ORIGIN: z.url().default('http://localhost:3000'),
     DODO_API_KEY: z.string().nonempty().optional(),
     DODO_BASE_URL: z.string().url().default('https://test.dodopayments.com/'),
@@ -149,6 +152,11 @@ export type ApiConfig = {
   nodeEnv: 'development' | 'test' | 'production';
   databaseUrl?: string;
   identity: IdentityConfig;
+  takeoverReconciliation: Readonly<{
+    batchSize: number;
+    enabled: boolean;
+    intervalSeconds: number;
+  }>;
   dodo?: DodoConfig;
 };
 
@@ -236,6 +244,11 @@ export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
     logLevel: result.data.LOG_LEVEL,
     nodeEnv: result.data.NODE_ENV,
     port: result.data.API_PORT,
+    takeoverReconciliation: Object.freeze({
+      batchSize: result.data.TAKEOVER_RECONCILIATION_BATCH_SIZE,
+      enabled: result.data.TAKEOVER_RECONCILIATION_ENABLED,
+      intervalSeconds: result.data.TAKEOVER_RECONCILIATION_INTERVAL_SECONDS,
+    }),
   };
 
   if (result.data.DODO_API_KEY !== undefined) {

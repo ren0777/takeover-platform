@@ -78,6 +78,11 @@ afterEach(async () => {
 function buildTakeoverApp(
   takeoverService = createTakeoverService(),
   identityService = createIdentityService(),
+  reconciliationDriver?: {
+    runOnce(): Promise<unknown>;
+    start(): void;
+    stop(): void;
+  },
 ): {
   app: FastifyInstance;
   identityService: Pick<CompanyIdentityService, 'getManagementContext'>;
@@ -92,6 +97,7 @@ function buildTakeoverApp(
     takeover: {
       config: { dodoWebhookSecret: webhookSecret, webAppOrigin: config.identity.webAppOrigin },
       identityService: identityService as CompanyIdentityService,
+      ...(reconciliationDriver === undefined ? {} : { reconciliationDriver }),
       service: takeoverService as TakeoverService,
     },
   });
@@ -105,6 +111,27 @@ const mutationHeaders = {
 };
 
 describe('provider-neutral takeover HTTP routes', () => {
+  it('starts and stops the takeover reconciliation driver through app lifecycle', async () => {
+    const reconciliationDriver = {
+      runOnce: vi.fn(async () => undefined),
+      start: vi.fn(),
+      stop: vi.fn(),
+    };
+    const harness = buildTakeoverApp(
+      createTakeoverService(),
+      createIdentityService(),
+      reconciliationDriver,
+    );
+
+    await harness.app.ready();
+    await harness.app.close();
+    app = undefined;
+
+    expect(reconciliationDriver.runOnce).toHaveBeenCalledTimes(1);
+    expect(reconciliationDriver.start).toHaveBeenCalledTimes(1);
+    expect(reconciliationDriver.stop).toHaveBeenCalledTimes(1);
+  });
+
   it('registers POST /api/takeover-quotes and uses the session company as authority', async () => {
     const harness = buildTakeoverApp();
 

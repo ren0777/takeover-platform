@@ -26,6 +26,25 @@ describe('parseApiConfig', () => {
     });
     expect(config.identity.tokenHmacSecret).toHaveLength(32);
     expect(Object.isFrozen(config.identity)).toBe(true);
+    expect(config.takeoverReconciliation).toEqual({
+      batchSize: 25,
+      enabled: true,
+      intervalSeconds: 300,
+    });
+  });
+
+  it('parses takeover reconciliation worker configuration', () => {
+    const config = parseApiConfig({
+      TAKEOVER_RECONCILIATION_BATCH_SIZE: '7',
+      TAKEOVER_RECONCILIATION_ENABLED: 'false',
+      TAKEOVER_RECONCILIATION_INTERVAL_SECONDS: '60',
+    });
+
+    expect(config.takeoverReconciliation).toEqual({
+      batchSize: 7,
+      enabled: false,
+      intervalSeconds: 60,
+    });
   });
 
   it('parses valid production configuration', () => {
@@ -82,6 +101,8 @@ describe('parseApiConfig', () => {
     ['DATABASE_URL', { DATABASE_URL: 'not-a-url' }],
     ['EMAIL_VERIFICATION_TTL_SECONDS', { EMAIL_VERIFICATION_TTL_SECONDS: '0' }],
     ['DEV_EMAIL_CAPTURE_ENABLED', { DEV_EMAIL_CAPTURE_ENABLED: 'sometimes' }],
+    ['TAKEOVER_RECONCILIATION_BATCH_SIZE', { TAKEOVER_RECONCILIATION_BATCH_SIZE: '0' }],
+    ['TAKEOVER_RECONCILIATION_INTERVAL_SECONDS', { TAKEOVER_RECONCILIATION_INTERVAL_SECONDS: '0' }],
   ])('rejects invalid %s without echoing secret values', (name, source) => {
     expect(() => parseApiConfig(source)).toThrow(name);
     try {

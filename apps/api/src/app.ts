@@ -13,6 +13,7 @@ import { TerritoryService } from './modules/territories/service.js';
 import { UnavailablePaymentProvider } from './modules/takeover/payment-provider.js';
 import { DodoPaymentProvider } from './modules/takeover/providers/dodo/DodoPaymentProvider.js';
 import { PrismaTakeoverRepository } from './modules/takeover/prisma-repository.js';
+import { TakeoverReconciliationDriver } from './modules/takeover/reconciliation-driver.js';
 import { TakeoverService } from './modules/takeover/service.js';
 import { companyIdentityPlugin } from './plugins/company-identity.js';
 import { databasePlugin } from './plugins/database.js';
@@ -37,9 +38,32 @@ export type BuildAppOptions = {
   takeover?: {
     config: { dodoWebhookSecret?: string; webAppOrigin: string };
     identityService: CompanyIdentityService;
+    reconciliationDriver?: {
+      runOnce(): Promise<unknown>;
+      start(): void;
+      stop(): void;
+    };
     service: TakeoverService;
   };
 };
+
+function registerTakeoverReconciliationDriver(
+  app: FastifyInstance,
+  driver: { runOnce(): Promise<unknown>; start(): void; stop(): void },
+): void {
+  app.addHook('onReady', async () => {
+    void driver.runOnce().catch((error: unknown) => {
+      app.log.error(
+        { err: error, event: 'takeover.reconciliation.startup_failed' },
+        'Takeover reconciliation startup sweep failed',
+      );
+    });
+    driver.start();
+  });
+  app.addHook('onClose', async () => {
+    driver.stop();
+  });
+}
 
 export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   const runtimeConfig = options.config;
@@ -172,6 +196,9 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   }
   if (options.takeover !== undefined) {
     app.register(takeoverPlugin, options.takeover);
+    if (options.takeover.reconciliationDriver !== undefined) {
+      registerTakeoverReconciliationDriver(app, options.takeover.reconciliationDriver);
+    }
   } else if (runtimeConfig?.databaseUrl !== undefined) {
     app.register(async (takeoverApp) => {
       await databasePlugin(takeoverApp);
@@ -193,11 +220,12 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
             })
           : new UnavailablePaymentProvider();
 
+      const repository = new PrismaTakeoverRepository(takeoverApp.database);
       const service = new TakeoverService({
         clock: { now: () => new Date() },
         provider,
 
-        repository: new PrismaTakeoverRepository(takeoverApp.database),
+        repository,
         statusTokenSecret: runtimeConfig.identity.tokenHmacSecret,
         statusTokenTtlSeconds: 86_400,
         trustedWebOrigin: runtimeConfig.identity.webAppOrigin,
@@ -212,6 +240,19 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
         identityService,
         service,
       });
+      if (runtimeConfig.dodo !== undefined && runtimeConfig.takeoverReconciliation.enabled) {
+        registerTakeoverReconciliationDriver(
+          takeoverApp,
+          new TakeoverReconciliationDriver({
+            batchSize: runtimeConfig.takeoverReconciliation.batchSize,
+            clock: { now: () => new Date() },
+            intervalMs: runtimeConfig.takeoverReconciliation.intervalSeconds * 1_000,
+            logger: takeoverApp.log,
+            repository,
+            service,
+          }),
+        );
+      }
     });
   }
   return app;

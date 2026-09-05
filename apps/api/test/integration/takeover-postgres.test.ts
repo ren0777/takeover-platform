@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getDatabaseClient } from '@takeover/database';
 import { UnavailablePaymentProvider } from '../../src/modules/takeover/payment-provider.js';
 import { PrismaTakeoverRepository } from '../../src/modules/takeover/prisma-repository.js';
+import { TakeoverReconciliationDriver } from '../../src/modules/takeover/reconciliation-driver.js';
 import {
   PaymentProviderRefundError,
   TakeoverService,
@@ -52,6 +53,13 @@ function createService(provider = createProvider()) {
     }),
   };
 }
+
+const silentLogger = {
+  debug: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+};
 
 async function createCheckoutForFixture(service: TakeoverService, companyId = fixture.companyId) {
   const quote = await service.createQuote({
@@ -2006,5 +2014,99 @@ describe('TakeoverService with real PostgreSQL repository', () => {
         where: { id: checkout.checkoutId },
       }),
     ).resolves.toMatchObject({ providerCheckoutId: `provider-${checkout.checkoutId}`, status: 'COMPLETED' });
+  });
+
+  it('discovers unresolved refund reconciliation obligations and ignores terminal refunds', async () => {
+    const provider = createProvider('DODO');
+    const { service } = createService(provider);
+    const repository = new PrismaTakeoverRepository(prisma);
+    const { checkout } = await createCheckoutForFixture(service);
+    await prisma.territory.update({
+      data: { version: { increment: 1 } },
+      where: { id: fixture.territoryId },
+    });
+    await service.confirmProviderPayment({
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      provider: 'DODO',
+      providerPaymentId: `payment-driver-discovery-${fixture.suffix}`,
+    });
+    const payment = await prisma.payment.findFirstOrThrow({
+      where: { checkoutId: checkout.checkoutId },
+    });
+
+    await expect(
+      repository.findRefundReconciliationCandidates({ limit: 10, now }),
+    ).resolves.toContain(payment.id);
+
+    await service.requestRefundForReconciliation(payment.id);
+
+    await expect(
+      repository.findRefundReconciliationCandidates({ limit: 10, now }),
+    ).resolves.not.toContain(payment.id);
+  });
+
+  it('lets two reconciliation drivers race without double-posting a provider refund', async () => {
+    const provider = createProvider('DODO');
+    const { service: setupService } = createService(provider);
+    const repository = new PrismaTakeoverRepository(prisma);
+    const { checkout } = await createCheckoutForFixture(setupService);
+    await prisma.territory.update({
+      data: { version: { increment: 1 } },
+      where: { id: fixture.territoryId },
+    });
+    await setupService.confirmProviderPayment({
+      amountMinor: 1500n,
+      checkoutId: checkout.checkoutId,
+      currency: 'USD',
+      provider: 'DODO',
+      providerPaymentId: `payment-driver-race-${fixture.suffix}`,
+    });
+    const payment = await prisma.payment.findFirstOrThrow({
+      where: { checkoutId: checkout.checkoutId },
+    });
+    let discovered = 0;
+    let releaseDiscovery: () => void = () => undefined;
+    const bothDiscovered = new Promise<void>((resolve) => {
+      releaseDiscovery = resolve;
+    });
+    const racingRepository = {
+      findRefundReconciliationCandidates: vi.fn(async (input: { limit: number; now: Date }) => {
+        const candidates = await repository.findRefundReconciliationCandidates(input);
+        discovered += 1;
+        if (discovered === 2) releaseDiscovery();
+        await bothDiscovered;
+        return candidates;
+      }),
+    };
+    const firstDriver = new TakeoverReconciliationDriver({
+      batchSize: 10,
+      clock: { now: () => now },
+      logger: silentLogger,
+      repository: racingRepository,
+      service: createService(provider).service,
+    });
+    const secondDriver = new TakeoverReconciliationDriver({
+      batchSize: 10,
+      clock: { now: () => now },
+      logger: silentLogger,
+      repository: racingRepository,
+      service: createService(provider).service,
+    });
+
+    const [first, second] = await Promise.all([firstDriver.runOnce(), secondDriver.runOnce()]);
+
+    expect(first.discovered + second.discovered).toBe(2);
+    expect(racingRepository.findRefundReconciliationCandidates).toHaveBeenCalledTimes(2);
+    expect(provider.refundPayment).toHaveBeenCalledTimes(1);
+    await expect(
+      prisma.paymentReconciliationAction.findUniqueOrThrow({
+        where: { paymentId_action: { action: 'REFUND', paymentId: payment.id } },
+      }),
+    ).resolves.toMatchObject({
+      providerRefundReference: `refund-${fixture.suffix}`,
+      status: 'PENDING',
+    });
   });
 });

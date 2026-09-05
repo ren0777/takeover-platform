@@ -510,4 +510,5 @@ model PaymentReconciliationAction {
   providerRefundReference    String?  @map("provider_refund_reference")
   @@map("payment_reconciliation_actions")
   @@unique([paymentId, action])
+  @@index([action, status, createdAt])
 }

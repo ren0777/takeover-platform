@@ -21,6 +21,7 @@ import type {
   TerritoryQuoteRecord,
   VerifiedProviderWebhookInput,
   RefundRequestResult,
+  RefundReconciliationCandidateQuery,
 } from './service.js';
 
 type TakeoverPrismaClient = Pick<
@@ -40,6 +41,7 @@ type TakeoverPrismaClient = Pick<
 type TakeoverTransactionClient = Prisma.TransactionClient;
 
 type QuoteLockRow = { id: string };
+type ReconciliationCandidateRow = { id: string };
 
 type ProviderPaymentTransitionRecord = {
   amountMinor: bigint;
@@ -61,6 +63,10 @@ function staleRefundClaimCutoff(placeholder: string): string | null {
   const timestamp = Number(placeholder.slice(REFUND_CLAIM_PREFIX.length, 21));
   if (!Number.isSafeInteger(timestamp)) return null;
   return `${REFUND_CLAIM_PREFIX}${String(timestamp - REFUND_CLAIM_LEASE_MS).padStart(13, '0')}_~`;
+}
+
+function staleRefundClaimCutoffForNow(now: Date): string {
+  return `${REFUND_CLAIM_PREFIX}${String(now.getTime() - REFUND_CLAIM_LEASE_MS).padStart(13, '0')}_~`;
 }
 
 function mapTerritory(row: {
@@ -1135,6 +1141,43 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
+  }
+
+  async findRefundReconciliationCandidates(
+    input: RefundReconciliationCandidateQuery,
+  ): Promise<string[]> {
+    const limit = Math.max(1, Math.min(Math.trunc(input.limit), 100));
+    const staleClaimCutoff = staleRefundClaimCutoffForNow(input.now);
+    const rows = await this.prisma.$queryRaw<ReconciliationCandidateRow[]>(Prisma.sql`
+      SELECT p."id"
+      FROM "payment_reconciliation_actions" reconcile
+      JOIN "payments" p ON p."id" = reconcile."payment_id"
+      LEFT JOIN "ownership_captures" capture ON capture."payment_id" = p."id"
+      LEFT JOIN "payment_reconciliation_actions" refund
+        ON refund."payment_id" = p."id" AND refund."action" = 'REFUND'
+      WHERE reconcile."action" = 'RECONCILE'
+        AND reconcile."status" = 'PENDING'
+        AND p."status" = 'CONFIRMED'::"PaymentStatus"
+        AND p."provider_payment_id" <> ''
+        AND (capture."id" IS NULL OR capture."status" <> 'COMPLETED'::"OwnershipCaptureStatus")
+        AND (
+          refund."id" IS NULL
+          OR refund."status" = 'FAILED'
+          OR (
+            refund."status" = 'PENDING'
+            AND (
+              refund."provider_refund_reference" IS NULL
+              OR (
+                refund."provider_refund_reference" LIKE ${`${REFUND_CLAIM_PREFIX}%`}
+                AND refund."provider_refund_reference" < ${staleClaimCutoff}
+              )
+            )
+          )
+        )
+      ORDER BY reconcile."created_at" ASC, p."id" ASC
+      LIMIT ${limit}
+    `);
+    return rows.map((row) => row.id);
   }
 
   async recordRefundRequestResult(input: {

@@ -159,6 +159,17 @@ export type RefundRequestResult = {
   status: StatusAttemptRecord | null;
 };
 
+export type RefundReconciliationCandidateQuery = {
+  limit: number;
+  now: Date;
+};
+
+export interface ReconciliationDriverRepository {
+  findRefundReconciliationCandidates(
+    input: RefundReconciliationCandidateQuery,
+  ): Promise<string[]>;
+}
+
 export type CreateQuoteInput = {
   companyId: string;
   currency: string;

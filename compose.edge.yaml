@@ -1,0 +1,19 @@
+# Linux VM overlay. Caddy shares the host network to reach the loopback web port.
+# Usage: docker compose -f compose.yaml -f compose.edge.yaml up -d
+services:
+  edge:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?Set the public DNS name without scheme or path}
+      WEB_PORT: ${WEB_PORT:-3000}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web: { condition: service_started }
+volumes:
+  caddy-data:
+  caddy-config:

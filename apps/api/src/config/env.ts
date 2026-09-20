@@ -29,6 +29,9 @@ const apiEnvironmentSchema = z
     ACCESS_REQUESTS_PER_IP_PER_HOUR: positiveSeconds.default(10),
     API_HOST: z.string().min(1).default('127.0.0.1'),
     API_PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
+    API_TRUSTED_PROXIES: z.string().default('')
+      .transform((value) => value.trim() === '' ? [] : value.split(',').map((address) => address.trim()))
+      .pipe(z.array(z.union([z.ipv4(), z.ipv6()])).max(16)),
     DATABASE_URL: z.url().optional(),
     DEV_EMAIL_CAPTURE_ENABLED: booleanString.default(false),
     DRAFT_TTL_SECONDS: positiveSeconds.default(86_400),
@@ -175,6 +178,7 @@ export type DodoConfig = Readonly<{
 
 export type ApiConfig = {
   host: string;
+  trustedProxies: string[];
   port: number;
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace';
   nodeEnv: 'development' | 'test' | 'production';
@@ -290,6 +294,7 @@ export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
     competition: { seasonDurationDays: result.data.SEASON_DURATION_DAYS,
       ...(result.data.SEASON_STARTS_AT === undefined ? {} : { seasonStartsAt: new Date(result.data.SEASON_STARTS_AT) }) },
     host: result.data.API_HOST,
+    trustedProxies: result.data.API_TRUSTED_PROXIES,
     identity,
     logLevel: result.data.LOG_LEVEL,
     nodeEnv: result.data.NODE_ENV,

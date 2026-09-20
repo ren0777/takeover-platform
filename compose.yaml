@@ -28,6 +28,7 @@ services:
       DATABASE_URL: postgresql://takeover:${POSTGRES_PASSWORD}@database:5432/takeover
       WEB_APP_ORIGIN: ${WEB_APP_ORIGIN:?Set the public HTTPS origin}
       TOKEN_HMAC_SECRET: ${TOKEN_HMAC_SECRET:?Set a random base64url secret}
+      API_TRUSTED_PROXIES: 172.30.85.3
       EMAIL_PROVIDER: ${EMAIL_PROVIDER:-unavailable}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAIL_FROM: ${EMAIL_FROM:-}
@@ -40,6 +41,10 @@ services:
       OPERATOR_CREDENTIAL: ${OPERATOR_CREDENTIAL:-}
       OPERATOR_PERMISSIONS: ${OPERATOR_PERMISSIONS:-read}
       SEASON_DURATION_DAYS: ${SEASON_DURATION_DAYS:-30}
+    networks:
+      default:
+      web-api:
+        ipv4_address: 172.30.85.2
     depends_on:
       migrate: { condition: service_completed_successfully }
     healthcheck:
@@ -55,12 +60,22 @@ services:
         NEXT_PUBLIC_SITE_URL: ${WEB_APP_ORIGIN}
     restart: unless-stopped
     init: true
+    networks:
+      web-api:
+        ipv4_address: 172.30.85.3
     environment:
       TAKEOVER_API_ORIGIN: http://api:4000
       TAKEOVER_LIVE_RESOURCES: all
       NEXT_PUBLIC_SITE_URL: ${WEB_APP_ORIGIN}
-    ports: ["127.0.0.1:3000:3000"]
+    # Loopback only; a reverse proxy terminates TLS. WEB_PORT lets Windows hosts
+    # avoid the Hyper-V/WinNAT reserved ranges that often include 3000.
+    ports: ["127.0.0.1:${WEB_PORT:-3000}:3000"]
     depends_on:
       api: { condition: service_healthy }
 volumes:
   postgres-data:
+networks:
+  web-api:
+    ipam:
+      config:
+        - subnet: 172.30.85.0/29

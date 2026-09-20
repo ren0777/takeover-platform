@@ -5,6 +5,7 @@ import {
   operatorListQuerySchema,
   operatorMutationSchema,
   operatorRecoveryDecisionSchema,
+  operatorRecoveryListQuerySchema,
   type OperatorPermission,
 } from '@takeover/shared';
 
@@ -28,15 +29,23 @@ export interface OperatorRepository {
   listCompanies(limit: number): Promise<unknown[]>;
   listTerritories(limit: number): Promise<unknown[]>;
   listManagementGrants(limit: number): Promise<unknown[]>;
-  inspectTarget(kind: 'companies' | 'territories' | 'management-grants', id: string): Promise<unknown>;
+  inspectTarget(
+    kind: 'companies' | 'territories' | 'management-grants' | 'recovery-requests',
+    id: string,
+  ): Promise<unknown>;
   listAuditLogs(limit: number): Promise<unknown[]>;
   listPayments(limit: number): Promise<unknown[]>;
   listReconciliationActions(limit: number): Promise<unknown[]>;
-  listRecoveryRequests(limit: number): Promise<unknown[]>;
+  listRecoveryRequests(
+    limit: number,
+    options: { scope: 'actionable' | 'all'; cursor?: string; now: Date },
+  ): Promise<{ items: unknown[]; nextCursor: string | null }>;
   setCompanySuspended(input: MutationInput & { suspended: boolean }): Promise<unknown>;
   setTerritoryDisabled(input: MutationInput & { disabled: boolean }): Promise<unknown>;
   revokeManagementGrant(input: MutationInput): Promise<unknown>;
-  decideRecoveryRequest(input: MutationInput & { decision: 'approve' | 'reject'; now: Date }): Promise<unknown>;
+  decideRecoveryRequest(
+    input: MutationInput & { decision: 'approve' | 'reject'; now: Date },
+  ): Promise<unknown>;
 }
 
 export class OperatorAuthorizationError extends Error {
@@ -56,11 +65,18 @@ export function validateOperatorConfig(config: OperatorConfig): void {
   z.string().uuid().parse(config.operatorId);
   if (Buffer.byteLength(config.credential, 'utf8') < 32 || config.credential.length < 43)
     throw new Error('Operator credential must contain at least 256 bits of high-entropy material');
-  if (config.permissions.length === 0 || new Set(config.permissions).size !== config.permissions.length)
+  if (
+    config.permissions.length === 0 ||
+    new Set(config.permissions).size !== config.permissions.length
+  )
     throw new Error('Operator permissions must be non-empty and unique');
 }
 
-function authorize(request: FastifyRequest, config: OperatorConfig, permission: OperatorPermission): void {
+function authorize(
+  request: FastifyRequest,
+  config: OperatorConfig,
+  permission: OperatorPermission,
+): void {
   const value = request.headers.authorization;
   if (value === undefined || !value.startsWith('Bearer '))
     throw new OperatorAuthorizationError(401, 'Valid operator bearer credential required');
@@ -79,7 +95,11 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 }
 
 function wire(value: unknown): unknown {
-  return JSON.parse(JSON.stringify(value, (_key, item: unknown) => typeof item === 'bigint' ? item.toString() : item)) as unknown;
+  return JSON.parse(
+    JSON.stringify(value, (_key, item: unknown) =>
+      typeof item === 'bigint' ? item.toString() : item,
+    ),
+  ) as unknown;
 }
 
 export type RegisterOperatorRoutesOptions = {
@@ -94,23 +114,40 @@ export async function registerOperatorRoutes(
 ): Promise<void> {
   validateOperatorConfig(options.config);
   const now = options.now ?? (() => new Date());
-  for (const kind of ['companies', 'territories', 'management-grants'] as const) {
+  for (const kind of [
+    'companies',
+    'territories',
+    'management-grants',
+    'recovery-requests',
+  ] as const) {
     app.get(`/api/operator/${kind}/:id`, async (request, reply) => {
       authorize(request, options.config, 'read');
       const { id } = parse(idParams, request.params);
       const data = await options.repository.inspectTarget(kind, id);
-      if (data === null) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Operator target not found', requestId: request.id } });
+      if (data === null)
+        return reply.code(404).send({
+          error: {
+            code: 'NOT_FOUND',
+            message: 'Operator target not found',
+            requestId: request.id,
+          },
+        });
       return { data: wire(data), meta: { requestId: request.id } };
     });
   }
   for (const [path, load] of [
     ['/api/operator/companies', options.repository.listCompanies.bind(options.repository)],
     ['/api/operator/territories', options.repository.listTerritories.bind(options.repository)],
-    ['/api/operator/management-grants', options.repository.listManagementGrants.bind(options.repository)],
+    [
+      '/api/operator/management-grants',
+      options.repository.listManagementGrants.bind(options.repository),
+    ],
     ['/api/operator/audit-logs', options.repository.listAuditLogs.bind(options.repository)],
     ['/api/operator/payments', options.repository.listPayments.bind(options.repository)],
-    ['/api/operator/reconciliation-actions', options.repository.listReconciliationActions.bind(options.repository)],
-    ['/api/operator/recovery-requests', options.repository.listRecoveryRequests.bind(options.repository)],
+    [
+      '/api/operator/reconciliation-actions',
+      options.repository.listReconciliationActions.bind(options.repository),
+    ],
   ] as const) {
     app.get(path, async (request) => {
       authorize(request, options.config, 'read');
@@ -119,37 +156,72 @@ export async function registerOperatorRoutes(
     });
   }
 
-  const moderation = (
-    path: string,
-    execute: (input: MutationInput) => Promise<unknown>,
-  ) => app.post(path, async (request) => {
-    authorize(request, options.config, 'moderate');
-    const { id } = parse(idParams, request.params);
-    const body = parse(operatorMutationSchema, request.body);
-    return { data: wire(await execute({
-      id, operatorId: options.config.operatorId, reason: body.reason,
-      expectedUpdatedAt: new Date(body.expectedUpdatedAt), requestId: request.id,
-    })), meta: { requestId: request.id } };
+  app.get('/api/operator/recovery-requests', async (request) => {
+    authorize(request, options.config, 'read');
+    const { limit, ...query } = parse(operatorRecoveryListQuerySchema, request.query);
+    const page = await options.repository.listRecoveryRequests(limit, {
+      scope: query.scope,
+      ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+      now: now(),
+    });
+    return {
+      data: wire(page.items),
+      meta: { requestId: request.id, limit, nextCursor: page.nextCursor },
+    };
   });
 
+  const moderation = (path: string, execute: (input: MutationInput) => Promise<unknown>) =>
+    app.post(path, async (request) => {
+      authorize(request, options.config, 'moderate');
+      const { id } = parse(idParams, request.params);
+      const body = parse(operatorMutationSchema, request.body);
+      return {
+        data: wire(
+          await execute({
+            id,
+            operatorId: options.config.operatorId,
+            reason: body.reason,
+            expectedUpdatedAt: new Date(body.expectedUpdatedAt),
+            requestId: request.id,
+          }),
+        ),
+        meta: { requestId: request.id },
+      };
+    });
+
   moderation('/api/operator/companies/:id/suspend', (input) =>
-    options.repository.setCompanySuspended({ ...input, suspended: true }));
+    options.repository.setCompanySuspended({ ...input, suspended: true }),
+  );
   moderation('/api/operator/companies/:id/restore', (input) =>
-    options.repository.setCompanySuspended({ ...input, suspended: false }));
+    options.repository.setCompanySuspended({ ...input, suspended: false }),
+  );
   moderation('/api/operator/territories/:id/disable', (input) =>
-    options.repository.setTerritoryDisabled({ ...input, disabled: true }));
+    options.repository.setTerritoryDisabled({ ...input, disabled: true }),
+  );
   moderation('/api/operator/territories/:id/enable', (input) =>
-    options.repository.setTerritoryDisabled({ ...input, disabled: false }));
+    options.repository.setTerritoryDisabled({ ...input, disabled: false }),
+  );
   moderation('/api/operator/management-grants/:id/revoke', (input) =>
-    options.repository.revokeManagementGrant(input));
+    options.repository.revokeManagementGrant(input),
+  );
 
   app.post('/api/operator/recovery-requests/:id/decision', async (request) => {
     authorize(request, options.config, 'moderate');
     const { id } = parse(idParams, request.params);
     const body = parse(operatorRecoveryDecisionSchema, request.body);
-    return { data: wire(await options.repository.decideRecoveryRequest({
-      id, operatorId: options.config.operatorId, decision: body.decision, reason: body.reason,
-      expectedUpdatedAt: new Date(body.expectedUpdatedAt), now: now(), requestId: request.id,
-    })), meta: { requestId: request.id } };
+    return {
+      data: wire(
+        await options.repository.decideRecoveryRequest({
+          id,
+          operatorId: options.config.operatorId,
+          decision: body.decision,
+          reason: body.reason,
+          expectedUpdatedAt: new Date(body.expectedUpdatedAt),
+          now: now(),
+          requestId: request.id,
+        }),
+      ),
+      meta: { requestId: request.id },
+    };
   });
 }

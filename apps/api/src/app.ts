@@ -96,6 +96,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     } satisfies FastifyServerOptions['logger']);
 
   const app = Fastify({
+    trustProxy: runtimeConfig?.trustedProxies?.length ? runtimeConfig.trustedProxies : false,
     bodyLimit: 262_144,
     connectionTimeout: 10_000,
     requestTimeout: 15_000,

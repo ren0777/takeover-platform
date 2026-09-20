@@ -6,6 +6,7 @@ import {
 } from '../integrations/email/development-email-provider.js';
 import type { EmailProvider } from '../integrations/email/email-provider.js';
 import { unavailableEmailProvider } from '../integrations/email/unavailable-email-provider.js';
+import { createProductionEmailProvider } from '../integrations/email/production-email-provider.js';
 import { developmentEmailCapturePlugin } from './development-email-capture.js';
 
 declare module 'fastify' {
@@ -22,6 +23,13 @@ export async function emailPlugin(
   app: FastifyInstance,
   options: EmailPluginOptions,
 ): Promise<DevelopmentEmailCapture | null> {
+  if (options.identity.emailProvider === 'resend') {
+    if (!options.identity.productionEmail) throw new Error('Production email configuration is required');
+    app.decorate('emailProvider', createProductionEmailProvider({
+      ...options.identity.productionEmail, webAppOrigin: options.identity.webAppOrigin,
+    }));
+    return null;
+  }
   if (options.identity.emailProvider === 'unavailable') {
     app.decorate('emailProvider', unavailableEmailProvider);
     return null;

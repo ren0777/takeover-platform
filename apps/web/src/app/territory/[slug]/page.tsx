@@ -7,6 +7,7 @@ import { TakeoverPanel } from '@/components/territory/takeover-panel';
 import { ErrorState } from '@/components/ui/error-state';
 import { Notice } from '@/components/ui/notice';
 import { PageHeader } from '@/components/ui/page-header';
+import { ShareLink } from '@/components/ui/share-link';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { describeReadFailure } from '@/lib/data/failure';
 import { formatAbsoluteDateTime } from '@/lib/format/datetime';
@@ -104,6 +105,7 @@ export default async function TerritoryPage({ params, searchParams }: PageProps)
       </div>
 
       <p className="mt-3 max-w-prose text-sm text-[var(--color-muted)]">{territory.description}</p>
+      <ShareLink path={`/territory/${territory.slug}`} title={territory.name} />
 
       <dl className="mt-8 grid gap-4 sm:grid-cols-2">
         <div>

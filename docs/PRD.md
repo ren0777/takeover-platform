@@ -1,6 +1,6 @@
 # TakeOver.com Product Requirements
 
-> **Document status:** Product requirements are **PLANNED** unless a section explicitly says **IMPLEMENTED NOW**. Phases 0 and 1 are implemented and verified locally, including Phase 1 migrations and integration tests against PostgreSQL 17. Phase 2 territory/ownership architecture is approved but not implemented.
+> **2026-09-20 scope:** The documented V1 is approved and implemented locally, with final acceptance in progress. Battles and referrals are deferred. Score is 100 per held territory +25 per distinct category, ties by company ID; 30-day configurable seasons preserve paid ownership. [PHASES.md](PHASES.md) records current status and [LAUNCH.md](LAUNCH.md) records external gates. Original feature-design labels below are retained as historical requirements.
 
 ## Product Vision
 

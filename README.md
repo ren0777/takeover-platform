@@ -14,14 +14,16 @@ This repository documents its own truth honestly: every doc states whether a cap
 | --- | --- | --- |
 | 0 | Monorepo foundation, shared tooling, health endpoints | ✅ Implemented & verified |
 | 1 | Company/contact identity, passwordless verification, company-scoped management sessions | ✅ Implemented & verified |
-| 2 | Territories, authoritative ownership history | 🚧 Designed, not implemented |
-| 3 | Capture engine — pricing, payments (Dodo), webhooks, atomic ownership transfer | 🚧 Frontend implemented & tested; backend capture engine in progress |
-| 4 | Empire scoring, rankings, live activity feed | 📋 Planned |
-| 5 | Seasons, rollover, Hall of Fame | 📋 Planned |
-| 6 | Battles (rivalry state machine) | 📋 Planned / needs review |
-| 7 | Sharing, Open Graph, referrals | 📋 Planned |
-| 8 | Admin, moderation, audited operator tools | 📋 Planned |
-| 9 | Production hardening & launch readiness | 📋 Planned |
+| 2 | Territories and authoritative ownership history | Implemented; PostgreSQL verified |
+| 3 | Pricing, Dodo checkout/webhooks and atomic capture | Implemented locally; provider sandbox acceptance remains |
+| 4 | Empire scoring, rankings and resumable capture activity | Implemented; final acceptance in progress |
+| 5 | Seasons, frozen archives and Hall of Fame | Implemented; final acceptance in progress |
+| 6 | Battles | Outside approved V1 scope |
+| 7 | Public sharing and metadata | Implemented; referrals deferred |
+| 8 | Independent operator moderation and audited recovery | Implemented; final acceptance in progress |
+| 9 | Production tooling and launch readiness | Tooling implemented; external launch gates open |
+
+Current work index: [Memory tree](docs/MEMORY-TREE.md). Deployment and external acceptance: [Launch runbook](docs/LAUNCH.md).
 
 Full breakdown with acceptance criteria and evidence: [docs/PHASES.md](docs/PHASES.md).
 
@@ -41,7 +43,7 @@ Notably, V1 has **no user accounts, passwords, or login pages**. Authority to ma
 - **API:** Fastify 5, TypeScript
 - **Database:** PostgreSQL 17, Prisma 7 (`@takeover/database` is the sole Prisma owner)
 - **Contracts:** Zod schemas shared between web and API (`@takeover/shared`)
-- **Payments (planned, Phase 3):** provider-neutral interface with Dodo Payments as the first adapter
+- **Payments:** provider-neutral interface with Dodo Payments as the first adapter
 
 ## Repository layout
 
@@ -66,7 +68,8 @@ pnpm install
 cp .env.example .env   # then fill in real secrets for anything beyond local dev
 
 pnpm db:generate        # generate the Prisma client
-pnpm db:validate        # validate the schema against the database
+pnpm db:validate        # validate the Prisma schema
+pnpm --filter @takeover/database db:migrate:deploy
 
 pnpm dev                # runs @takeover/web (:3000) and @takeover/api (:4000) in parallel
 ```
@@ -79,7 +82,7 @@ pnpm lint                # ESLint across every workspace
 pnpm test                # unit tests
 pnpm test:integration     # integration tests (requires PostgreSQL)
 pnpm build               # production builds for web and api
-pnpm smoke:api            # boots the compiled API and checks /health and /ready
+pnpm smoke:api            # compiled production runtime + actual database readiness
 ```
 
 ## Documentation

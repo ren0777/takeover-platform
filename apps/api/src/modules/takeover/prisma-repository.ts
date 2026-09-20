@@ -442,6 +442,17 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
         });
         if (existingPaymentOutcome !== null) return existingPaymentOutcome;
 
+        // Intermediate and unknown events carry no terminal payment truth. An existing
+        // terminal payment already reported its status above; otherwise keep an
+        // auditable receipt without inventing a failed charge.
+        if (!['payment.succeeded', 'payment.failed', 'payment.cancelled'].includes(input.eventType)) {
+          await transaction.paymentWebhookEvent.update({
+            where: { id: event.id },
+            data: { processingStatus: 'IGNORED', processedAt: new Date(), errorCode: 'NON_TERMINAL_OR_UNSUPPORTED_EVENT' },
+          });
+          return null;
+        }
+
         if (
           input.eventType !== 'payment.succeeded' ||
           input.amountMinor === undefined ||
@@ -999,6 +1010,9 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
         },
       }));
 
+    // Serialize the capture timestamp with season finalization and activity IDs.
+    // The matching ownership trigger holds this transaction lock through commit.
+    await transaction.$queryRaw`SELECT pg_advisory_xact_lock(724260920)::text`;
     try {
       const ownership = new PrismaTerritoryOwnershipRepository(
         createTerritoryOwnershipTransactionClient(transaction),

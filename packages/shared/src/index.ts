@@ -118,3 +118,5 @@ export { createMoney, CURRENCY_CODE_PATTERN, isMoney, moneySchema, type Money } 
 export { attemptStateEnum, attemptStatusSchema, type AttemptState, type AttemptStatus } from './attempt-state.js';
 export { quoteResponseSchema, quoteStatusEnum, type QuoteResponse, type QuoteStatus } from './quote-contract.js';
 export { checkoutRequestSchema, checkoutResponseSchema, type CheckoutRequest, type CheckoutResponse } from './checkout-contract.js';
+export * from './competition.js';
+export * from './operator.js';

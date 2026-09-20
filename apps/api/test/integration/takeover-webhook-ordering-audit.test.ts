@@ -6,10 +6,8 @@ import { PrismaTakeoverRepository } from '../../src/modules/takeover/prisma-repo
 import { TakeoverService, type PaymentProvider } from '../../src/modules/takeover/service.js';
 
 /**
- * Audit-only reconstruction of webhook event-type/ordering behavior not
- * covered by takeover-postgres.test.ts. Each test proves what the current
- * code actually does against real PostgreSQL; none of these assert a
- * "should" that required a production change to pass.
+ * Regression coverage for intermediate, unsupported and out-of-order events.
+ * Only explicit terminal payment events may change payment truth.
  */
 
 const prisma = getDatabaseClient();
@@ -164,8 +162,8 @@ afterEach(async () => {
   await prisma.territoryCategory.deleteMany({ where: { id: fixture.categoryId } });
 });
 
-describe('webhook event-type and ordering audit (undocumented Dodo event vocabulary)', () => {
-  it('marks the payment FAILED on a bare "payment.processing" event with no prior payment row', async () => {
+describe('webhook event-type and ordering safety', () => {
+  it('preserves pending payment on payment.processing without inventing a failed charge', async () => {
     const service = createService();
     const { checkout, quote } = await createCheckoutForFixture(service);
     const providerPaymentId = `pay-processing-${fixture.suffix}`;
@@ -181,13 +179,9 @@ describe('webhook event-type and ordering audit (undocumented Dodo event vocabul
       quoteId: quote.quoteId,
     });
 
-    // Current behavior: any eventType other than the literal string
-    // 'payment.succeeded' is treated identically to a definite failure.
-    // There is no distinct "processing" / "pending" intermediate state.
-    expect(status).toMatchObject({ state: 'PAYMENT_FAILED', terminal: false });
-    await expect(
-      prisma.payment.findFirstOrThrow({ where: { checkoutId: checkout.checkoutId } }),
-    ).resolves.toMatchObject({ status: 'FAILED' });
+    expect(status).toBeUndefined();
+    expect(await prisma.payment.count({ where: { checkoutId: checkout.checkoutId } })).toBe(0);
+    expect(await service.getStatus(checkout.statusToken)).toMatchObject({ state: 'PENDING_PAYMENT' });
   });
 
   it('recovers to CAPTURED when payment.succeeded follows a payment.processing event', async () => {
@@ -217,9 +211,7 @@ describe('webhook event-type and ordering audit (undocumented Dodo event vocabul
       quoteId: quote.quoteId,
     });
 
-    // The same provider_payment_id can transition FAILED -> CONFIRMED. This
-    // is an ASSUMPTION about Dodo (that it reuses one payment id across a
-    // processing->succeeded lifecycle); see provider-assumptions in the audit.
+    // A signed intermediate event must not prevent a later matching success.
     expect(afterSucceeded).toMatchObject({ state: 'CAPTURED', terminal: true });
     await expect(
       prisma.payment.findFirstOrThrow({ where: { checkoutId: checkout.checkoutId } }),
@@ -299,7 +291,7 @@ describe('webhook event-type and ordering audit (undocumented Dodo event vocabul
     ).resolves.toMatchObject({ amountMinor: 1500n, status: 'CONFIRMED' });
   });
 
-  it('treats a completely unrecognized event type the same as a payment failure', async () => {
+  it('records an unrecognized event without changing money or ownership', async () => {
     const service = createService();
     const { checkout, quote } = await createCheckoutForFixture(service);
 
@@ -314,9 +306,8 @@ describe('webhook event-type and ordering audit (undocumented Dodo event vocabul
       quoteId: quote.quoteId,
     });
 
-    // There is no allowlist of understood payment-domain event types. Any
-    // string other than 'payment.succeeded' (or a 'refund.' prefix, handled
-    // separately) falls into the same generic "not succeeded" branch.
-    expect(status).toMatchObject({ state: 'PAYMENT_FAILED' });
+    expect(status).toBeUndefined();
+    expect(await prisma.payment.count({ where: { checkoutId: checkout.checkoutId } })).toBe(0);
+    expect(await service.getStatus(checkout.statusToken)).toMatchObject({ state: 'PENDING_PAYMENT' });
   });
 });

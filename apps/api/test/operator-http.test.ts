@@ -37,7 +37,7 @@ describe('operator HTTP authority', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().data[0].amountMinor).toBe('9007199254740993');
     await app.close();
-  }, 20_000); // First Fastify injection in this file absorbs the measured cold-start under parallel load.
+  });
   it('fails closed when operator credentials are absent or weak', async () => {
     const app = Fastify();
     await expect(registerOperatorRoutes(app, {

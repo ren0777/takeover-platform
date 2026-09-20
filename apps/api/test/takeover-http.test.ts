@@ -6,8 +6,6 @@ import { parseApiConfig } from '../src/config/env.js';
 import type { CompanyIdentityService } from '../src/modules/company-identity/service.js';
 import type { TakeoverService } from '../src/modules/takeover/service.js';
 
-vi.setConfig({ testTimeout: 20_000 });
-
 const config = parseApiConfig({
   NODE_ENV: 'test',
   WEB_APP_ORIGIN: 'https://app.example',

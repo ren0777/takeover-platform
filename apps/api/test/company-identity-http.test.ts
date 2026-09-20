@@ -172,7 +172,7 @@ describe('company identity HTTP surface', () => {
       url: '/api/company-recovery-requests/77777777-7777-4777-8777-777777777777/approve',
     });
     expect(approval.statusCode).toBe(404);
-  }, 20_000);
+  });
 
   it('updates a reference-only intent behind company-scoped session and CSRF checks', async () => {
     const harness = buildIdentityApp();

@@ -1,6 +1,10 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import type { CompanyTerritories } from '@takeover/shared';
+import { competitionStatisticsSchema } from '@takeover/shared';
+import { apiRequest } from '@/lib/api/client';
+import { resolveSource } from '@/lib/data/source';
+import { ShareLink } from '@/components/ui/share-link';
 import { TerritoryMosaic } from '@/components/territory/territory-mosaic';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -62,6 +66,13 @@ export default async function CompanyPage({ params }: PageProps) {
   if (held === null) notFound();
 
   const { company, currentTerritoryCount, territories } = held;
+  let statistics: ReturnType<typeof competitionStatisticsSchema.parse> | undefined;
+  let statisticsUnavailable = false;
+  if (resolveSource('public-company') === 'live') {
+    try {
+      statistics = await apiRequest({ method: 'GET', path: `/api/companies/${company.id}/statistics`, schema: competitionStatisticsSchema });
+    } catch { statisticsUnavailable = true; }
+  }
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
@@ -93,6 +104,11 @@ export default async function CompanyPage({ params }: PageProps) {
       )}
 
       <dl className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3">
+        {statistics && <>
+          <div><dt className="text-sm text-[var(--color-muted)]">Empire score</dt><dd className="mt-1 text-3xl">{statistics.score}</dd></div>
+          <div><dt className="text-sm text-[var(--color-muted)]">Categories held</dt><dd className="mt-1 text-3xl">{statistics.categories}</dd></div>
+          <div><dt className="text-sm text-[var(--color-muted)]">Successful captures</dt><dd className="mt-1 text-3xl">{statistics.captures}</dd></div>
+        </>}
         <div>
           <dt className="text-sm text-[var(--color-muted)]">Territories held</dt>
           <dd className="mt-1 font-[family-name:var(--font-mono)] text-3xl">
@@ -108,6 +124,8 @@ export default async function CompanyPage({ params }: PageProps) {
           </dd>
         </div>
       </dl>
+      {statisticsUnavailable && <p className="mt-4 text-sm" role="status">Competition statistics are temporarily unavailable.</p>}
+      {company.slug && <ShareLink path={`/company/${company.slug}`} title={company.name} />}
 
       <section aria-labelledby="holdings-heading" className="mt-10">
         <h2

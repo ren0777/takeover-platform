@@ -8,11 +8,12 @@ import { FormField } from '@/components/ui/form-field';
 import { ApiRequestError } from '@/lib/api/client';
 import { beginCompanyClaim } from '@/lib/api/identity';
 import { describeIdentityError } from '@/lib/identity/error-copy';
+import { VerificationResend } from './verification-resend';
 
 type ClaimState =
   | { status: 'idle' }
   | { status: 'submitting' }
-  | { status: 'submitted'; result: CompanyClaimResult }
+  | { status: 'submitted'; result: CompanyClaimResult; contactEmail: string }
   | { status: 'failed'; code: string; requestId: string | undefined };
 
 export function ClaimForm({ territoryExternalRef }: { territoryExternalRef: string | null }) {
@@ -22,6 +23,7 @@ export function ClaimForm({ territoryExternalRef }: { territoryExternalRef: stri
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const logoUrl = String(form.get('logoUrl') ?? '').trim();
+    const contactEmail = String(form.get('contactEmail') ?? '').trim();
 
     setState({ status: 'submitting' });
     try {
@@ -31,10 +33,12 @@ export function ClaimForm({ territoryExternalRef }: { territoryExternalRef: stri
           websiteUrl: String(form.get('websiteUrl') ?? '').trim(),
           ...(logoUrl.length > 0 ? { logoUrl } : {}),
         },
-        contactEmail: String(form.get('contactEmail') ?? '').trim(),
+        contactEmail,
         intent: { territoryExternalRef: String(form.get('territoryExternalRef') ?? '').trim() },
       });
-      setState({ status: 'submitted', result });
+      // The result carries no contact email; resending the verification
+      // needs the exact address this claim was submitted with.
+      setState({ status: 'submitted', result, contactEmail });
     } catch (error: unknown) {
       if (error instanceof ApiRequestError) {
         setState({ status: 'failed', code: error.code, requestId: error.requestId });
@@ -80,6 +84,8 @@ export function ClaimForm({ territoryExternalRef }: { territoryExternalRef: stri
             available yet.
           </p>
         </Notice>
+
+        <VerificationResend companyId={company.id} contactEmail={state.contactEmail} />
       </div>
     );
   }

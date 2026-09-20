@@ -2,75 +2,72 @@
 
 ## Current Phase
 
-**Phase 0 — Foundation: IMPLEMENTED NOW / VERIFIED. Phase 1 — Company + Claim Identity: IMPLEMENTED NOW / VERIFIED in local development and a dedicated PostgreSQL 17 test database.**
+**V1 software complete locally as of 2026-09-20; external launch gates open.** Phases 0–5 and 8 are IMPLEMENTED NOW with local acceptance evidence. Phase 6 (battles) and referrals are outside approved V1 scope. Phase 9 launch tooling exists, but payment-sandbox, email-delivery, hosting and operational acceptance have not been performed. See [PHASES.md](PHASES.md), [LAUNCH.md](LAUNCH.md) and [MEMORY-TREE.md](MEMORY-TREE.md).
 
-**Phase 2 — Territories + Authoritative Ownership: LIVE READS VERIFIED.** Shared contracts, PostgreSQL schema, seed data, repository methods, public route registration, and public read projections are implemented and verified against a dedicated PostgreSQL 17 test database. Ownership mutation remains internal only; Phase 3 pricing, capture, checkout, and payments remain PLANNED.
+## Verified evidence (2026-09-20, branch `feat/v1-completion`)
+
+Run on Windows 11 with Node 24, pnpm 10.32.1 invoked directly, and a disposable PostgreSQL 17 container (`takeover_v1_test`, loopback only, tmpfs). All eight migrations applied from a clean reset.
+
+- `pnpm typecheck`: shared, database, web, api all pass.
+- `pnpm lint`: all packages pass.
+- `pnpm test` (no database): shared 105, web 228, database 16, api 273 — 622 passed.
+- `pnpm test:integration` (dedicated PostgreSQL): database 58, api 98 — 156 passed across 14 files, including takeover/refund/reconciliation (39), webhook ordering (5), competition (4) and operator (4).
+- `pnpm build`: shared, database, api (`tsc`) and web (`next build`, 17 routes) succeed.
+- `pnpm smoke:api`: compiled production runtime starts, reports `/health` and database-backed `/ready`, serves the 404 envelope and shuts down cleanly.
+
+Defects found and fixed during this pass: a non-terminal `payment.processing` webhook arriving after a refund returned no status instead of the terminal `REFUNDED` status; `LOG_LEVEL` was parsed but never applied to the Fastify logger (both have regression tests); `packages/database/test/phase3.test.ts` never removed its rows, which broke API tests asserting global checkout counts when the suites ran in CI order; and `verify.yml` exported `TAKEOVER_LIVE_RESOURCES=all` job-wide, which would have pointed the web fixture tests at the network (now scoped to the build step).
 
 ## What Works
 
-- pnpm monorepo with independently buildable `apps/web` and `apps/api`.
-- Fastify health/readiness endpoints, structured logging, validated configuration, and graceful shutdown.
-- Framework-neutral Phase 1 contracts in `@takeover/shared`.
-- Company drafts, normalized website collision handling, verified contact email, purpose-bound email challenges, company-scoped grants/sessions, existing-company access requests, manager approval/rejection, manual-recovery request state, durable rate limits, and audit records.
-- Opaque link/session tokens use at least 256 bits of randomness; raw tokens are not persisted or written to normal logs.
-- Identity-side `TakeoverIntent` preparation stores reference-only quote snapshots and always returns `checkoutAvailable: false`.
-- Development/test email provider and loopback-only opt-in capture endpoint.
-- All current Prisma migrations apply cleanly to the dedicated PostgreSQL test database; 43 live API integration/concurrency tests pass.
-- Phase 2 public live-read routes are registered and backed by PostgreSQL: `GET /api/territory-categories`, `GET /api/territories`, `GET /api/territories/:slug`, `GET /api/territories/:slug/history`, `GET /api/companies/:slug`, and `GET /api/companies/:slug/territories`.
+- pnpm monorepo with independently buildable `apps/web` and `apps/api`; `pnpm test` needs no database and `test:integration` refuses any database whose name lacks `test` or without `TAKEOVER_ALLOW_TEST_DATABASE_RESET=true`.
+- Fastify health/readiness (database-probing `/ready`), redacted structured logging, hardened response headers, body/connection/request limits, validated configuration and graceful shutdown.
+- Company identity: drafts, verified contact email, purpose-bound opaque challenges, company-scoped HttpOnly sessions with CSRF and exact-Origin checks, access requests with manager decisions, manual-recovery request creation, durable rate limits and audit records.
+- Territories: categories, authoritative `displayWeight`, deterministic reviewed seed, public list/detail/history/company projections, single active reign enforced by `btree_gist`, transaction-bound ownership primitive.
+- Takeover payments: legal-minimum quotes, provider-neutral checkout and payment records, `DodoPaymentProvider`, signature-verified Standard Webhooks ingestion with per-event idempotency, CAS ownership capture, refund obligations for lost races or money mismatches, reconciliation sweep driver, browser status tokens. Non-terminal or unknown provider events are recorded and ignored; only explicit terminal events change payment truth.
+- Competition: authoritative company statistics and score (100 per active territory + 25 per distinct category, stable company-ID ties), leaderboard, committed durable capture activity with resumable SSE, configurable 30-day seasons with serializable retry-safe rollover, frozen results and Hall of Fame. Capture and season finalization serialize on a PostgreSQL advisory lock.
+- Operator tools: independent bearer credential (never a company cookie), `read`/`moderate` permission matrix, bounded inspection/list APIs, transactional company/territory/grant moderation and audited recovery decisions with a mandatory reason and stale-mutation rejection.
+- Email: development capture transport, deliberate `unavailable` transport, and a Resend transport behind the existing provider interface with request timeout and safe failure. Production requires HTTPS `WEB_APP_ORIGIN`, `RESEND_API_KEY` and `EMAIL_FROM`.
+- Web: public territory, company, leaderboard, seasons, hall-of-fame and activity pages, share links, sharing metadata, `robots.txt`, `/api` proxy to the API origin.
+- Launch tooling: `compose.yaml` (PostgreSQL, migration job, API, loopback web), `compose.test.yaml`, `Dockerfile`, GitHub Actions `verify.yml` running the full pipeline against a PostgreSQL service, and runbooks in `LAUNCH.md`, `OPERATIONS.md` and `EMAIL.md`.
 
-## Partially Implemented
+## Not Performed (external launch gates)
 
-- Manual recovery request creation is implemented; operator approval execution is unavailable because no operator identity/authorization system exists.
-- Email delivery has an explicit provider interface, but only the development/test transport exists.
-- `TakeoverIntent` is only an identity/preparation seam. It has no authoritative territory, pricing, payment, checkout, or capture behavior.
+- Real email delivery from a verified Resend sender.
+- Dodo sandbox end-to-end matrix (capture, failure, duplicate, mismatch, concurrent bidders, refunds, late webhooks). `DODO_LIVE_ENABLED` must stay `false` until it is signed off.
+- Hosting, TLS/reverse proxy, secret provisioning, backup/restore drill, alert delivery, load evidence, and policy/operational sign-off.
+
+None of the above is claimed by unit or integration tests.
 
 ## Broken / Known Issues
 
-- Production email delivery is unavailable until a real provider is deliberately selected.
-- `@prisma/adapter-pg` 7.10.0 emits a `pg` deprecation warning during the deliberate concurrent approve/reject test. A traced stack points inside the Prisma adapter transaction interpreter; assertions and database invariants pass. Track upstream before adopting `pg` 9 and do not suppress the warning.
-- Claude reported an intermittent Fastify test cold-start timeout under full-suite parallel load. Five consecutive API suites first passed in 623–822 ms; under heavier concurrent tooling, the first HTTP app injection reproduced at 13.3 seconds while every subsequent HTTP test took 23–86 ms. The first cold-start test in each affected file now has a scoped 20-second timeout. The independent compiled production startup smoke retains its 5-second deadline, so runtime startup regressions are not masked.
+- `@prisma/adapter-pg` 7.10.0 emits a `pg` deprecation warning during the deliberate concurrent approve/reject test. Assertions and database invariants pass. Track upstream before adopting `pg` 9; do not suppress the warning.
+- Fastify cold start under heavy concurrent tooling on Windows was measured at 7.5–13 s for the first HTTP injection; integration test and hook timeouts are 30 s. The compiled smoke keeps its own 5 s shutdown deadline so runtime regressions are not masked.
+- The Windows global Corepack wrapper launched an incompatible nested pnpm; invoke the pinned pnpm 10.32.1 directly.
 
 ## Important Architectural Decisions
 
 - V1 has no `User`, password, signup/login, password reset, global session, or generic authenticated dashboard.
-- Company identity is distinct from email verification, management authority, payment, and ownership.
-- `contact_verified` is sufficient for V1; contact and website domains need not match.
+- Company identity, email verification, management authority, payment confirmation, ownership and operator authority are separate. Company sessions never grant operator authority.
 - Raw capability tokens are delivered only through the email-provider boundary, then exchanged for opaque, short-lived, server-resolved company-scoped sessions.
 - Management cookies use `HttpOnly`, production `Secure`, `SameSite=Lax`, no `Domain`, and `Path=/api`; state-changing routes also require an exact trusted Origin and double-submit CSRF secret.
 - Existing authoritative website collisions enter the access-request flow; they never silently merge, duplicate, or grant authority.
-- Manual recovery cannot grant authority in Phase 1.
-- PostgreSQL is the durable source of truth for challenges, sessions, requests, throttles, intents, and audits. Redis/queues/workers are absent.
-- Dodo Payments remains PLANNED for Phase 3 behind a provider-neutral interface and is UNVALIDATED / NEEDS REVIEW.
-- Phase 2 will treat `TerritoryOwnership` as the sole ownership source of truth; `Territory` will not duplicate current/previous owner, bid, or price fields.
-- Phase 2 public states are `unclaimed`, `claimed`, and `disabled`. `contested` is absent until authoritative Phase 3 bidding can define it.
-- Phase 2 `displayWeight` is backend-authoritative on `1..100` and has no price, ownership, volume, company-size, or adjacency meaning. Frontend flagship/major/standard bands remain presentation-only.
-- Suspended owners remain publicly named with `status: suspended`; suspension and future moderation redaction do not rewrite ownership.
-- Phase 2 requires PostgreSQL `btree_gist` for non-overlapping ownership timelines. Unsupported production provider capability is a deployment blocker.
-- Territory detail will preview five history entries through one server constant; full history is cursor-paginated.
+- PostgreSQL is the durable source of truth for every domain state, throttle, activity event and audit. Redis, queues and workers are absent; the reconciliation sweep runs inside the API process.
+- `TerritoryOwnership` is the sole ownership source of truth; ownership and financial history are preserved and never rewritten by moderation or season rollover. Paid ownership survives season boundaries; season results are frozen snapshots.
+- Unknown refund outcomes retain their claim until reconciled; a refund is completed only by a verified provider refund webhook, and completed refunds stay terminal over later out-of-order events.
+- Dodo base URL must be an official host; live mode needs the live host **and** `DODO_LIVE_ENABLED=true`. Removing Dodo configuration disables checkout and provider reconciliation together.
+- `displayWeight` is backend-authoritative on `1..100` with no gameplay meaning; `contested` and battles are absent.
+- Production `/ready` must probe the database; unit tests never mark external gates complete.
 
 ## API Contracts
 
-Unpaginated success responses use `{ data }`; paginated success responses use `{ data, meta }` with required `meta.requestId`. Errors use the stable `ApiError` envelope.
+Unpaginated success responses use `{ data }`; paginated success responses use `{ data, meta }` with required `meta.requestId`. Errors use the stable `ApiError` envelope. All public contracts live in `@takeover/shared` (`competition.ts` and `operator.ts` were added for V1 completion).
 
-- `GET /health`
-- `GET /ready` — application readiness only; no database-readiness claim
-- `POST /api/company-claims`
-- `POST /api/email-verifications`
-- `POST /api/email-verifications/exchange`
-- `POST /api/company-management-links`
-- `POST /api/company-management-links/exchange`
-- `GET /api/company-management/context`
-- `DELETE /api/company-management/session`
-- `POST /api/company-access-requests/:id/approve`
-- `POST /api/company-access-requests/:id/reject`
-- `POST /api/company-recovery-requests`
-- `PUT /api/takeover-intents/:id/preparation`
-- `GET /api/territory-categories`
-- `GET /api/territories`
-- `GET /api/territories/:slug`
-- `GET /api/territories/:slug/history`
-- `GET /api/companies/:slug`
-- `GET /api/companies/:slug/territories`
+- `GET /health`, `GET /ready` — readiness probes the database when `DATABASE_URL` is configured
+- Identity: `POST /api/company-claims`, `POST /api/email-verifications`, `POST /api/email-verifications/exchange`, `POST /api/company-management-links`, `POST /api/company-management-links/exchange`, `GET /api/company-management/context`, `GET /api/company-management/access-requests`, `DELETE /api/company-management/session`, `POST /api/company-access-requests/:id/approve|reject`, `POST /api/company-recovery-requests`, `PUT /api/takeover-intents/:id/preparation`
+- Territories: `GET /api/territory-categories`, `GET /api/territories`, `GET /api/territories/:slug`, `GET /api/territories/:slug/history`, `GET /api/companies/:slug`, `GET /api/companies/:slug/territories`
+- Takeover: `POST /api/takeover-quotes`, `POST /api/takeover-checkouts`, `GET /api/takeover-status/:statusToken`, `POST /api/payment/webhooks/dodo`
+- Competition: `GET /api/leaderboard`, `GET /api/companies/:companyId/statistics`, `GET /api/seasons`, `GET /api/hall-of-fame`, `GET /api/activity`, `GET /api/activity/stream` (SSE, resumable via `Last-Event-ID`)
+- Operator (bearer credential, registered only when `OPERATOR_ID`/`OPERATOR_CREDENTIAL` are configured): `GET /api/operator/{companies,territories,management-grants,audit-logs,payments,reconciliation-actions,recovery-requests}`, `GET /api/operator/{companies,territories,management-grants}/:id`, `POST /api/operator/companies/:id/{suspend,restore}`, `POST /api/operator/territories/:id/{disable,enable}`, `POST /api/operator/management-grants/:id/revoke`, `POST /api/operator/recovery-requests/:id/decision`
 - `GET /__dev/email-captures/:messageId` — development only, explicit opt-in, loopback only
 
 Cookie-authenticated mutations require `takeover_management`, `takeover_management_csrf`, `X-CSRF-Token`, and the configured exact Origin. Company authority is resolved server-side.
@@ -82,29 +79,18 @@ Cookie-authenticated mutations require `takeover_management`, `takeover_manageme
 - `20260829000000_initialize_foundation`
 - `20260829200842_add_company_claim_identity`
 - `20260830000000_add_territory_ownership`
+- `20260902000000_add_phase3_models`
+- `20260903000000_reconcile_phase3_models`
+- `20260905000000_add_reconciliation_sweep_index`
+- `20260920100000_competition`
+- `20260920110000_operator_recovery_resolution`
 
-Phase 1 models: `Company`, `CompanyContact`, `CompanyVerification`, `EmailVerificationChallenge`, `CompanyManagementGrant`, `CompanyManagementSession`, `CompanyAccessRequest`, `TakeoverIntent`, `AuditLog`, and `SecurityRateLimitBucket`. Phase 2 adds `TerritoryCategory`, `Territory`, and `TerritoryOwnership`; there is still no `User`, bid, price, payment, checkout, leaderboard, activity, season, battle, Redis, or worker model.
-
-## Pending Frontend Requirements
-
-- Consume the Phase 1 contracts from `@takeover/shared`; do not duplicate canonical company identity contracts.
-- Treat every claim/intent result as pre-checkout because `checkoutAvailable` is always `false`.
-- Build verification, access-pending/decision, manual-recovery-pending, and reference-quote states without implying email delivery, authority, payment, or ownership until the API confirms the relevant state.
-- Keep Claude’s frontend-only work inside `apps/web`; Codex preserved it unchanged.
-
-## Pending Backend Requirements
-
-- Production email-provider selection and integration.
-- Separately reviewed operator identity/authorization before manual recovery can be executed.
-- Phase 2 production seed application and operational deployment remain pending; shared contracts, Prisma territory/ownership schema, `btree_gist` constraints, deterministic seed, public read APIs, internal transaction-bound ownership primitive, and nullable `TakeoverIntent.territoryId` seam are implemented and locally verified.
-- Phase 3 pricing, provider-neutral payments, Dodo adapter, checkout, verified webhooks, reconciliation/refunds, and atomic capture.
-- Authoritative Phase 2 `displayWeight: number` for territory presentation and a later SSE activity stream; neither exists yet.
+Models: `SystemMetadata`, `Company`, `CompanyContact`, `CompanyVerification`, `EmailVerificationChallenge`, `CompanyManagementGrant`, `CompanyManagementSession`, `CompanyAccessRequest`, `TakeoverIntent`, `TerritoryCategory`, `Territory`, `TerritoryOwnership`, `AuditLog`, `SecurityRateLimitBucket`, `TakeoverQuote`, `CheckoutSession`, `CheckoutStatusToken`, `Payment`, `PaymentWebhookEvent`, `OwnershipCapture`, `PaymentReconciliationAction`, `CompetitionSeason`, `CaptureActivity`. There is still no `User`, battle, referral, Redis, or worker model.
 
 ## Current Blockers
 
-- No blocker for Phase 1 local completion.
-- Production deployment is blocked on production PostgreSQL configuration, production email delivery, hosting topology, and operational review.
-- Manual recovery execution is intentionally unavailable.
+- No blocker for local V1 completion.
+- Production launch is blocked on the external gates listed above; none may be marked complete from this repository alone.
 
 ## Agent Handoffs
 

@@ -2,13 +2,15 @@
 
 > Status values are **IMPLEMENTED NOW**, **IN PROGRESS / UNVALIDATED**, **PLANNED**, and **BLOCKED**. A phase is complete only when every acceptance criterion has current evidence.
 
+> **2026-09-20 update:** V1 scope and defaults are approved in [the completion design](superpowers/specs/2026-09-20-v1-completion-design.md). Historical dated evidence below is retained; the status lines above each phase reflect current implementation. See [LAUNCH.md](LAUNCH.md) for unperformed external acceptance and [MEMORY-TREE.md](MEMORY-TREE.md) for ongoing checks.
+
 ## Phase 0 — Foundation
 
 **Objective:** Establish a boring, stable, runnable, documented monorepo.
 
 **Dependencies:** Node.js 24, pnpm 10, Git, and package-registry access. Schema validation does not require a live PostgreSQL server.
 
-**Status:** **IMPLEMENTED NOW — PHASE 0 ACCEPTANCE VERIFIED.** Applying the committed migration to a live PostgreSQL instance remains **UNVALIDATED / NEEDS REVIEW** and is not a Phase 0 success claim.
+**Status:** **IMPLEMENTED NOW — LOCAL FOUNDATION AND MIGRATIONS VERIFIED**
 
 **Tasks:**
 
@@ -39,7 +41,7 @@
 
 **Dependencies:** Verified Phase 0; approved Phase 1 design and locked V1 defaults; PostgreSQL integration-test environment. Production email delivery and manual approval execution remain unavailable until separately selected/designed.
 
-**Status:** **IMPLEMENTED NOW — LOCAL AND POSTGRESQL ACCEPTANCE VERIFIED**
+**Status:** **IMPLEMENTED NOW — IDENTITY ACCEPTANCE VERIFIED; PRODUCTION DELIVERY CONFIGURATION REQUIRED**
 
 **Tasks:** company identity and drafts; contact-email verification; purpose-bound opaque challenges; management grants; short-lived company-scoped HttpOnly sessions; access requests; approve/reject/cancel/expire transitions; notification throttles; manual-recovery request architecture; authorization policies; rate limits; audit trail; `TakeoverIntent` contract/state seam only.
 
@@ -59,7 +61,7 @@
 
 **Dependencies:** verified Phase 1; approved Phase 2 design; reviewed initial seed table; PostgreSQL 17 integration environment with `btree_gist` support.
 
-**Status:** **PLANNED**
+**Status:** **IMPLEMENTED NOW — TERRITORY / OWNERSHIP ACCEPTANCE VERIFIED**
 
 **Tasks:** framework-neutral shared contracts; categories and territories; authoritative `displayWeight`; deterministic reviewed seed infrastructure; public company projection; list/detail/history/company-territory APIs; ownership history; one active reign; non-overlapping timelines; transaction-bound ownership primitive; nullable `TakeoverIntent.territoryId` compatibility seam.
 
@@ -77,7 +79,7 @@
 
 **Dependencies:** Phases 1–2; payment-provider contract; pricing rules; PostgreSQL concurrency environment; refund/dispute policy.
 
-**Status:** **PLANNED — HIGH RISK**
+**Status:** **IMPLEMENTED LOCALLY — DODO SANDBOX / LIVE ACCEPTANCE OUTSTANDING**
 
 **Tasks:** legal-minimum pricing; takeover-intent revalidation; bid validation; provider-neutral payment abstraction; `DodoPaymentProvider`; checkout; signature-verified Dodo webhooks; provider-neutral payment records; atomic transfer; duplicate request/event protection; concurrency; history; explicit reconciliation/refund/cancellation architecture.
 
@@ -93,7 +95,7 @@
 
 **Dependencies:** Phase 3 authoritative captures; approved scoring configuration; event-delivery design.
 
-**Status:** **PLANNED**
+**Status:** **IMPLEMENTED NOW — LOCAL ACCEPTANCE VERIFIED 2026-09-20**
 
 **Tasks:** company statistics; centralized empire scoring; leaderboards; activity events; contention; reign duration; capture counts; SSE delivery where validated.
 
@@ -109,7 +111,7 @@
 
 **Dependencies:** Phase 4 scoring/ranking; approved schedule and reset policy; reliable job execution.
 
-**Status:** **PLANNED**
+**Status:** **IMPLEMENTED NOW — LOCAL ACCEPTANCE VERIFIED 2026-09-20**
 
 **Tasks:** lifecycle; configurable duration; statistics; start/end jobs; rollover; archives; Hall of Fame; territory reset configuration.
 
@@ -125,7 +127,7 @@
 
 **Dependencies:** authoritative companies/territories; approved battle rules and trustworthy measurement sources.
 
-**Status:** **PLANNED / NEEDS REVIEW**
+**Status:** **OUTSIDE APPROVED V1 SCOPE**
 
 **Tasks:** challenge model; challenger/defender; territory selection; start/end; transitions; timeline; scoring interface; winner determination and reasons.
 
@@ -141,7 +143,7 @@
 
 **Dependencies:** stable public APIs and activity; privacy/attribution policy.
 
-**Status:** **PLANNED**
+**Status:** **V1 SHARING / METADATA IMPLEMENTED; REFERRALS DEFERRED**
 
 **Tasks:** share events; Open Graph metadata; public stats; referrals; tracking; SEO-supporting APIs.
 
@@ -157,7 +159,7 @@
 
 **Dependencies:** a separately approved operator identity/authorization model, audit records, domain state machines, and written moderation/repair policy. Company management sessions never imply administrator authority.
 
-**Status:** **PLANNED**
+**Status:** **IMPLEMENTED NOW — LOCAL ACCEPTANCE VERIFIED 2026-09-20**
 
 **Tasks:** moderation; audit search; suspicious activity; company/verification review; territory controls; payment/webhook investigation; suspension; controlled repair; abuse controls; rate limiting.
 
@@ -173,7 +175,7 @@
 
 **Dependencies:** accepted V1 feature phases; selected hosting/providers; operational ownership.
 
-**Status:** **PLANNED**
+**Status:** **LAUNCH TOOLING IMPLEMENTED — EXTERNAL PRODUCTION GATES OPEN**
 
 **Tasks:** monitoring; alerts; backups; restore exercise; migration checks; load/concurrency tests; security review; payment sandbox/live-mode gates; deployment; runbooks; launch checklist.
 

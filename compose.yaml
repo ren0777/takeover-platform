@@ -1,0 +1,66 @@
+services:
+  database:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: takeover
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a strong URL-safe database password}
+      POSTGRES_DB: takeover
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U takeover -d takeover"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  migrate:
+    build: { context: ., target: api }
+    environment:
+      DATABASE_URL: postgresql://takeover:${POSTGRES_PASSWORD}@database:5432/takeover
+    command: [pnpm, --filter, '@takeover/database', db:migrate:deploy]
+    depends_on:
+      database: { condition: service_healthy }
+  api:
+    build: { context: ., target: api }
+    restart: unless-stopped
+    init: true
+    environment:
+      DATABASE_URL: postgresql://takeover:${POSTGRES_PASSWORD}@database:5432/takeover
+      WEB_APP_ORIGIN: ${WEB_APP_ORIGIN:?Set the public HTTPS origin}
+      TOKEN_HMAC_SECRET: ${TOKEN_HMAC_SECRET:?Set a random base64url secret}
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-unavailable}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      DODO_API_KEY: ${DODO_API_KEY:-}
+      DODO_BASE_URL: ${DODO_BASE_URL:-https://test.dodopayments.com}
+      DODO_PRODUCT_IDS: ${DODO_PRODUCT_IDS:-}
+      DODO_WEBHOOK_SECRET: ${DODO_WEBHOOK_SECRET:-}
+      DODO_LIVE_ENABLED: ${DODO_LIVE_ENABLED:-false}
+      OPERATOR_ID: ${OPERATOR_ID:-}
+      OPERATOR_CREDENTIAL: ${OPERATOR_CREDENTIAL:-}
+      OPERATOR_PERMISSIONS: ${OPERATOR_PERMISSIONS:-read}
+      SEASON_DURATION_DAYS: ${SEASON_DURATION_DAYS:-30}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:4000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  web:
+    build:
+      context: .
+      target: web
+      args:
+        NEXT_PUBLIC_SITE_URL: ${WEB_APP_ORIGIN}
+    restart: unless-stopped
+    init: true
+    environment:
+      TAKEOVER_API_ORIGIN: http://api:4000
+      TAKEOVER_LIVE_RESOURCES: all
+      NEXT_PUBLIC_SITE_URL: ${WEB_APP_ORIGIN}
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on:
+      api: { condition: service_healthy }
+volumes:
+  postgres-data:

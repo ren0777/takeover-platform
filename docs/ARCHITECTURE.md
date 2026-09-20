@@ -1,5 +1,8 @@
 # TakeOver.com Architecture
 
+> **Current implementation (2026-09-20):** Territory and payment modules are live code, alongside `modules/competition` and `modules/operator`. Public competition contracts come from `@takeover/shared`; PostgreSQL stores immutable season snapshots and durable sequenced capture activity. An advisory transaction lock serializes capture time, activity publication and season finalization. Startup/minute sweeps close seasons; resumable SSE publishes committed events only. Operators use independent server-configured bearer authority, and all moderation/recovery writes are audited. Production email uses a bounded Resend adapter. `/ready` probes PostgreSQL. See [the approved V1 design](superpowers/specs/2026-09-20-v1-completion-design.md) and [launch runbook](LAUNCH.md).
+>
+> The remaining sections are the historical phase-by-phase design record. Their original PLANNED/UNAVAILABLE labels are historical, not the current implementation inventory. Current phase status is maintained in [PHASES.md](PHASES.md).
 > **Current status:** Phases 0 and 1 are **IMPLEMENTED NOW / VERIFIED** locally, including both migrations and Phase 1 integration/concurrency tests against a dedicated PostgreSQL 17 test database. Production email delivery and manual-recovery execution are unavailable. **PLANNED** diagrams describe intended later product flows, not working systems.
 
 ## System Overview

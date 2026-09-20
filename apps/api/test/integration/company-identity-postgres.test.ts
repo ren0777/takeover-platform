@@ -329,6 +329,56 @@ describe('Phase 1 PostgreSQL invariants', () => {
     ).resolves.toBe(1);
   });
 
+  it('mints at most one session when two concurrent exchanges race one draft-company challenge', async () => {
+    const repository = new PrismaCompanyIdentityRepository(prisma);
+    const tokenDigest = new Uint8Array(32).fill(4);
+    const claim = await repository.beginCompanyClaim({
+      challenge: {
+        expiresAt: fixtureDate('2026-08-30T13:15:00.000Z'),
+        selector: 'selector-race-draft',
+        tokenDigest,
+      },
+      company: {
+        expiresAt: fixtureDate('2026-08-31T13:00:00.000Z'),
+        name: 'Acme',
+        normalizedName: 'acme',
+        normalizedWebsite: 'https://race-draft.example/',
+        websiteUrl: 'https://race-draft.example/',
+      },
+      contact: { email: 'racer@gmail.com', normalizedEmail: 'racer@gmail.com' },
+      intent: {
+        expiresAt: fixtureDate('2026-08-31T13:00:00.000Z'),
+        territoryExternalRef: 'ai-coding',
+      },
+      now: fixtureDate('2026-08-30T13:00:00.000Z'),
+    });
+    await repository.markChallengeDelivery(claim.challenge.id, 'SENT');
+
+    const exchange = () =>
+      repository.consumeContactVerification({
+        accessRequestExpiresAt: fixtureDate('2026-09-06T13:05:00.000Z'),
+        candidateDigest: tokenDigest,
+        csrfDigest: new Uint8Array(32).fill(6),
+        maxFailedAttempts: 10,
+        now: fixtureDate('2026-08-30T13:05:00.000Z'),
+        selector: 'selector-race-draft',
+        sessionExpiresAt: fixtureDate('2026-08-30T21:05:00.000Z'),
+        sessionTokenDigest: new Uint8Array(32).fill(5),
+      });
+
+    const results = await Promise.allSettled([exchange(), exchange()]);
+    const fulfilled = results.filter(
+      (result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof exchange>>> =>
+        result.status === 'fulfilled',
+    );
+    expect(fulfilled.filter(({ value }) => value.kind === 'management_session')).toHaveLength(1);
+    expect(fulfilled.filter(({ value }) => value.kind === 'invalid')).toHaveLength(1);
+    expect(await prisma.companyManagementSession.count()).toBe(1);
+    expect(await prisma.companyManagementGrant.count()).toBe(1);
+    expect(await prisma.companyVerification.count({ where: { status: 'VERIFIED' } })).toBe(1);
+    await expect(prisma.auditLog.count()).resolves.toBeGreaterThanOrEqual(1);
+  });
+
   it('routes a verified contact for an authoritative company into pending access', async () => {
     const company = await createCompany('ACTIVE', 'https://acme.example/');
     const repository = new PrismaCompanyIdentityRepository(prisma);
@@ -873,6 +923,111 @@ describe('Phase 1 PostgreSQL invariants', () => {
       ).resolves.toMatchObject({ kind: 'management_session' });
     },
   );
+
+  it('consumes a management link at most once under concurrent exchange and rejects an expired one', async () => {
+    const company = await createCompany('ACTIVE', 'https://race-link.example/');
+    const contact = await prisma.companyContact.create({
+      data: {
+        email: 'racer-link@gmail.com',
+        emailVerifiedAt: fixtureDate('2026-08-30T13:00:00.000Z'),
+        normalizedEmail: 'racer-link@gmail.com',
+      },
+    });
+    await prisma.companyVerification.create({
+      data: {
+        companyId: company.id,
+        contactId: contact.id,
+        level: 'CONTACT_VERIFIED',
+        source: 'email_challenge',
+        status: 'VERIFIED',
+        verifiedAt: fixtureDate('2026-08-30T13:00:00.000Z'),
+      },
+    });
+    await prisma.companyManagementGrant.create({
+      data: { companyId: company.id, contactId: contact.id, source: 'INITIAL_CONTACT' },
+    });
+    const repository = new PrismaCompanyIdentityRepository(prisma);
+    const linkDigest = new Uint8Array(32).fill(5);
+    const issued = await repository.issueManagementChallenge({
+      expiresAt: fixtureDate('2026-08-30T13:15:00.000Z'),
+      locator: { normalizedWebsite: company.normalizedWebsite },
+      normalizedEmail: contact.normalizedEmail,
+      now: fixtureDate('2026-08-30T13:00:00.000Z'),
+      selector: 'race-management-link',
+      tokenDigest: linkDigest,
+    });
+    if (issued === null) throw new Error('Expected management challenge');
+    await repository.markChallengeDelivery(issued.challengeId, 'SENT');
+
+    const exchange = () =>
+      repository.consumeManagementChallenge({
+        candidateDigest: linkDigest,
+        csrfDigest: new Uint8Array(32).fill(7),
+        maxFailedAttempts: 10,
+        now: fixtureDate('2026-08-30T13:05:00.000Z'),
+        selector: 'race-management-link',
+        sessionExpiresAt: fixtureDate('2026-08-30T21:05:00.000Z'),
+        sessionTokenDigest: new Uint8Array(32).fill(6),
+      });
+
+    const results = await Promise.allSettled([exchange(), exchange()]);
+    const fulfilled = results.filter(
+      (result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof exchange>>> =>
+        result.status === 'fulfilled',
+    );
+    expect(fulfilled.filter(({ value }) => value.kind === 'management_session')).toHaveLength(1);
+    expect(fulfilled.filter(({ value }) => value.kind === 'invalid')).toHaveLength(1);
+    expect(await prisma.companyManagementSession.count()).toBe(1);
+  });
+
+  it('rejects a management link exchange after its expiry', async () => {
+    const company = await createCompany('ACTIVE', 'https://expired-link.example/');
+    const contact = await prisma.companyContact.create({
+      data: {
+        email: 'expired-link@gmail.com',
+        emailVerifiedAt: fixtureDate('2026-08-30T13:00:00.000Z'),
+        normalizedEmail: 'expired-link@gmail.com',
+      },
+    });
+    await prisma.companyVerification.create({
+      data: {
+        companyId: company.id,
+        contactId: contact.id,
+        level: 'CONTACT_VERIFIED',
+        source: 'email_challenge',
+        status: 'VERIFIED',
+        verifiedAt: fixtureDate('2026-08-30T13:00:00.000Z'),
+      },
+    });
+    await prisma.companyManagementGrant.create({
+      data: { companyId: company.id, contactId: contact.id, source: 'INITIAL_CONTACT' },
+    });
+    const repository = new PrismaCompanyIdentityRepository(prisma);
+    const linkDigest = new Uint8Array(32).fill(9);
+    const issued = await repository.issueManagementChallenge({
+      expiresAt: fixtureDate('2026-08-30T13:15:00.000Z'),
+      locator: { normalizedWebsite: company.normalizedWebsite },
+      normalizedEmail: contact.normalizedEmail,
+      now: fixtureDate('2026-08-30T13:00:00.000Z'),
+      selector: 'expired-management-link',
+      tokenDigest: linkDigest,
+    });
+    if (issued === null) throw new Error('Expected management challenge');
+    await repository.markChallengeDelivery(issued.challengeId, 'SENT');
+
+    await expect(
+      repository.consumeManagementChallenge({
+        candidateDigest: linkDigest,
+        csrfDigest: new Uint8Array(32).fill(7),
+        maxFailedAttempts: 10,
+        now: fixtureDate('2026-08-30T13:15:00.000Z'),
+        selector: 'expired-management-link',
+        sessionExpiresAt: fixtureDate('2026-08-30T21:05:00.000Z'),
+        sessionTokenDigest: new Uint8Array(32).fill(6),
+      }),
+    ).resolves.toEqual({ kind: 'invalid' });
+    expect(await prisma.companyManagementSession.count()).toBe(0);
+  });
 
   it('persists recovery only for a verified requester and writes an audit record', async () => {
     const company = await createCompany('ACTIVE', 'https://recovery.example/');

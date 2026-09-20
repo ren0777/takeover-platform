@@ -2,137 +2,66 @@
 
 **Generated on 2026-09-03**
 
----
-
 ## Overview
+This document describes the integration of the Dodo Payments provider as a Pay‑What‑You‑Want (PWYW) payment adapter.
 
-This document captures the officially documented behavior of the Dodo Payments provider as of the latest documentation (July 2026). All sections are explicitly labeled as **CONFIRMED FROM OFFICIAL DOCS** when the information is directly sourced from Dodo Payments documentation, or **UNKNOWN / NOT DOCUMENTED** when the official documentation does not provide the detail.
+## Configuration
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `DODO_API_KEY` | API key for Dodo Payments. Must be set in production. | `my-secret-key` |
+| `DODO_BASE_URL` | Base URL for Dodo API. Must be HTTPS. | `https://test.dodopayments.com/` |
+| `DODO_PRODUCT_IDS` | JSON object mapping three‑letter ISO currency codes (uppercase) to Dodo product IDs. At least one entry is required when `DODO_API_KEY` is set. | `{"USD":"prod_usd","INR":"prod_inr"}` |
 
----
-
-## Checkout Creation API
-
-- **Endpoint**: `POST Create Checkout Session`
-- **Confirmed from official docs**: The endpoint exists as part of the "Checkout Sessions" collection.
-- **Authentication**: `Authorization: Bearer <YOUR_API_KEY>`
-  - *Confirmed*: The API requires a bearer token header for all requests.
-- **Rate Limits**: Tier 0 (default) – 40 requests per second (burst) and 240 requests per minute (sustained).
-  - *Confirmed*: Documented under **Rate Limits**.
-- **Request fields**: *UNKNOWN / NOT DOCUMENTED*
-  - The official docs list the endpoint but do not expose the JSON schema for the request body (e.g., amount, currency, success/return URLs, etc.).
-- **Required request fields**: *UNKNOWN / NOT DOCUMENTED*
-- **Successful response fields**: *UNKNOWN / NOT DOCUMENTED*
-  - The docs show a generic success response example (`payment_id`, `status`, `total_amount`, `currency`, `created_at`) but do not tie it to the checkout creation endpoint.
-- **Hosted checkout URL behavior**: *UNKNOWN / NOT DOCUMENTED*
-  - No explicit description of how the returned checkout URL should be used, nor any constraints on browser return URLs.
-- **Idempotency support**: *UNKNOWN / NOT DOCUMENTED*
-  - The docs do not mention an idempotency‑key header or parameter for checkout creation.
-- **Sandbox / Test mode**: *UNKNOWN / NOT DOCUMENTED*
-  - No mention of a sandbox environment or test mode flag.
-- **Return / Success URL behavior**: *UNKNOWN / NOT DOCUMENTED*
-  - The docs do not describe how return URLs are handled, nor any server‑side verification requirements.
-
----
-
-## Webhook Verification Algorithm
-
-- **Webhook endpoint**: *UNKNOWN / NOT DOCUMENTED*
-- **Signature header name**: *UNKNOWN / NOT DOCUMENTED*
-- **Signature algorithm**: *UNKNOWN / NOT DOCUMENTED*
-- **Timestamp / replay protection**: *UNKNOWN / NOT DOCUMENTED*
-- **Event ID**: *UNKNOWN / NOT DOCUMENTED*
-- **Event types / statuses**: *UNKNOWN / NOT DOCUMENTED*
-- **Retry semantics**: *UNKNOWN / NOT DOCUMENTED*
-- **Duplicate‑delivery behavior**: *UNKNOWN / NOT DOCUMENTED*
-
-> *All above items are not present in the publicly available Dodo Payments documentation as of the fetch date.*
-
----
-
-## Refund API
-
-- **Endpoint**: `POST Create Refund`
-- **Authentication**: `Authorization: Bearer <YOUR_API_KEY>` (same as other API calls).
-- **Rate Limits**: Same as general API limits (40 req/s burst, 240 req/min sustained for Tier 0).
-- **Request fields**: *UNKNOWN / NOT DOCUMENTED*
-- **Response fields**: *UNKNOWN / NOT DOCUMENTED*
-- **Refund statuses**: *UNKNOWN / NOT DOCUMENTED*
-- **Failure behavior**: *UNKNOWN / NOT DOCUMENTED*
-
----
-
-## Provider Event → Internal `PaymentStatus` Mapping
-
-- *UNKNOWN / NOT DOCUMENTED*
-
----
-
-## Provider Event → `AttemptState` Implications
-
-- *UNKNOWN / NOT DOCUMENTED*
-
----
-
-## Webhook Verification Algorithm (Detailed)
-
-- *UNKNOWN / NOT DOCUMENTED*
-
----
-
-## Dedupe Key
-
-- *UNKNOWN / NOT DOCUMENTED*
-
----
+**Important:** No `DODO_DEFAULT_PRODUCT_ID` is used. The adapter selects the product ID based on the checkout currency using `DODO_PRODUCT_IDS`. If a currency is not present, the checkout fails with an error.
 
 ## Checkout Creation Payload
+When creating a checkout, the adapter sends a POST request to `${DODO_BASE_URL}/checkouts` with the following JSON body:
 
-- *UNKNOWN / NOT DOCUMENTED*
+```json
+{
+  "product_cart": [
+    {
+      "product_id": "<product-id-for-currency>",
+      "quantity": 1,
+      "amount": <amountMinor>
+    }
+  ],
+  "return_url": "<trusted-return-url>",
+  "cancel_url": "<trusted-return-url>",
+  "metadata": {
+    "checkout_id": "<internal-checkout-id>",
+    "quote_id": "<internal-quote-id>",
+    "amount_minor": <amountMinor>,
+    "currency": "<currency>"
+  }
+}
+```
+- `amount` is the smallest‑currency unit (`amountMinor`) from the TakeOver system.
+- `product_id` is looked up from `DODO_PRODUCT_IDS` using the `currency`.
+- `return_url` and `cancel_url` are both set to the trusted return URL supplied by TakeOver.
+- `metadata` contains the internal identifiers for traceability.
 
----
+## Response Mapping
+The Dodo API must return a JSON object containing:
+- `session_id` (or equivalent) → `providerCheckoutId`
+- `checkout_url` (HTTPS) → `providerCheckoutUrl`
 
-## Refund Flow
+The adapter validates that both fields are non‑empty strings and that `checkout_url` uses the `https:` protocol. If validation fails, an error is thrown.
 
-- *UNKNOWN / NOT DOCUMENTED*
+## Error Handling
+- **Unsupported currency** → immediate error, no network request.
+- **Missing `session_id` or `checkout_url`** → error.
+- **Non‑HTTPS `checkout_url`** → error.
+- **HTTP status ≥ 400** → error with response body.
+- **Network failure** → error propagated.
+- **Request timeout (10 seconds)** → error `Dodo checkout request timed out`.
 
----
+The adapter performs **no automatic retries**.
 
-## Reconciliation Edge Cases
+## Security
+- All API calls are made over HTTPS.
+- The `DODO_API_KEY` must be kept secret and never exposed to the client.
+- The `checkout_url` returned by Dodo is validated to be HTTPS before being returned to the client.
 
-- *UNKNOWN / NOT DOCUMENTED*
-
----
-
-## Required Environment Variables
-
-- *UNKNOWN / NOT DOCUMENTED*
-
----
-
-## Security Requirements
-
-- **API keys must be kept secret** and never exposed in client‑side code or public repositories. *(Confirmed from the "Authenticate Your API Requests" section.)*
-- **All webhook payloads must be verified server‑side** before processing any state changes. *(Confirmed from the "Webhooks" brief description.)*
-- **Transport security**: All API calls must be made over HTTPS. *(Implicit in modern APIs and standard practice.)*
-
----
-
-## Summary of Confirmed Points
-
-| Item | Confirmation Source |
-|------|----------------------|
-| Authentication header format | "Authorization: Bearer YOUR_API_KEY" – API Reference → "Authenticate Your API Requests" |
-| General rate‑limit numbers (Tier 0) | API Reference → "Rate Limits" |
-| Existence of Checkout Sessions, Webhooks, Refund endpoints | API Reference table of contents |
-| Need for server‑side webhook verification | API Reference → "Webhooks" brief |
-| API keys must be secret | API Reference → "Never expose your secret API keys" |
-
----
-
-## Open Uncertainties
-
-All items marked **UNKNOWN / NOT DOCUMENTED** above are currently not described in the public Dodo Payments documentation. These will need to be clarified with Dodo Payments support or by inspecting a sandbox implementation before a production adapter can be safely built.
-
----
-
-*This document is intended for internal use while building the Dodo Payments adapter. It should be revisited whenever Dodo Payments updates its public API documentation.*
+## Deprecation
+`DODO_DEFAULT_PRODUCT_ID` is retained only for backward compatibility and is **not** used by the current implementation.

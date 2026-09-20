@@ -361,6 +361,8 @@ describe('switch safety', () => {
 
   it('requires an explicit API origin in production', async () => {
     vi.stubEnv('NODE_ENV', 'production');
+    // Isolate from an ambient TAKEOVER_API_ORIGIN (CI exports one for the build/smoke steps).
+    vi.stubEnv('TAKEOVER_API_ORIGIN', '');
     live('territory-list');
 
     await expect(getTerritories()).rejects.toThrow(/TAKEOVER_API_ORIGIN/);

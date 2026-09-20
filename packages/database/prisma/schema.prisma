@@ -76,6 +76,7 @@ enum RecoveryRequestStatus {
   NONE
   PENDING
   EXPIRED
+  RESOLVED
 }
 
 enum TakeoverIntentStatus {
@@ -510,4 +511,28 @@ model PaymentReconciliationAction {
   providerRefundReference    String?  @map("provider_refund_reference")
   @@map("payment_reconciliation_actions")
   @@unique([paymentId, action])
+  @@index([action, status, createdAt])
+}
+
+model CompetitionSeason {
+  id String @id @default(uuid()) @db.Uuid
+  number Int @unique
+  startsAt DateTime @unique @map("starts_at") @db.Timestamptz(3)
+  endsAt DateTime @unique @map("ends_at") @db.Timestamptz(3)
+  finalizedAt DateTime? @map("finalized_at") @db.Timestamptz(3)
+  standings Json?
+  scoringVersion String @default("v1") @map("scoring_version")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  @@map("competition_seasons")
+}
+
+model CaptureActivity {
+  id BigInt @id @default(autoincrement())
+  ownershipId String @unique @map("ownership_id") @db.Uuid
+  companyName String @map("company_name")
+  companySlug String? @map("company_slug")
+  territoryName String @map("territory_name")
+  territorySlug String @map("territory_slug")
+  capturedAt DateTime @map("captured_at") @db.Timestamptz(3)
+  @@map("capture_activity")
 }

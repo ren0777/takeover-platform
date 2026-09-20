@@ -4,9 +4,7 @@ import { SITE } from '@/lib/site';
 /**
  * Brand header and primary navigation.
  *
- * Only links to destinations that actually exist. Leaderboard, battles, and
- * seasons are absent because those routes are not built; a nav item pointing at
- * a 404 is worse than no nav item.
+ * Public navigation follows the implemented V1 routes.
  */
 export function SiteHeader() {
   return (
@@ -22,7 +20,13 @@ export function SiteHeader() {
           {SITE.name}
         </Link>
 
-        <ul className="flex items-center gap-1">
+        <ul className="flex flex-wrap items-center gap-1">
+          {[
+            ['/leaderboard', 'Rankings'], ['/activity', 'Activity'],
+            ['/seasons', 'Seasons'], ['/hall-of-fame', 'Hall of Fame'],
+          ].map(([href, label]) => (
+            <li key={href}><Link href={href!} className="inline-flex min-h-11 items-center rounded-[var(--radius-control)] px-3 text-sm text-[var(--color-muted)] hover:text-[var(--color-foreground)] focus-visible:outline focus-visible:outline-2">{label}</Link></li>
+          ))}
           <li>
             <Link
               href="/territories"

@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { Webhook } from 'standardwebhooks';
 import { z } from 'zod';
+import type { OperatorConfig } from '../modules/operator/index.js';
 
 const DEVELOPMENT_TOKEN_SECRET = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY';
 const booleanString = z.enum(['true', 'false']).transform((value) => value === 'true');
@@ -31,7 +32,17 @@ const apiEnvironmentSchema = z
     DATABASE_URL: z.url().optional(),
     DEV_EMAIL_CAPTURE_ENABLED: booleanString.default(false),
     DRAFT_TTL_SECONDS: positiveSeconds.default(86_400),
-    EMAIL_PROVIDER: z.enum(['development', 'unavailable']).default('development'),
+    EMAIL_PROVIDER: z.enum(['development', 'unavailable', 'resend']).default('development'),
+    RESEND_API_KEY: z.string().trim().min(1).optional(),
+    EMAIL_FROM: z.email().optional(),
+    EMAIL_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(10_000),
+    OPERATOR_ID: z.string().uuid().optional(),
+    OPERATOR_CREDENTIAL: z.string().optional(),
+    OPERATOR_PERMISSIONS: z.string().default('read').transform((value) => value.split(',').map((v) => v.trim()))
+      .pipe(z.array(z.enum(['read', 'moderate'])).min(1))
+      .refine((permissions) => new Set(permissions).size === permissions.length),
+    SEASON_DURATION_DAYS: z.coerce.number().int().min(1).max(366).default(30),
+    SEASON_STARTS_AT: z.string().datetime().optional(),
     EMAIL_VERIFICATION_TTL_SECONDS: positiveSeconds.default(900),
     LINK_ISSUANCE_PER_EMAIL_PER_HOUR: positiveSeconds.default(5),
     LINK_ISSUANCE_PER_IP_PER_HOUR: positiveSeconds.default(20),
@@ -50,6 +61,7 @@ const apiEnvironmentSchema = z
     TAKEOVER_RECONCILIATION_INTERVAL_SECONDS: positiveSeconds.default(300),
     WEB_APP_ORIGIN: z.url().default('http://localhost:3000'),
     DODO_API_KEY: z.string().nonempty().optional(),
+    DODO_LIVE_ENABLED: booleanString.default(false),
     DODO_BASE_URL: z.string().url().default('https://test.dodopayments.com/'),
     DODO_PRODUCT_IDS: z.string().optional(),
     DODO_DEFAULT_PRODUCT_ID: z.string().nonempty().optional(),
@@ -65,6 +77,18 @@ const apiEnvironmentSchema = z
     }
 
     const webUrl = new URL(value.WEB_APP_ORIGIN);
+    if (value.EMAIL_PROVIDER === 'resend') {
+      for (const field of ['RESEND_API_KEY', 'EMAIL_FROM'] as const) {
+        if (value[field] === undefined) context.addIssue({ code: 'custom', message: 'required for Resend', path: [field] });
+      }
+      if (webUrl.protocol !== 'https:') context.addIssue({ code: 'custom', message: 'production email links require HTTPS', path: ['WEB_APP_ORIGIN'] });
+    }
+    if (value.OPERATOR_ID !== undefined || value.OPERATOR_CREDENTIAL !== undefined) {
+      if (value.OPERATOR_ID === undefined) context.addIssue({ code: 'custom', message: 'required for operator access', path: ['OPERATOR_ID'] });
+      if (value.OPERATOR_CREDENTIAL === undefined || decodedSecret(value.OPERATOR_CREDENTIAL) === null) {
+        context.addIssue({ code: 'custom', message: 'must be a random base64url secret of at least 32 bytes', path: ['OPERATOR_CREDENTIAL'] });
+      }
+    }
     if (webUrl.origin !== value.WEB_APP_ORIGIN.replace(/\/$/, '')) {
       context.addIssue({
         code: 'custom',
@@ -74,6 +98,9 @@ const apiEnvironmentSchema = z
     }
 
     if (value.NODE_ENV === 'production') {
+      if (value.DATABASE_URL === undefined) {
+        context.addIssue({ code: 'custom', message: 'required in production', path: ['DATABASE_URL'] });
+      }
       if (value.TOKEN_HMAC_SECRET === DEVELOPMENT_TOKEN_SECRET) {
         context.addIssue({
           code: 'custom',
@@ -119,7 +146,8 @@ export type IdentityConfig = Readonly<{
   accessRequestTtlSeconds: number;
   developmentEmailCaptureEnabled: boolean;
   draftTtlSeconds: number;
-  emailProvider: 'development' | 'unavailable';
+  emailProvider: 'development' | 'unavailable' | 'resend';
+  productionEmail?: { apiKey: string; fromEmail: string; timeoutMs: number };
   emailVerificationTtlSeconds: number;
   managementLinkTtlSeconds: number;
   managementSessionTtlSeconds: number;
@@ -158,10 +186,18 @@ export type ApiConfig = {
     intervalSeconds: number;
   }>;
   dodo?: DodoConfig;
+  operator?: OperatorConfig;
+  competition: { seasonDurationDays: number; seasonStartsAt?: Date };
 };
 
 export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
-  const result = apiEnvironmentSchema.safeParse(source);
+  // Compose and secret injectors commonly represent an unconfigured optional value as empty.
+  const normalized = { ...source };
+  for (const field of ['RESEND_API_KEY', 'EMAIL_FROM', 'DODO_API_KEY', 'DODO_PRODUCT_IDS',
+    'DODO_WEBHOOK_SECRET', 'DODO_DEFAULT_PRODUCT_ID', 'OPERATOR_ID', 'OPERATOR_CREDENTIAL', 'SEASON_STARTS_AT']) {
+    if (normalized[field] === '') delete normalized[field];
+  }
+  const result = apiEnvironmentSchema.safeParse(normalized);
   if (!result.success) {
     const fields = [...new Set(result.error.issues.map((issue) => issue.path.join('.')))].join(
       ', ',
@@ -221,6 +257,15 @@ export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
     if (baseUrlObj.protocol !== 'https:') {
       throw new Error('DODO_BASE_URL must be HTTPS');
     }
+    if (baseUrlObj.username || baseUrlObj.password || baseUrlObj.search || baseUrlObj.hash || baseUrlObj.pathname !== '/') {
+      throw new Error('DODO_BASE_URL must be an origin without credentials, path, query, or fragment');
+    }
+    if (result.data.NODE_ENV === 'production' && !['test.dodopayments.com', 'live.dodopayments.com'].includes(baseUrlObj.host)) {
+      throw new Error('DODO_BASE_URL must use an official Dodo API host in production');
+    }
+    if (baseUrlObj.hostname === 'live.dodopayments.com' && !result.data.DODO_LIVE_ENABLED) {
+      throw new Error('DODO_LIVE_ENABLED must be true before enabling live payments');
+    }
   } catch (e) {
     throw new Error(`Invalid DODO_BASE_URL: ${(e as Error).message}`);
   }
@@ -230,6 +275,9 @@ export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
     developmentEmailCaptureEnabled: result.data.DEV_EMAIL_CAPTURE_ENABLED,
     draftTtlSeconds: result.data.DRAFT_TTL_SECONDS,
     emailProvider: result.data.EMAIL_PROVIDER,
+    ...(result.data.EMAIL_PROVIDER === 'resend' ? { productionEmail: {
+      apiKey: result.data.RESEND_API_KEY!, fromEmail: result.data.EMAIL_FROM!, timeoutMs: result.data.EMAIL_TIMEOUT_MS,
+    } } : {}),
     emailVerificationTtlSeconds: result.data.EMAIL_VERIFICATION_TTL_SECONDS,
     managementLinkTtlSeconds: result.data.MANAGEMENT_LINK_TTL_SECONDS,
     managementSessionTtlSeconds: result.data.MANAGEMENT_SESSION_TTL_SECONDS,
@@ -239,6 +287,8 @@ export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
     webAppOrigin: result.data.WEB_APP_ORIGIN.replace(/\/$/, ''),
   });
   const config: ApiConfig = {
+    competition: { seasonDurationDays: result.data.SEASON_DURATION_DAYS,
+      ...(result.data.SEASON_STARTS_AT === undefined ? {} : { seasonStartsAt: new Date(result.data.SEASON_STARTS_AT) }) },
     host: result.data.API_HOST,
     identity,
     logLevel: result.data.LOG_LEVEL,
@@ -250,6 +300,11 @@ export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
       intervalSeconds: result.data.TAKEOVER_RECONCILIATION_INTERVAL_SECONDS,
     }),
   };
+
+  if (result.data.OPERATOR_ID !== undefined && result.data.OPERATOR_CREDENTIAL !== undefined) {
+    config.operator = { operatorId: result.data.OPERATOR_ID, credential: result.data.OPERATOR_CREDENTIAL,
+      permissions: result.data.OPERATOR_PERMISSIONS };
+  }
 
   if (result.data.DODO_API_KEY !== undefined) {
     const webhookSecret = result.data.DODO_WEBHOOK_SECRET;

@@ -20,6 +20,8 @@
     "lint": "eslint .",
     "pretest": "pnpm run build:workspace-deps",
     "test": "vitest run",
+    "pretest:integration": "pnpm run build:workspace-deps",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "db:generate": "prisma generate",
     "db:test:prepare": "node scripts/prepare-integration-database.mjs",
     "db:validate": "prisma validate",

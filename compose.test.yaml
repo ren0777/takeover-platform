@@ -1,0 +1,14 @@
+services:
+  postgres-test:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: takeover_test
+      POSTGRES_PASSWORD: takeover_test_local
+      POSTGRES_DB: takeover_v1_test
+    ports: ["127.0.0.1:${TEST_POSTGRES_PORT:-55440}:5432"]
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U takeover_test -d takeover_v1_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

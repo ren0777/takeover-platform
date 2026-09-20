@@ -1,4 +1,5 @@
 import { ERROR_CODES, type ApiError } from '@takeover/shared';
+import { getDatabaseClient } from '@takeover/database';
 import Fastify, { type FastifyInstance, type FastifyServerOptions, LogController } from 'fastify';
 import { ZodError } from 'zod';
 import type { ApiConfig } from './config/env.js';
@@ -22,6 +23,10 @@ import { healthPlugin } from './plugins/health.js';
 import { takeoverPlugin } from './plugins/takeover.js';
 import { territoriesPlugin } from './plugins/territories.js';
 import { createOpaqueTokenService } from './security/opaque-token.js';
+import { safeRequestUrl } from './security/request-log.js';
+import { registerCompetition } from './modules/competition/routes.js';
+import { registerOperatorRoutes } from './modules/operator/index.js';
+import { PrismaOperatorRepository } from './modules/operator/prisma-repository.js';
 
 export type BuildAppOptions = {
   logger?: FastifyServerOptions['logger'];
@@ -71,7 +76,12 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   const logger =
     options.logger ??
     ({
-      level: options.logLevel ?? 'info',
+      level: runtimeConfig?.logLevel ?? options.logLevel ?? 'info',
+      serializers: {
+        req: (request: { method: string; url: string; id: string }) => ({
+          method: request.method, url: safeRequestUrl(request.url), id: request.id,
+        }),
+      },
       redact: {
         paths: [
           'req.body.token',
@@ -86,8 +96,19 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     } satisfies FastifyServerOptions['logger']);
 
   const app = Fastify({
+    bodyLimit: 262_144,
+    connectionTimeout: 10_000,
+    requestTimeout: 15_000,
     logController: new LogController({ disableRequestLogging: nodeEnv === 'test' }),
     logger,
+  });
+
+  app.addHook('onRequest', async (request, reply) => {
+    reply.header('referrer-policy', 'no-referrer');
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('x-frame-options', 'DENY');
+    if (request.url.startsWith('/api/')) reply.header('cache-control', 'no-store');
+    if (nodeEnv === 'production') reply.header('strict-transport-security', 'max-age=31536000');
   });
 
   app.setNotFoundHandler((request, reply) => {
@@ -158,7 +179,19 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     return reply.status(statusCode).send(body);
   });
 
-  app.register(healthPlugin);
+  app.register(healthPlugin, runtimeConfig?.databaseUrl === undefined ? {} : {
+    checkDatabase: async () => { await getDatabaseClient().$queryRaw`SELECT 1`; },
+  });
+  if (runtimeConfig?.databaseUrl !== undefined) {
+    app.register(async (competitionApp) => {
+      await registerCompetition(competitionApp, { prisma: getDatabaseClient(), config: runtimeConfig.competition });
+    });
+    if (runtimeConfig.operator !== undefined) {
+      app.register(async (operatorApp) => {
+        await registerOperatorRoutes(operatorApp, { config: runtimeConfig.operator!, repository: new PrismaOperatorRepository(getDatabaseClient()) });
+      });
+    }
+  }
   if (options.companyIdentity !== undefined) {
     app.register(companyIdentityPlugin, {
       config: options.companyIdentity.config,

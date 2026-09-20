@@ -45,6 +45,7 @@ function waitForExit(child, timeoutMilliseconds) {
   });
 }
 
+if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required for the production runtime smoke test');
 const port = await findFreePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 const child = spawn(process.execPath, ['apps/api/dist/server.js'], {
@@ -77,7 +78,7 @@ try {
   assert(readyResponse.status === 200, `/ready returned ${readyResponse.status}`);
   assert(ready.data.status === 'ready', '/ready did not report ready');
   assert(ready.data.checks.application === 'ok', '/ready omitted the application check');
-  assert(ready.data.checks.database === undefined, '/ready claimed an unperformed database check');
+  assert(ready.data.checks.database === 'ok', '/ready did not verify the database');
 
   const missingResponse = await fetch(`${baseUrl}/missing`);
   const missing = await missingResponse.json();

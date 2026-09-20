@@ -1,4 +1,5 @@
 import type { NextConfig } from 'next';
+import path from 'node:path';
 
 /**
  * The API sets its management cookies with `Path=/api`, `SameSite=Lax` and no
@@ -10,8 +11,17 @@ import type { NextConfig } from 'next';
 const apiOrigin = process.env.TAKEOVER_API_ORIGIN ?? 'http://127.0.0.1:4000';
 
 const nextConfig: NextConfig = {
+  outputFileTracingRoot: path.resolve(__dirname, '../..'),
   reactStrictMode: true,
   transpilePackages: ['@takeover/shared'],
+  async headers() {
+    return [{ source: '/:path*', headers: [
+      { key: 'Referrer-Policy', value: 'no-referrer' },
+      { key: 'X-Content-Type-Options', value: 'nosniff' },
+      { key: 'X-Frame-Options', value: 'DENY' },
+      { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
+    ] }];
+  },
   async rewrites() {
     return [{ source: '/api/:path*', destination: `${apiOrigin}/api/:path*` }];
   },

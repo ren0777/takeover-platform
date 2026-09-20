@@ -123,18 +123,6 @@ export async function CompetitionPage({
   return (
     <div className="mx-auto max-w-5xl px-4 py-8">
       <PageHeader title={title} />
-      <nav aria-label="Competition" className="my-6 flex flex-wrap gap-5">
-        {(['leaderboard', 'activity', 'seasons', 'hall-of-fame'] as const).map((page) => (
-          <Link
-            key={page}
-            href={`/${page}`}
-            aria-current={page === mode ? 'page' : undefined}
-            className="capitalize underline"
-          >
-            {page.replaceAll('-', ' ')}
-          </Link>
-        ))}
-      </nav>
       {content}
     </div>
   );

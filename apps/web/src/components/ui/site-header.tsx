@@ -22,7 +22,7 @@ export function SiteHeader() {
 
         <ul className="flex flex-wrap items-center gap-1">
           {[
-            ['/leaderboard', 'Rankings'], ['/activity', 'Activity'],
+            ['/leaderboard', 'Leaderboard'], ['/activity', 'Activity'],
             ['/seasons', 'Seasons'], ['/hall-of-fame', 'Hall of Fame'],
           ].map(([href, label]) => (
             <li key={href}><Link href={href!} className="inline-flex min-h-11 items-center rounded-[var(--radius-control)] px-3 text-sm text-[var(--color-muted)] hover:text-[var(--color-foreground)] focus-visible:outline focus-visible:outline-2">{label}</Link></li>

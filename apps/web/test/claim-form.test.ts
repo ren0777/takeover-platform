@@ -3,11 +3,16 @@ import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ClaimForm } from '../src/app/claim/claim-form.js';
 
+const selected = {
+  category: { name: 'AI', slug: 'ai' },
+  name: 'AI Coding',
+  slug: 'ai-coding',
+  status: 'unclaimed' as const,
+};
+
 describe('ClaimForm', () => {
   it('renders the company claim form and required fields', () => {
-    const html = renderToStaticMarkup(
-      React.createElement(ClaimForm, { territoryExternalRef: null }),
-    );
+    const html = renderToStaticMarkup(React.createElement(ClaimForm, { territory: selected }));
 
     expect(html).toContain('Company name');
     expect(html).toContain('Contact email');
@@ -27,36 +32,31 @@ function inputTagFor(html: string, name: string): string {
   return match[0];
 }
 
-describe('territory prefill from /claim?territory=...', () => {
-  it('submits the deep-linked territory as the field value', () => {
-    const html = renderToStaticMarkup(
-      React.createElement(ClaimForm, { territoryExternalRef: 'ai-coding' }),
-    );
+describe('territory selected from the board', () => {
+  it('submits the selected territory from a hidden field and shows it by name', () => {
+    const html = renderToStaticMarkup(React.createElement(ClaimForm, { territory: selected }));
     const input = inputTagFor(html, 'territoryExternalRef');
 
-    // `value` is what the browser submits. A placeholder is never submitted, so
-    // the deep link used to post an empty reference unless the user retyped it.
+    // `value` is what the browser submits; the person never types the reference.
     expect(input).toContain('value="ai-coding"');
-    expect(input).not.toContain('placeholder="ai-coding"');
+    expect(input).toContain('type="hidden"');
+    expect(html).toContain('Selected territory');
+    expect(html).toContain('AI Coding');
+    expect(html).toContain('Unclaimed');
+    expect(html).toContain('href="/territory/ai-coding"');
   });
 
-  it('leaves the field empty and editable when no territory was linked', () => {
+  it('shows a claimed territory as a takeover target rather than hiding it', () => {
     const html = renderToStaticMarkup(
-      React.createElement(ClaimForm, { territoryExternalRef: null }),
+      React.createElement(ClaimForm, { territory: { ...selected, status: 'claimed' } }),
     );
-    const input = inputTagFor(html, 'territoryExternalRef');
 
-    expect(input).not.toContain('value=');
-    // Uncontrolled and writable, so a manually typed reference still submits.
-    // Matched as attributes: the class list contains `disabled:` utilities.
-    expect(input).not.toMatch(/\sreadonly="/);
-    expect(input).not.toMatch(/\sdisabled="/);
+    expect(html).toContain('Claimed');
+    expect(inputTagFor(html, 'territoryExternalRef')).toContain('value="ai-coding"');
   });
 
   it('does not leak the territory into any other field', () => {
-    const html = renderToStaticMarkup(
-      React.createElement(ClaimForm, { territoryExternalRef: 'ai-coding' }),
-    );
+    const html = renderToStaticMarkup(React.createElement(ClaimForm, { territory: selected }));
 
     for (const name of ['name', 'websiteUrl', 'logoUrl', 'contactEmail']) {
       expect(inputTagFor(html, name)).not.toContain('ai-coding');

@@ -131,6 +131,26 @@ export interface ManualRecoveryOperatorPort {
   resolve(requestId: string): Promise<ManualRecoveryResolution>;
 }
 
+export class PreparationTerritoryNotFoundError extends Error {
+  readonly code = 'TERRITORY_NOT_FOUND';
+  readonly statusCode = 404;
+
+  constructor() {
+    super('The referenced territory does not exist');
+    this.name = 'PreparationTerritoryNotFoundError';
+  }
+}
+
+export class PreparationTerritoryDisabledError extends Error {
+  readonly code = 'TERRITORY_DISABLED';
+  readonly statusCode = 409;
+
+  constructor() {
+    super('The referenced territory is not available');
+    this.name = 'PreparationTerritoryDisabledError';
+  }
+}
+
 export class ManualRecoveryUnavailableError extends Error {
   readonly code = 'MANUAL_RECOVERY_UNAVAILABLE';
   readonly statusCode = 503;

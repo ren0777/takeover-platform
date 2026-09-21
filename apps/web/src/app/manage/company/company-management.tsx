@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { DEFAULT_CURRENCY, type ManagementContext } from '@takeover/shared';
+import { type ManagementContext } from '@takeover/shared';
 import { Button } from '@/components/ui/button';
 import { ErrorState } from '@/components/ui/error-state';
 import { LoadingRegion, LoadingSkeleton } from '@/components/ui/loading-skeleton';
@@ -13,7 +13,7 @@ import { getManagementContext, revokeManagementSession } from '@/lib/api/identit
 import { formatAbsoluteDateTime } from '@/lib/format/datetime';
 import { describeCompanyStatus } from '@/lib/identity/company-status';
 import { describeIdentityError } from '@/lib/identity/error-copy';
-import { TakeoverPreparationForm } from './takeover-preparation-form';
+import { TakeoverPreparation } from './takeover-preparation';
 
 type SignOutState =
   | { status: 'idle' }
@@ -25,7 +25,7 @@ type ContextState =
   | { status: 'ready'; context: ManagementContext }
   | { status: 'failed'; code: string; requestId: string | undefined };
 
-export function CompanyManagement({ intentId }: { intentId: string | null }) {
+export function CompanyManagement() {
   const [state, setState] = useState<ContextState>({ status: 'loading' });
   const [signOut, setSignOut] = useState<SignOutState>({ status: 'idle' });
 
@@ -148,22 +148,8 @@ export function CompanyManagement({ intentId }: { intentId: string | null }) {
         <h2 className="font-[family-name:var(--font-display)] text-lg font-bold">
           Takeover preparation
         </h2>
-        {intentId === null ? (
-          <p className="mt-2 text-sm text-[var(--color-muted)]">
-            No takeover intent is open in this browser. Preparation is reached from a claim or a
-            verification link.
-          </p>
-        ) : (
-          <TakeoverPreparationForm intentId={intentId} currency={DEFAULT_CURRENCY} />
-        )}
+        <TakeoverPreparation company={{ id: company.id, name: company.name }} />
       </section>
-
-      <Notice variant="warning" title="Checkout is not available">
-        <p>
-          Payment and territory capture are not implemented. Nothing on this page can charge you or
-          transfer ownership.
-        </p>
-      </Notice>
 
       <div className="space-y-3">
         <Button

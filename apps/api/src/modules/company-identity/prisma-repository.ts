@@ -31,6 +31,12 @@ import type {
   AccessDecisionRecordResult,
   ListPendingAccessRequestsInput,
   PendingAccessRequestReviewPage,
+  CancelTakeoverIntentInput,
+  GetTakeoverPreparationInput,
+  PreparationTerritoryRecord,
+  StartTakeoverPreparationInput,
+  StartTakeoverPreparationResult,
+  TakeoverPreparationRecord,
 } from './repository.js';
 
 type IdentityPrismaClient = PrismaClient | Prisma.TransactionClient;
@@ -117,12 +123,19 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         create: input.contact,
         update: { email: input.contact.email },
       });
+      // Reference-only: an unknown reference still records the claim, and the
+      // preparation view reports it as missing rather than rejecting it here.
+      const referencedTerritory = await transaction.territory.findUnique({
+        where: { slug: input.intent.territoryExternalRef },
+        select: { id: true },
+      });
       const intent = await transaction.takeoverIntent.create({
         data: {
           companyId: company.id,
           contactId: contact.id,
           expiresAt: input.intent.expiresAt,
           territoryExternalRef: input.intent.territoryExternalRef,
+          ...(referencedTerritory === null ? {} : { territoryId: referencedTerritory.id }),
         },
       });
       const challenge = await transaction.emailVerificationChallenge.create({
@@ -568,6 +581,10 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
       });
 
       if (challenge.company.status === 'DRAFT') {
+        // Promotion below creates the contact's one ready intent; take the
+        // same lock as preparation start/restart, and take it before the
+        // grant row lock so both paths lock in the same order.
+        await this.lockPreparation(transaction, challenge.companyId, challenge.contactId);
         const grant = await transaction.companyManagementGrant.upsert({
           where: {
             companyId_contactId: {
@@ -591,6 +608,12 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
             grantId: grant.id,
             tokenDigest: Buffer.from(input.sessionTokenDigest),
           },
+        });
+        await this.supersedeReadyIntents(transaction, {
+          companyId: challenge.companyId,
+          contactId: challenge.contactId,
+          keepIntentId: intent.id,
+          ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
         });
         const updatedIntent = await transaction.takeoverIntent.update({
           where: { id: intent.id },
@@ -836,6 +859,12 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         });
         challengeId = challenge.id;
         if (accessRequest.takeoverIntentId !== null) {
+          await this.supersedeReadyIntents(transaction, {
+            companyId: accessRequest.companyId,
+            contactId: accessRequest.contactId,
+            keepIntentId: accessRequest.takeoverIntentId,
+            ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+          });
           await transaction.takeoverIntent.update({
             where: { id: accessRequest.takeoverIntentId },
             data: { status: 'IDENTITY_READY' },
@@ -1145,6 +1174,15 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         },
       });
       if (intent === null) return null;
+      // Keep the FK seam truthful when the reference changes: it points at the
+      // territory the reference resolves to now, or at nothing.
+      const referencedTerritory =
+        input.territoryExternalRef === intent.territoryExternalRef
+          ? undefined
+          : await transaction.territory.findUnique({
+              where: { slug: input.territoryExternalRef },
+              select: { id: true },
+            });
       const updated = await transaction.takeoverIntent.update({
         where: { id: intent.id },
         data: {
@@ -1156,6 +1194,9 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
           quotedTerritoryVersion: input.quotedTerritoryVersion ?? null,
           quotedWinningAmountMinor: input.quotedWinningAmountMinor ?? null,
           territoryExternalRef: input.territoryExternalRef,
+          ...(referencedTerritory === undefined
+            ? {}
+            : { territoryId: referencedTerritory?.id ?? null }),
         },
       });
       await this.writeAudit(transaction, {
@@ -1237,6 +1278,256 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         targetType: 'company_management_session',
       });
     });
+  }
+
+  async getTakeoverPreparation(
+    input: GetTakeoverPreparationInput,
+  ): Promise<TakeoverPreparationRecord> {
+    const intent = await this.prisma.takeoverIntent.findFirst({
+      where: {
+        companyId: input.companyId,
+        contactId: input.contactId,
+        expiresAt: { gt: input.now },
+        status: 'IDENTITY_READY',
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
+    if (intent === null) return { intent: null, territory: null };
+    return {
+      intent,
+      territory: await this.findPreparationTerritory(this.prisma, intent.territoryExternalRef),
+    };
+  }
+
+  async startTakeoverPreparation(
+    input: StartTakeoverPreparationInput,
+  ): Promise<StartTakeoverPreparationResult> {
+    return this.prisma.$transaction(async (transaction) => {
+      // Serializes every start/restart for this contact on this company, so
+      // concurrent submissions observe each other's rows and the partial
+      // unique index is a backstop rather than the first line of defence.
+      await this.lockPreparation(transaction, input.companyId, input.contactId);
+      const authorized = await this.lockAuthorizedSession(transaction, input);
+      if (!authorized) return { kind: 'unauthorized' };
+
+      const territory = await this.findPreparationTerritory(
+        transaction,
+        input.territoryExternalRef,
+      );
+      if (territory === null) return { kind: 'territory_missing' };
+      if (territory.availabilityStatus === 'DISABLED') return { kind: 'territory_disabled' };
+
+      const active = await transaction.takeoverIntent.findMany({
+        where: { companyId: input.companyId, contactId: input.contactId, status: 'IDENTITY_READY' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+      const current = active[0];
+      if (
+        current !== undefined &&
+        active.length === 1 &&
+        current.expiresAt > input.now &&
+        current.territoryExternalRef === territory.slug
+      ) {
+        // Same territory, still live: the repeated request is the same
+        // preparation, so nothing is created and nothing is cancelled.
+        return { created: false, intent: current, kind: 'ready', territory };
+      }
+
+      // Anything else (different territory, expired, or a stale duplicate
+      // that predates the index) is superseded. Cancellation is explicit
+      // rather than an update in place so the audit trail keeps both rows.
+      if (active.length > 0) {
+        await transaction.takeoverIntent.updateMany({
+          where: { id: { in: active.map((intent) => intent.id) } },
+          data: { status: 'CANCELLED' },
+        });
+        for (const superseded of active) {
+          await this.writeAudit(transaction, {
+            action: 'takeover_intent.superseded',
+            actorId: input.sessionId,
+            actorType: 'MANAGEMENT_SESSION',
+            companyId: input.companyId,
+            ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+            targetId: superseded.id,
+            targetType: 'takeover_intent',
+          });
+        }
+      }
+      const intent = await transaction.takeoverIntent.create({
+        data: {
+          companyId: input.companyId,
+          contactId: input.contactId,
+          expiresAt: input.expiresAt,
+          status: 'IDENTITY_READY',
+          territoryExternalRef: territory.slug,
+          territoryId: territory.id,
+        },
+      });
+      await this.writeAudit(transaction, {
+        action: 'takeover_intent.preparation_started',
+        actorId: input.sessionId,
+        actorType: 'MANAGEMENT_SESSION',
+        companyId: input.companyId,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        targetId: intent.id,
+        targetType: 'takeover_intent',
+      });
+      return { created: true, intent, kind: 'ready', territory };
+    });
+  }
+
+  async cancelTakeoverIntent(
+    input: CancelTakeoverIntentInput,
+  ): Promise<TakeoverPreparationRecord | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      const authorized = await this.lockAuthorizedSession(transaction, input);
+      if (!authorized) return null;
+      const intent = await transaction.takeoverIntent.findFirst({
+        where: { companyId: input.companyId, contactId: input.contactId, id: input.intentId },
+      });
+      // Another company's intent is indistinguishable from a missing one.
+      if (intent === null) return null;
+      const territory = await this.findPreparationTerritory(
+        transaction,
+        intent.territoryExternalRef,
+      );
+      // Only a ready preparation is the contact's to cancel: an intent still
+      // awaiting company access belongs to the access-request lifecycle, and a
+      // finished one is left alone so a retried cancel converges on the same
+      // state instead of erroring.
+      if (intent.status !== 'IDENTITY_READY') {
+        return { intent, territory };
+      }
+      const cancelled = await transaction.takeoverIntent.update({
+        where: { id: intent.id },
+        data: { status: 'CANCELLED' },
+      });
+      await this.writeAudit(transaction, {
+        action: 'takeover_intent.cancelled',
+        actorId: input.sessionId,
+        actorType: 'MANAGEMENT_SESSION',
+        companyId: input.companyId,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        targetId: intent.id,
+        targetType: 'takeover_intent',
+      });
+      return { intent: cancelled, territory };
+    });
+  }
+
+  /** Transaction-scoped mutual exclusion for one contact's preparation on one company. */
+  private async lockPreparation(
+    transaction: IdentityPrismaClient,
+    companyId: string,
+    contactId: string,
+  ): Promise<void> {
+    await transaction.$queryRaw<Array<{ locked: string }>>(Prisma.sql`
+      SELECT pg_advisory_xact_lock(
+        hashtextextended(${`takeover-preparation:${companyId}:${contactId}`}, 0)
+      )::text AS "locked"
+    `);
+  }
+
+  /**
+   * A newer claim supersedes the contact's earlier preparation on the same
+   * company. Cancelling first keeps the one-ready-intent invariant satisfied
+   * before the promotion that would otherwise violate it.
+   */
+  private async supersedeReadyIntents(
+    transaction: IdentityPrismaClient,
+    input: { companyId: string; contactId: string; keepIntentId: string; requestId?: string },
+  ): Promise<void> {
+    const superseded = await transaction.takeoverIntent.findMany({
+      where: {
+        companyId: input.companyId,
+        contactId: input.contactId,
+        id: { not: input.keepIntentId },
+        status: 'IDENTITY_READY',
+      },
+      select: { id: true },
+    });
+    if (superseded.length === 0) return;
+    await transaction.takeoverIntent.updateMany({
+      where: { id: { in: superseded.map((intent) => intent.id) } },
+      data: { status: 'CANCELLED' },
+    });
+    for (const intent of superseded) {
+      await this.writeAudit(transaction, {
+        action: 'takeover_intent.superseded',
+        actorId: input.contactId,
+        actorType: 'CONTACT',
+        companyId: input.companyId,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        targetId: intent.id,
+        targetType: 'takeover_intent',
+      });
+    }
+  }
+
+  /**
+   * Row-locks the session and its grant and confirms both still authorize
+   * `companyId`, mirroring `updateTakeoverPreparation` so every preparation
+   * mutation checks authority inside the transaction that acts on it.
+   */
+  private async lockAuthorizedSession(
+    transaction: IdentityPrismaClient,
+    input: { companyId: string; contactId: string; now: Date; sessionId: string },
+  ): Promise<boolean> {
+    await transaction.$queryRaw(Prisma.sql`
+      SELECT "id" FROM "company_management_sessions"
+      WHERE "id" = ${input.sessionId}::uuid
+      FOR UPDATE
+    `);
+    const session = await transaction.companyManagementSession.findUnique({
+      where: { id: input.sessionId },
+    });
+    if (session === null) return false;
+    await transaction.$queryRaw(Prisma.sql`
+      SELECT "id" FROM "company_management_grants"
+      WHERE "id" = ${session.grantId}::uuid
+      FOR UPDATE
+    `);
+    const grant = await transaction.companyManagementGrant.findUnique({
+      where: { id: session.grantId },
+    });
+    return (
+      session.revokedAt === null &&
+      session.expiresAt > input.now &&
+      session.companyId === input.companyId &&
+      grant !== null &&
+      grant.status === 'ACTIVE' &&
+      grant.revokedAt === null &&
+      grant.contactId === input.contactId
+    );
+  }
+
+  private async findPreparationTerritory(
+    client: IdentityPrismaClient,
+    territoryExternalRef: string,
+  ): Promise<PreparationTerritoryRecord | null> {
+    const territory = await client.territory.findUnique({
+      where: { slug: territoryExternalRef },
+      include: {
+        category: { select: { name: true } },
+        ownershipHistory: {
+          where: { endedAt: null },
+          include: { company: { select: { id: true, name: true, slug: true } } },
+          take: 1,
+        },
+      },
+    });
+    if (territory === null) return null;
+    const owner = territory.ownershipHistory[0]?.company;
+    return {
+      availabilityStatus: territory.availabilityStatus,
+      categoryName: territory.category.name,
+      currency: territory.currency,
+      currentOwner: owner === undefined ? null : { name: owner.name, slug: owner.slug ?? owner.id },
+      id: territory.id,
+      minimumTakeoverAmountMinor: territory.minimumTakeoverAmountMinor,
+      name: territory.name,
+      slug: territory.slug,
+    };
   }
 
   private async writeAudit(

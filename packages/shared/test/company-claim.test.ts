@@ -15,6 +15,9 @@ import {
   recoveryRequestResultSchema,
   takeoverIntentSchema,
   takeoverPreparationRequestSchema,
+  takeoverPreparationStartRequestSchema,
+  takeoverPreparationViewSchema,
+  TAKEOVER_PREPARATION_TERRITORY_STATES,
 } from '../src/index.js';
 
 const COMPANY_ID = '11111111-1111-4111-8111-111111111111';
@@ -108,6 +111,68 @@ describe('company claim contracts', () => {
     });
 
     expect(request.quoteSnapshot?.minimumTakeoverAmount.amountMinor).toBe(26000);
+  });
+
+  it('publishes a takeover preparation view that can never offer checkout', () => {
+    const intent = takeoverIntentSchema.parse({
+      id: INTENT_ID,
+      companyId: COMPANY_ID,
+      territoryExternalRef: 'ai-coding',
+      quoteAuthority: QUOTE_AUTHORITY,
+      checkoutAvailable: false,
+      status: 'identity_ready',
+      expiresAt: '2026-08-31T00:00:00.000Z',
+    });
+    const view = takeoverPreparationViewSchema.parse({
+      intent,
+      territory: {
+        slug: 'ai-coding',
+        name: 'AI Coding',
+        categoryName: 'AI',
+        status: 'claimed',
+        minimumTakeoverAmount: { amountMinor: 26000, currency: 'USD' },
+        currentOwner: { name: 'Northwind', slug: 'northwind' },
+      },
+      territoryState: 'claimed',
+      checkoutAvailable: false,
+    });
+
+    expect(view.territory?.minimumTakeoverAmount.amountMinor).toBe(26000);
+    expect(TAKEOVER_PREPARATION_TERRITORY_STATES).toEqual([
+      'none',
+      'available',
+      'claimed',
+      'disabled',
+      'missing',
+    ]);
+    expect(() =>
+      takeoverPreparationViewSchema.parse({ ...view, checkoutAvailable: true }),
+    ).toThrow();
+    expect(
+      takeoverPreparationViewSchema.parse({
+        intent: null,
+        territory: null,
+        territoryState: 'none',
+        checkoutAvailable: false,
+      }).territoryState,
+    ).toBe('none');
+  });
+
+  it('accepts only a territory reference when starting preparation', () => {
+    expect(
+      takeoverPreparationStartRequestSchema.parse({ territoryExternalRef: 'ai-coding' }),
+    ).toEqual({
+      territoryExternalRef: 'ai-coding',
+    });
+    expect(() =>
+      takeoverPreparationStartRequestSchema.parse({
+        territoryExternalRef: 'ai-coding',
+        intendedBid: { amountMinor: 1, currency: 'USD' },
+      }),
+    ).toThrow();
+    expect(() =>
+      takeoverPreparationStartRequestSchema.parse({ territoryExternalRef: '' }),
+    ).toThrow();
   });
 
   it('rejects mixed currencies across an intended bid and reference quote', () => {

@@ -131,8 +131,33 @@ function createService(): CompanyIdentityService {
       },
       status: 'identity_ready' as const,
     })),
+    getTakeoverPreparation: vi.fn(async () => preparationView),
+    startTakeoverPreparation: vi.fn(async () => preparationView),
+    cancelTakeoverIntent: vi.fn(async () => ({
+      ...preparationView,
+      intent: { ...preparationView.intent, status: 'cancelled' as const },
+    })),
   };
 }
+
+const preparationView = {
+  checkoutAvailable: false as const,
+  intent: { ...intent, status: 'identity_ready' as const },
+  territory: {
+    categoryName: 'AI',
+    minimumTakeoverAmount: { amountMinor: 25_000, currency: 'USD' },
+    name: 'AI Coding',
+    slug: 'ai-coding',
+    status: 'unclaimed' as const,
+  },
+  territoryState: 'available' as const,
+};
+
+const managementHeaders = {
+  cookie: 'takeover_management=session; takeover_management_csrf=csrf',
+  origin: config.identity.webAppOrigin,
+  'x-csrf-token': 'csrf',
+};
 
 let app: FastifyInstance | undefined;
 
@@ -208,6 +233,107 @@ describe('company identity HTTP surface', () => {
       checkoutAvailable: false,
       quoteAuthority: 'reference_only',
     });
+  });
+
+  it('reads takeover preparation with the session cookies alone and never offers checkout', async () => {
+    const harness = buildIdentityApp();
+
+    const anonymous = await harness.app.inject({
+      method: 'GET',
+      url: '/api/company-management/takeover-preparation',
+    });
+    expect(anonymous.statusCode).toBe(401);
+    expect(harness.service.getTakeoverPreparation).not.toHaveBeenCalled();
+
+    const response = await harness.app.inject({
+      method: 'GET',
+      url: '/api/company-management/takeover-preparation',
+      headers: { cookie: managementHeaders.cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      checkoutAvailable: false,
+      territory: { minimumTakeoverAmount: { amountMinor: 25_000, currency: 'USD' } },
+      territoryState: 'available',
+    });
+    expect(harness.service.getTakeoverPreparation).toHaveBeenCalledWith('session', 'csrf');
+  });
+
+  it('starts and cancels preparation only with exact Origin, session and CSRF', async () => {
+    const harness = buildIdentityApp();
+    const start = { territoryExternalRef: 'ai-coding' };
+
+    const noOrigin = await harness.app.inject({
+      method: 'POST',
+      url: '/api/company-management/takeover-preparation',
+      headers: { cookie: managementHeaders.cookie, 'x-csrf-token': 'csrf' },
+      payload: start,
+    });
+    expect(noOrigin.statusCode).toBe(403);
+
+    const foreignOrigin = await harness.app.inject({
+      method: 'POST',
+      url: '/api/company-management/takeover-preparation',
+      headers: { ...managementHeaders, origin: 'https://evil.example' },
+      payload: start,
+    });
+    expect(foreignOrigin.statusCode).toBe(403);
+
+    const csrfMismatch = await harness.app.inject({
+      method: 'POST',
+      url: `/api/takeover-intents/${intent.id}/cancel`,
+      headers: { ...managementHeaders, 'x-csrf-token': 'other' },
+    });
+    expect(csrfMismatch.statusCode).toBe(401);
+    expect(harness.service.startTakeoverPreparation).not.toHaveBeenCalled();
+    expect(harness.service.cancelTakeoverIntent).not.toHaveBeenCalled();
+
+    const extraField = await harness.app.inject({
+      method: 'POST',
+      url: '/api/company-management/takeover-preparation',
+      headers: managementHeaders,
+      payload: { ...start, intendedBid: { amountMinor: 1, currency: 'USD' } },
+    });
+    expect(extraField.statusCode).toBe(400);
+
+    const started = await harness.app.inject({
+      method: 'POST',
+      url: '/api/company-management/takeover-preparation',
+      headers: managementHeaders,
+      payload: start,
+    });
+    expect(started.statusCode).toBe(200);
+    expect(started.json().data).toMatchObject({
+      checkoutAvailable: false,
+      territoryState: 'available',
+    });
+    expect(harness.service.startTakeoverPreparation).toHaveBeenCalledWith(
+      start,
+      'session',
+      'csrf',
+      expect.objectContaining({ requestId: expect.any(String) }),
+    );
+
+    const badId = await harness.app.inject({
+      method: 'POST',
+      url: '/api/takeover-intents/not-a-uuid/cancel',
+      headers: managementHeaders,
+    });
+    expect(badId.statusCode).toBe(400);
+
+    const cancelled = await harness.app.inject({
+      method: 'POST',
+      url: `/api/takeover-intents/${intent.id}/cancel`,
+      headers: managementHeaders,
+    });
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json().data.intent.status).toBe('cancelled');
+    expect(harness.service.cancelTakeoverIntent).toHaveBeenCalledWith(
+      intent.id,
+      'session',
+      'csrf',
+      expect.objectContaining({ requestId: expect.any(String) }),
+    );
   });
 
   it('validates claims and returns the shared success envelope', async () => {

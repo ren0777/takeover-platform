@@ -271,6 +271,64 @@ export type TakeoverIntentPreparationRecord = IntentRecord & {
   quotedWinningAmountMinor: bigint | null;
 };
 
+/**
+ * The territory a preparation points at, resolved at read time from the
+ * intent's reference so the view reflects the territory as it is now, not as
+ * it was when the intent was created.
+ */
+export type PreparationTerritoryRecord = {
+  availabilityStatus: 'ACTIVE' | 'DISABLED';
+  categoryName: string;
+  currency: string;
+  currentOwner: { name: string; slug: string } | null;
+  id: string;
+  minimumTakeoverAmountMinor: bigint;
+  name: string;
+  slug: string;
+};
+
+export type TakeoverPreparationRecord = {
+  intent: TakeoverIntentPreparationRecord | null;
+  territory: PreparationTerritoryRecord | null;
+};
+
+export type GetTakeoverPreparationInput = {
+  companyId: string;
+  contactId: string;
+  now: Date;
+};
+
+export type StartTakeoverPreparationInput = {
+  companyId: string;
+  contactId: string;
+  expiresAt: Date;
+  now: Date;
+  requestId?: string;
+  sessionId: string;
+  territoryExternalRef: string;
+};
+
+export type StartTakeoverPreparationResult =
+  | { kind: 'territory_missing' }
+  | { kind: 'territory_disabled' }
+  | { kind: 'unauthorized' }
+  | {
+      kind: 'ready';
+      /** False when the request matched the live preparation and nothing changed. */
+      created: boolean;
+      intent: TakeoverIntentPreparationRecord;
+      territory: PreparationTerritoryRecord;
+    };
+
+export type CancelTakeoverIntentInput = {
+  companyId: string;
+  contactId: string;
+  intentId: string;
+  now: Date;
+  requestId?: string;
+  sessionId: string;
+};
+
 export type RateLimitInput = {
   expiresAt: Date;
   keyDigest: Uint8Array;
@@ -341,4 +399,10 @@ export interface CompanyIdentityRepository {
   updateTakeoverPreparation(
     input: UpdateTakeoverPreparationInput,
   ): Promise<TakeoverIntentPreparationRecord | null>;
+  getTakeoverPreparation(input: GetTakeoverPreparationInput): Promise<TakeoverPreparationRecord>;
+  startTakeoverPreparation(
+    input: StartTakeoverPreparationInput,
+  ): Promise<StartTakeoverPreparationResult>;
+  /** Resolves to null when the intent is not this company's. */
+  cancelTakeoverIntent(input: CancelTakeoverIntentInput): Promise<TakeoverPreparationRecord | null>;
 }

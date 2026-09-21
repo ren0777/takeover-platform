@@ -36,6 +36,17 @@ type ManagementContextResponse = {
   };
 };
 
+type PreparationView = {
+  checkoutAvailable: boolean;
+  intent: { id: string; status: string; territoryExternalRef: string } | null;
+  territory: {
+    minimumTakeoverAmount: { amountMinor: number; currency: string };
+    name: string;
+    status: string;
+  } | null;
+  territoryState: string;
+};
+
 async function resetIdentityTables(): Promise<void> {
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE
     "security_rate_limit_buckets", "audit_logs", "email_verification_challenges",
@@ -149,6 +160,117 @@ describe('Phase 1 loopback runtime identity smoke', () => {
         csrfToken: expect.any(String),
         verificationLevels: ['contact_verified'],
       });
+
+      // Takeover preparation over HTTP: the claim's reference is not a real
+      // territory, so the view says so; selecting a real one, repeating, and
+      // cancelling all converge on one intent — and never offer checkout.
+      const preparationCategory = await prisma.territoryCategory.upsert({
+        where: { slug: 'runtime-smoke' },
+        create: { displayOrder: 998, name: 'Runtime Smoke', slug: 'runtime-smoke' },
+        update: {},
+      });
+      await prisma.territory.upsert({
+        where: { slug: 'runtime-smoke-territory' },
+        create: {
+          categoryId: preparationCategory.id,
+          currency: 'USD',
+          description: 'Runtime smoke fixture',
+          displayWeight: 40,
+          minimumTakeoverAmountMinor: 30_000n,
+          name: 'Runtime Smoke Territory',
+          slug: 'runtime-smoke-territory',
+        },
+        update: { availabilityStatus: 'ACTIVE' },
+      });
+      const mutationHeaders = {
+        ...jsonHeaders,
+        cookie: managerCookies,
+        origin: config.identity.webAppOrigin,
+        'x-csrf-token': initialContextBody.data.csrfToken,
+      };
+      const readPreparation = async () => {
+        const response = await request('/api/company-management/takeover-preparation', {
+          headers: { cookie: managerCookies },
+        });
+        expect(response.status).toBe(200);
+        return ((await response.json()) as { data: PreparationView }).data;
+      };
+      expect(await readPreparation()).toMatchObject({
+        checkoutAvailable: false,
+        intent: { territoryExternalRef: 'runtime-acme', status: 'identity_ready' },
+        territory: null,
+        territoryState: 'missing',
+      });
+      const anonymousPreparation = await request('/api/company-management/takeover-preparation');
+      expect(anonymousPreparation.status).toBe(401);
+
+      const startBody = JSON.stringify({ territoryExternalRef: 'runtime-smoke-territory' });
+      const [startA, startB] = await Promise.all([
+        request('/api/company-management/takeover-preparation', {
+          body: startBody,
+          headers: mutationHeaders,
+          method: 'POST',
+        }),
+        request('/api/company-management/takeover-preparation', {
+          body: startBody,
+          headers: mutationHeaders,
+          method: 'POST',
+        }),
+      ]);
+      expect([startA.status, startB.status]).toEqual([200, 200]);
+      const startedA = ((await startA.json()) as { data: PreparationView }).data;
+      const startedB = ((await startB.json()) as { data: PreparationView }).data;
+      expect(startedA.intent?.id).toBe(startedB.intent?.id);
+      expect(startedA).toMatchObject({
+        checkoutAvailable: false,
+        territory: {
+          minimumTakeoverAmount: { amountMinor: 30_000, currency: 'USD' },
+          name: 'Runtime Smoke Territory',
+          status: 'unclaimed',
+        },
+        territoryState: 'available',
+      });
+      expect(
+        await prisma.takeoverIntent.count({
+          where: { companyId: initialClaimBody.data.company.id, status: 'IDENTITY_READY' },
+        }),
+      ).toBe(1);
+
+      const foreignOriginStart = await request('/api/company-management/takeover-preparation', {
+        body: startBody,
+        headers: { ...mutationHeaders, origin: 'https://evil.example' },
+        method: 'POST',
+      });
+      expect(foreignOriginStart.status).toBe(403);
+      const missingStart = await request('/api/company-management/takeover-preparation', {
+        body: JSON.stringify({ territoryExternalRef: 'no-such-territory' }),
+        headers: mutationHeaders,
+        method: 'POST',
+      });
+      expect(missingStart.status).toBe(404);
+
+      const activeIntentId = startedA.intent?.id;
+      if (activeIntentId === undefined) throw new Error('Expected an active preparation');
+      // Cancel carries no body, so no JSON content-type, as the browser client sends it.
+      const cancelHeaders = {
+        cookie: mutationHeaders.cookie,
+        origin: mutationHeaders.origin,
+        'x-csrf-token': mutationHeaders['x-csrf-token'],
+      };
+      const cancelled = await request(`/api/takeover-intents/${activeIntentId}/cancel`, {
+        headers: cancelHeaders,
+        method: 'POST',
+      });
+      expect(cancelled.status).toBe(200);
+      expect(((await cancelled.json()) as { data: PreparationView }).data.intent?.status).toBe(
+        'cancelled',
+      );
+      expect(await readPreparation()).toMatchObject({ intent: null, territoryState: 'none' });
+      const cancelAgain = await request(`/api/takeover-intents/${activeIntentId}/cancel`, {
+        headers: cancelHeaders,
+        method: 'POST',
+      });
+      expect(cancelAgain.status).toBe(200);
 
       await prisma.company.update({
         where: { id: initialClaimBody.data.company.id },

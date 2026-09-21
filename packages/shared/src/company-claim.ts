@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { ACCESS_REQUEST_STATUSES, QUOTE_AUTHORITY, TAKEOVER_INTENT_STATUSES } from './constants.js';
+import {
+  ACCESS_REQUEST_STATUSES,
+  QUOTE_AUTHORITY,
+  TAKEOVER_INTENT_STATUSES,
+  TERRITORY_PUBLIC_STATUSES,
+} from './constants.js';
 import {
   companyInputSchema,
   companySchema,
@@ -267,3 +272,46 @@ export const recoveryRequestResultSchema = z.object({
   executionAvailable: z.literal(false),
 });
 export type RecoveryRequestResult = z.infer<typeof recoveryRequestResultSchema>;
+
+/**
+ * How the territory attached to a preparation currently stands, resolved
+ * server-side at read time so the view never trusts the intent's reference
+ * alone. `none` means no active preparation; `missing` means the reference no
+ * longer matches any territory.
+ */
+export const TAKEOVER_PREPARATION_TERRITORY_STATES = [
+  'none',
+  'available',
+  'claimed',
+  'disabled',
+  'missing',
+] as const;
+export const takeoverPreparationTerritoryStateSchema = z.enum(
+  TAKEOVER_PREPARATION_TERRITORY_STATES,
+);
+export type TakeoverPreparationTerritoryState = z.infer<
+  typeof takeoverPreparationTerritoryStateSchema
+>;
+
+export const takeoverPreparationTerritorySchema = z.object({
+  slug: z.string().min(1).max(120),
+  name: z.string().min(1).max(120),
+  categoryName: z.string().min(1).max(100),
+  status: z.enum(TERRITORY_PUBLIC_STATUSES),
+  minimumTakeoverAmount: moneySchema,
+  currentOwner: z.object({ name: z.string().min(1), slug: z.string().min(1) }).optional(),
+});
+export type TakeoverPreparationTerritory = z.infer<typeof takeoverPreparationTerritorySchema>;
+
+export const takeoverPreparationViewSchema = z.object({
+  intent: takeoverIntentSchema.nullable(),
+  territory: takeoverPreparationTerritorySchema.nullable(),
+  territoryState: takeoverPreparationTerritoryStateSchema,
+  checkoutAvailable: z.literal(false),
+});
+export type TakeoverPreparationView = z.infer<typeof takeoverPreparationViewSchema>;
+
+export const takeoverPreparationStartRequestSchema = z
+  .object({ territoryExternalRef: territoryExternalRefSchema })
+  .strict();
+export type TakeoverPreparationStartRequest = z.infer<typeof takeoverPreparationStartRequestSchema>;

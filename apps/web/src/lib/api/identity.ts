@@ -7,6 +7,7 @@ import {
   managementContextSchema,
   recoveryRequestResultSchema,
   takeoverIntentSchema,
+  takeoverPreparationViewSchema,
   type AccessDecisionRequest,
   type AccessDecisionResult,
   type AcceptedDelivery,
@@ -22,6 +23,8 @@ import {
   type RecoveryRequestResult,
   type TakeoverIntent,
   type TakeoverPreparationRequest,
+  type TakeoverPreparationStartRequest,
+  type TakeoverPreparationView,
 } from '@takeover/shared';
 import { apiCommand, apiRequest } from '@/lib/api/client';
 
@@ -158,6 +161,40 @@ export function updateTakeoverPreparation(
     path: `/api/takeover-intents/${encodeURIComponent(intentId)}/preparation`,
     body: input,
     schema: takeoverIntentSchema,
+    withCsrf: true,
+  });
+}
+
+/** The session contact's current preparation. Cookies alone authorize the read. */
+export function getTakeoverPreparation(): Promise<TakeoverPreparationView> {
+  return apiRequest({
+    method: 'GET',
+    path: '/api/company-management/takeover-preparation',
+    schema: takeoverPreparationViewSchema,
+  });
+}
+
+/**
+ * Starts or restarts preparation for one territory. Repeating the same
+ * territory returns the existing preparation; a different one supersedes it.
+ */
+export function startTakeoverPreparation(
+  input: TakeoverPreparationStartRequest,
+): Promise<TakeoverPreparationView> {
+  return apiRequest({
+    method: 'POST',
+    path: '/api/company-management/takeover-preparation',
+    body: input,
+    schema: takeoverPreparationViewSchema,
+    withCsrf: true,
+  });
+}
+
+export function cancelTakeoverIntent(intentId: string): Promise<TakeoverPreparationView> {
+  return apiRequest({
+    method: 'POST',
+    path: `/api/takeover-intents/${encodeURIComponent(intentId)}/cancel`,
+    schema: takeoverPreparationViewSchema,
     withCsrf: true,
   });
 }

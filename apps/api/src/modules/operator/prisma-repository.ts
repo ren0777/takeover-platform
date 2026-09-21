@@ -339,6 +339,39 @@ export class PrismaOperatorRepository implements OperatorRepository {
               intent.contactId === before.contactId &&
               ['AWAITING_COMPANY_ACCESS', 'IDENTITY_READY'].includes(intent.status)
             ) {
+              const promoting = input.decision !== 'reject' && intent.expiresAt > input.now;
+              if (promoting) {
+                // The recovered request's intent becomes the contact's one
+                // ready preparation on this company; any earlier ready intent
+                // is superseded first so the partial unique index holds.
+                const superseded = await tx.takeoverIntent.findMany({
+                  where: {
+                    companyId: intent.companyId,
+                    contactId: intent.contactId,
+                    id: { not: intent.id },
+                    status: 'IDENTITY_READY',
+                  },
+                  select: { id: true },
+                });
+                if (superseded.length > 0) {
+                  await tx.takeoverIntent.updateMany({
+                    where: { id: { in: superseded.map((row) => row.id) } },
+                    data: { status: 'CANCELLED' },
+                  });
+                  for (const row of superseded) {
+                    await tx.auditLog.create({
+                      data: this.audit(
+                        input,
+                        'takeover_intent.superseded',
+                        'takeover_intent',
+                        row.id,
+                        intent.companyId,
+                        { supersededBy: intent.id },
+                      ),
+                    });
+                  }
+                }
+              }
               await tx.takeoverIntent.update({
                 where: { id: intent.id },
                 data: {

@@ -266,6 +266,8 @@ model CompanyAccessRequest {
   @@map("company_access_requests")
 }
 
+/// At most one IDENTITY_READY intent exists per (companyId, contactId); the partial
+/// unique index lives in migration 20260921120000 because Prisma cannot express it.
 model TakeoverIntent {
   id                       String                @id @default(uuid()) @db.Uuid
   companyId                String                @map("company_id") @db.Uuid

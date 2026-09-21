@@ -19,9 +19,12 @@ type PrepState =
 
 export function TakeoverPreparationForm({
   intentId,
+  territoryExternalRef,
   currency,
 }: {
   intentId: string;
+  /** Bound to the active preparation; never typed by the person. */
+  territoryExternalRef: string;
   currency: string;
 }) {
   const [state, setState] = useState<PrepState>({ status: 'idle' });
@@ -29,7 +32,6 @@ export function TakeoverPreparationForm({
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const territoryExternalRef = String(form.get('territoryExternalRef') ?? '').trim();
     const bidInput = String(form.get('intendedBid') ?? '').trim();
 
     const request: TakeoverPreparationRequest = { territoryExternalRef };
@@ -61,14 +63,10 @@ export function TakeoverPreparationForm({
 
   return (
     <form onSubmit={onSubmit} className="mt-3 max-w-md space-y-4">
-      <FormField
-        id="territoryExternalRef"
-        name="territoryExternalRef"
-        label="Territory reference"
-        required
-        disabled={state.status === 'submitting'}
-        hint="Territories are not modelled yet, so this is an opaque reference only."
-      />
+      <p className="text-sm text-[var(--color-muted)]">
+        For <span className="font-[family-name:var(--font-mono)]">{territoryExternalRef}</span>. The
+        amount is recorded against this preparation only.
+      </p>
       <FormField
         id="intendedBid"
         name="intendedBid"

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { type EmailTokenExchangeResult } from '@takeover/shared';
 import { Notice } from '@/components/ui/notice';
 import { exchangeEmailVerification } from '@/lib/api/identity';
@@ -15,6 +15,17 @@ export function VerifyExchange() {
     [],
   );
   const state = useFragmentExchange(exchange);
+  const managementReady =
+    state.status === 'succeeded' && state.result.nextAction === 'manage_company';
+
+  // The session cookies are already set; management is where preparation
+  // lives, so a verified manager is taken there. `replace` keeps the spent
+  // verification URL out of history. The link below remains as a fallback.
+  useEffect(() => {
+    if (!managementReady) return;
+    const timer = setTimeout(() => window.location.replace('/manage/company'), 1_500);
+    return () => clearTimeout(timer);
+  }, [managementReady]);
 
   if (state.status === 'reading' || state.status === 'exchanging') {
     return <Notice variant="info" title="Verifying your contact email…" />;
@@ -96,7 +107,10 @@ export function VerifyExchange() {
     <div className="space-y-4">
       <Notice variant="info" title="Contact email verified">
         <p>
-          You can now manage <strong>{company.name}</strong> in this browser.
+          You can now manage <strong>{company.name}</strong> in this browser. Taking you to company
+          management, where your territory preparation for{' '}
+          <span className="font-[family-name:var(--font-mono)]">{intent.territoryExternalRef}</span>{' '}
+          is waiting…
         </p>
       </Notice>
 
@@ -108,7 +122,7 @@ export function VerifyExchange() {
       </Notice>
 
       <Link
-        href={`/manage/company?intentId=${encodeURIComponent(intent.id)}`}
+        href="/manage/company"
         className="inline-flex min-h-11 items-center rounded-[var(--radius-control)] bg-[var(--color-foreground)] px-4 font-semibold text-[#09090b]"
       >
         Open company management

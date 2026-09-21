@@ -224,6 +224,54 @@ describe('operator PostgreSQL mutations', () => {
       await prisma.auditLog.count({ where: { action: 'operator.company_recovery.approved' } }),
     ).toBe(1);
   });
+  it('supersedes an earlier ready intent when recovery promotes the request intent', async () => {
+    const { company, contact, request, now } = await recoveryFixture();
+    const earlier = await prisma.takeoverIntent.create({
+      data: {
+        companyId: company.id,
+        contactId: contact.id,
+        expiresAt: new Date(now.getTime() + 60_000),
+        status: 'IDENTITY_READY',
+        territoryExternalRef: 'earlier-territory',
+      },
+    });
+    const recovering = await prisma.takeoverIntent.create({
+      data: {
+        companyId: company.id,
+        contactId: contact.id,
+        expiresAt: new Date(now.getTime() + 60_000),
+        status: 'AWAITING_COMPANY_ACCESS',
+        territoryExternalRef: 'recovered-territory',
+      },
+    });
+    await prisma.companyAccessRequest.update({
+      where: { id: request.id },
+      data: { takeoverIntentId: recovering.id },
+    });
+    const refreshed = await prisma.companyAccessRequest.findUniqueOrThrow({
+      where: { id: request.id },
+    });
+
+    await new PrismaOperatorRepository(prisma).decideRecoveryRequest({
+      id: request.id,
+      operatorId,
+      reason: 'Reviewed independent recovery evidence',
+      expectedUpdatedAt: refreshed.updatedAt,
+      decision: 'approve',
+      now,
+    });
+
+    await expect(
+      prisma.takeoverIntent.findUniqueOrThrow({ where: { id: earlier.id } }),
+    ).resolves.toMatchObject({ status: 'CANCELLED' });
+    await expect(
+      prisma.takeoverIntent.findUniqueOrThrow({ where: { id: recovering.id } }),
+    ).resolves.toMatchObject({ status: 'IDENTITY_READY' });
+    expect(await prisma.auditLog.count({ where: { action: 'takeover_intent.superseded' } })).toBe(
+      1,
+    );
+  });
+
   it('atomically records before/after audit evidence and rejects a stale repeat', async () => {
     const company = await prisma.company.create({
       data: {

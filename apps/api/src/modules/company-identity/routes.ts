@@ -7,6 +7,7 @@ import {
   managementLinkRequestSchema,
   recoveryRequestSchema,
   takeoverPreparationRequestSchema,
+  takeoverPreparationStartRequestSchema,
   type ApiSuccess,
 } from '@takeover/shared';
 import type { FastifyInstance } from 'fastify';
@@ -193,6 +194,43 @@ export async function companyIdentityRoutes(
     const input = recoveryRequestSchema.parse(request.body);
     const data = await options.service.requestManualRecovery(input, requestContext(request));
     return reply.status(202).send({ data, meta: { requestId: request.id } });
+  });
+
+  app.get('/api/company-management/takeover-preparation', async (request) => {
+    const sessionToken = requiredCookie(request.cookies[MANAGEMENT_SESSION_COOKIE_NAME]);
+    const csrfToken = requiredCookie(request.cookies[MANAGEMENT_CSRF_COOKIE_NAME]);
+    const data = await options.service.getTakeoverPreparation(sessionToken, csrfToken);
+    return { data, meta: { requestId: request.id } };
+  });
+
+  app.post('/api/company-management/takeover-preparation', async (request) => {
+    const input = takeoverPreparationStartRequestSchema.parse(request.body);
+    const { csrfToken, sessionToken } = managementMutationSecrets(
+      request,
+      options.config.webAppOrigin,
+    );
+    const data = await options.service.startTakeoverPreparation(
+      input,
+      sessionToken,
+      csrfToken,
+      requestContext(request),
+    );
+    return { data, meta: { requestId: request.id } };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/takeover-intents/:id/cancel', async (request) => {
+    const intentId = accessRequestIdSchema.parse(request.params.id);
+    const { csrfToken, sessionToken } = managementMutationSecrets(
+      request,
+      options.config.webAppOrigin,
+    );
+    const data = await options.service.cancelTakeoverIntent(
+      intentId,
+      sessionToken,
+      csrfToken,
+      requestContext(request),
+    );
+    return { data, meta: { requestId: request.id } };
   });
 
   app.put<{ Params: { id: string } }>('/api/takeover-intents/:id/preparation', async (request) => {

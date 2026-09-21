@@ -1,10 +1,12 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import { type CompanyClaimResult } from '@takeover/shared';
+import Link from 'next/link';
+import { type CompanyClaimResult, type TerritorySummary } from '@takeover/shared';
 import { Notice } from '@/components/ui/notice';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
+import { StatusBadge, type BadgeTone } from '@/components/ui/status-badge';
 import { ApiRequestError } from '@/lib/api/client';
 import { beginCompanyClaim } from '@/lib/api/identity';
 import { describeIdentityError } from '@/lib/identity/error-copy';
@@ -16,7 +18,18 @@ type ClaimState =
   | { status: 'submitted'; result: CompanyClaimResult; contactEmail: string }
   | { status: 'failed'; code: string; requestId: string | undefined };
 
-export function ClaimForm({ territoryExternalRef }: { territoryExternalRef: string | null }) {
+/** The board's territory, resolved by the page: name and state come from the server. */
+export type SelectedTerritory = Pick<TerritorySummary, 'name' | 'slug' | 'status'> & {
+  category: Pick<TerritorySummary['category'], 'name' | 'slug'>;
+};
+
+const TERRITORY_STATUS: Record<SelectedTerritory['status'], { label: string; tone: BadgeTone }> = {
+  unclaimed: { label: 'Unclaimed', tone: 'info' },
+  claimed: { label: 'Claimed', tone: 'neutral' },
+  disabled: { label: 'Unavailable', tone: 'warning' },
+};
+
+export function ClaimForm({ territory }: { territory: SelectedTerritory }) {
   const [state, setState] = useState<ClaimState>({ status: 'idle' });
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -34,7 +47,7 @@ export function ClaimForm({ territoryExternalRef }: { territoryExternalRef: stri
           ...(logoUrl.length > 0 ? { logoUrl } : {}),
         },
         contactEmail,
-        intent: { territoryExternalRef: String(form.get('territoryExternalRef') ?? '').trim() },
+        intent: { territoryExternalRef: territory.slug },
       });
       // The result carries no contact email; resending the verification
       // needs the exact address this claim was submitted with.
@@ -130,17 +143,28 @@ export function ClaimForm({ territoryExternalRef }: { territoryExternalRef: stri
         autoComplete="email"
         hint="Any address works, including a personal one. Management links are sent here."
       />
-      {/* defaultValue, not placeholder: a placeholder is never submitted, so a
-          deep link from a territory used to post an empty reference. */}
-      <FormField
-        id="territoryExternalRef"
-        name="territoryExternalRef"
-        label="Territory reference"
-        required
-        disabled={busy}
-        {...(territoryExternalRef === null ? {} : { defaultValue: territoryExternalRef })}
-        hint="Territories are not modelled yet, so this is an opaque reference."
-      />
+      {/* The territory is chosen on the board, never typed here. The hidden
+          field carries it through the form post; the summary shows it. */}
+      <input type="hidden" name="territoryExternalRef" value={territory.slug} />
+      <div className="rounded-[var(--radius-control)] border border-[var(--color-border)] p-4 text-sm">
+        <p className="text-[var(--color-muted)]">Selected territory</p>
+        <p className="mt-1 flex flex-wrap items-center gap-2">
+          <Link href={`/territory/${territory.slug}`} className="font-medium underline">
+            {territory.name}
+          </Link>
+          <span className="text-xs tracking-wide text-[var(--color-muted)] uppercase">
+            {territory.category.name}
+          </span>
+          <StatusBadge
+            tone={TERRITORY_STATUS[territory.status].tone}
+            label={TERRITORY_STATUS[territory.status].label}
+          />
+        </p>
+        <p className="mt-2 text-[var(--color-muted)]">
+          It stays attached to your company through email verification and appears under takeover
+          preparation once you can manage the company.
+        </p>
+      </div>
 
       <Button type="submit" fullWidth busy={busy} busyLabel="Submitting…">
         Claim this company

@@ -7,6 +7,7 @@ import {
   managementLinkRequestSchema,
   recoveryRequestSchema,
   takeoverPreparationRequestSchema,
+  takeoverPreparationStartRequestSchema,
   type AccessDecisionRequest,
   type AccessDecisionResult,
   type AcceptedDelivery,
@@ -23,6 +24,8 @@ import {
   type RecoveryRequestResult,
   type TakeoverIntent,
   type TakeoverPreparationRequest,
+  type TakeoverPreparationStartRequest,
+  type TakeoverPreparationView,
 } from '@takeover/shared';
 import { z } from 'zod';
 import type { IdentityConfig } from '../../config/env.js';
@@ -33,12 +36,16 @@ import {
   normalizeCompanyWebsite,
   normalizeContactEmail,
   normalizeIpAddress,
+  PreparationTerritoryDisabledError,
+  PreparationTerritoryNotFoundError,
 } from './domain.js';
 import type {
   CompanyIdentityRepository,
   CompanyRecord,
   IntentRecord,
+  ManagementSessionAuthority,
   TakeoverIntentPreparationRecord,
+  TakeoverPreparationRecord,
 } from './repository.js';
 import {
   assertCompanyAuthority,
@@ -159,6 +166,45 @@ function mapPreparedIntent(record: TakeoverIntentPreparationRecord): TakeoverInt
             territoryVersion: record.quotedTerritoryVersion,
           },
         }),
+  };
+}
+
+/**
+ * The preparation as the browser may see it. The territory is projected from
+ * its current row, so a territory that was claimed, disabled or removed since
+ * the intent was created reports that state rather than the stale reference.
+ */
+function mapPreparationView(record: TakeoverPreparationRecord): TakeoverPreparationView {
+  if (record.intent === null) {
+    return { checkoutAvailable: false, intent: null, territory: null, territoryState: 'none' };
+  }
+  const intent = mapPreparedIntent(record.intent);
+  if (record.territory === null) {
+    return { checkoutAvailable: false, intent, territory: null, territoryState: 'missing' };
+  }
+  const territoryState =
+    record.territory.availabilityStatus === 'DISABLED'
+      ? 'disabled'
+      : record.territory.currentOwner === null
+        ? 'available'
+        : 'claimed';
+  return {
+    checkoutAvailable: false,
+    intent,
+    territory: {
+      categoryName: record.territory.categoryName,
+      ...(record.territory.currentOwner === null
+        ? {}
+        : { currentOwner: record.territory.currentOwner }),
+      minimumTakeoverAmount: {
+        amountMinor: safeMinorAmount(record.territory.minimumTakeoverAmountMinor),
+        currency: record.territory.currency,
+      },
+      name: record.territory.name,
+      slug: record.territory.slug,
+      status: territoryState === 'available' ? 'unclaimed' : territoryState,
+    },
+    territoryState,
   };
 }
 
@@ -296,6 +342,31 @@ export function createCompanyIdentityService(dependencies: CompanyIdentityServic
       checkoutAvailable: false,
     };
   };
+
+  /**
+   * Resolves the session cookie and CSRF token to a live company-scoped
+   * authority, or refuses. Every preparation read and mutation starts here.
+   */
+  async function requireSessionAuthority(
+    sessionToken: string,
+    csrfToken: string,
+  ): Promise<ManagementSessionAuthority & { contactId: string }> {
+    const authority = await dependencies.repository.resolveManagementSession(
+      dependencies.tokens.digestSessionToken(sessionToken),
+      dependencies.clock.now(),
+    );
+    if (
+      authority === null ||
+      authority.contactId === undefined ||
+      !dependencies.tokens.verifyDigest(
+        dependencies.tokens.digestCsrfToken(csrfToken),
+        authority.csrfDigest,
+      )
+    ) {
+      throw new ManagementAuthorizationRequiredError();
+    }
+    return { ...authority, contactId: authority.contactId };
+  }
 
   return {
     async beginCompanyClaim(
@@ -892,6 +963,69 @@ export function createCompanyIdentityService(dependencies: CompanyIdentityServic
       });
       if (record === null) throw new ManagementAuthorizationRequiredError();
       return mapPreparedIntent(record);
+    },
+
+    async getTakeoverPreparation(
+      sessionToken: string,
+      csrfToken: string,
+    ): Promise<TakeoverPreparationView> {
+      const authority = await requireSessionAuthority(sessionToken, csrfToken);
+      const record = await dependencies.repository.getTakeoverPreparation({
+        companyId: authority.companyId,
+        contactId: authority.contactId,
+        now: dependencies.clock.now(),
+      });
+      return mapPreparationView(record);
+    },
+
+    async startTakeoverPreparation(
+      rawRequest: TakeoverPreparationStartRequest,
+      sessionToken: string,
+      csrfToken: string,
+      context: IdentityRequestContext,
+    ): Promise<TakeoverPreparationView> {
+      const request = takeoverPreparationStartRequestSchema.parse(rawRequest);
+      const authority = await requireSessionAuthority(sessionToken, csrfToken);
+      const now = dependencies.clock.now();
+      const result = await dependencies.repository.startTakeoverPreparation({
+        companyId: authority.companyId,
+        contactId: authority.contactId,
+        expiresAt: addSeconds(now, dependencies.config.draftTtlSeconds),
+        now,
+        requestId: context.requestId,
+        sessionId: authority.sessionId,
+        territoryExternalRef: request.territoryExternalRef,
+      });
+      switch (result.kind) {
+        case 'territory_missing':
+          throw new PreparationTerritoryNotFoundError();
+        case 'territory_disabled':
+          throw new PreparationTerritoryDisabledError();
+        case 'unauthorized':
+          throw new ManagementAuthorizationRequiredError();
+        case 'ready':
+          return mapPreparationView(result);
+      }
+    },
+
+    async cancelTakeoverIntent(
+      intentId: string,
+      sessionToken: string,
+      csrfToken: string,
+      context: IdentityRequestContext,
+    ): Promise<TakeoverPreparationView> {
+      const authority = await requireSessionAuthority(sessionToken, csrfToken);
+      const record = await dependencies.repository.cancelTakeoverIntent({
+        companyId: authority.companyId,
+        contactId: authority.contactId,
+        intentId,
+        now: dependencies.clock.now(),
+        requestId: context.requestId,
+        sessionId: authority.sessionId,
+      });
+      // Not this company's intent: indistinguishable from no authority.
+      if (record === null) throw new ManagementAuthorizationRequiredError();
+      return mapPreparationView(record);
     },
   };
 }

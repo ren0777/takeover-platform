@@ -12,16 +12,17 @@ export default function HomePage() {
       </h1>
       <p className="text-xl text-[var(--color-muted)]">{SITE.tagline}</p>
       <p className="max-w-xl border-l border-[var(--color-border)] pl-4 text-sm leading-6 text-[var(--color-muted)]">
-        The territory board and capture flow are not built yet. Company identity is, so a company
-        can be claimed and managed today — without an account or a password.
+        The territory board is live: pick a territory, claim your company, and verify your email —
+        without an account or a password. Paid capture is not available yet, so nothing here can
+        charge you or transfer ownership.
       </p>
 
       <div className="mt-2 flex flex-col gap-3 sm:flex-row">
         <Link
-          href="/claim"
+          href="/territories"
           className="inline-flex min-h-11 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-foreground)] px-4 text-sm font-semibold text-[#09090b] transition-opacity duration-150 hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-foreground)] motion-reduce:transition-none"
         >
-          Claim a company
+          Browse territories
         </Link>
         <Link
           href="/manage"

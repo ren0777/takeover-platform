@@ -91,6 +91,11 @@ export {
   takeoverIntentSchema,
   takeoverIntentStatusSchema,
   takeoverPreparationRequestSchema,
+  takeoverPreparationStartRequestSchema,
+  takeoverPreparationTerritorySchema,
+  takeoverPreparationTerritoryStateSchema,
+  takeoverPreparationViewSchema,
+  TAKEOVER_PREPARATION_TERRITORY_STATES,
   territoryExternalRefSchema,
   type AcceptedDelivery,
   type AccessDecisionRequest,
@@ -113,6 +118,10 @@ export {
   type TakeoverIntent,
   type TakeoverIntentStatus,
   type TakeoverPreparationRequest,
+  type TakeoverPreparationStartRequest,
+  type TakeoverPreparationTerritory,
+  type TakeoverPreparationTerritoryState,
+  type TakeoverPreparationView,
 } from './company-claim.js';
 export { createMoney, CURRENCY_CODE_PATTERN, isMoney, moneySchema, type Money } from './money.js';
 export { attemptStateEnum, attemptStatusSchema, type AttemptState, type AttemptStatus } from './attempt-state.js';

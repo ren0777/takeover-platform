@@ -87,6 +87,9 @@ function createHarness(
     resolveManagementSession: vi.fn(async () => null),
     revokeManagementSession: vi.fn(async () => undefined),
     updateTakeoverPreparation: vi.fn(async () => null),
+    getTakeoverPreparation: vi.fn(async () => ({ intent: null, territory: null })),
+    startTakeoverPreparation: vi.fn(async () => ({ kind: 'unauthorized' })),
+    cancelTakeoverIntent: vi.fn(async () => null),
   } as unknown as CompanyIdentityRepository;
   const emailProvider: EmailProvider = {
     sendVerification: vi.fn(async () => ({ acceptedAt: now, messageId: 'message-1' })),
@@ -788,5 +791,193 @@ describe('manual recovery and takeover preparation seams', () => {
         territoryExternalRef: 'ai-coding',
       }),
     );
+  });
+});
+
+describe('takeover preparation lifecycle', () => {
+  const contactId = '22222222-2222-4222-8222-222222222222';
+  const territory = {
+    availabilityStatus: 'ACTIVE' as const,
+    categoryName: 'AI',
+    currency: 'USD',
+    currentOwner: null,
+    id: '21000000-0000-4000-8000-000000000001',
+    minimumTakeoverAmountMinor: 25_000n,
+    name: 'AI Coding',
+    slug: 'ai-coding',
+  };
+  const readyIntent = {
+    ...intent,
+    currency: null,
+    intendedAmountMinor: null,
+    quoteObservedAt: null,
+    quotedMinimumAmountMinor: null,
+    quotedOwnerCompanyId: null,
+    quotedTerritoryVersion: null,
+    quotedWinningAmountMinor: null,
+    status: 'IDENTITY_READY' as const,
+  };
+  const context = { ipAddress: '203.0.113.20', requestId: 'prep-1' };
+
+  function authorizedHarness() {
+    const harness = createHarness();
+    const tokens = createOpaqueTokenService(
+      parseApiConfig({ NODE_ENV: 'test' }).identity.tokenHmacSecret,
+    );
+    const session = tokens.issueSessionToken();
+    const csrf = tokens.issueSessionToken();
+    vi.mocked(harness.repository.resolveManagementSession).mockResolvedValue({
+      company,
+      companyId: company.id,
+      contactId,
+      csrfDigest: tokens.digestCsrfToken(csrf.rawToken),
+      expiresAt: new Date('2026-08-30T21:00:00.000Z'),
+      grantId: '55555555-5555-4555-8555-555555555555',
+      sessionId: '66666666-6666-4666-8666-666666666666',
+      verificationLevels: ['CONTACT_VERIFIED'],
+    });
+    return { ...harness, csrf: csrf.rawToken, session: session.rawToken };
+  }
+
+  it('reports no preparation when the contact has no live ready intent', async () => {
+    const { csrf, service, session, repository } = authorizedHarness();
+
+    await expect(service.getTakeoverPreparation(session, csrf)).resolves.toEqual({
+      checkoutAvailable: false,
+      intent: null,
+      territory: null,
+      territoryState: 'none',
+    });
+    expect(repository.getTakeoverPreparation).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: company.id, contactId }),
+    );
+  });
+
+  it('projects the territory as it stands now, never offering checkout', async () => {
+    const { csrf, service, session, repository } = authorizedHarness();
+    vi.mocked(repository.getTakeoverPreparation).mockResolvedValueOnce({
+      intent: readyIntent,
+      territory: { ...territory, currentOwner: { name: 'Northwind', slug: 'northwind' } },
+    });
+
+    const view = await service.getTakeoverPreparation(session, csrf);
+
+    expect(view).toMatchObject({
+      checkoutAvailable: false,
+      intent: { id: intent.id, status: 'identity_ready', checkoutAvailable: false },
+      territory: {
+        currentOwner: { name: 'Northwind', slug: 'northwind' },
+        minimumTakeoverAmount: { amountMinor: 25_000, currency: 'USD' },
+        name: 'AI Coding',
+        status: 'claimed',
+      },
+      territoryState: 'claimed',
+    });
+  });
+
+  it.each([
+    ['disabled', { ...territory, availabilityStatus: 'DISABLED' as const }, 'disabled', 'disabled'],
+    ['missing', null, 'missing', undefined],
+  ])(
+    'surfaces a %s territory instead of failing the read',
+    async (_label, record, state, status) => {
+      const { csrf, service, session, repository } = authorizedHarness();
+      vi.mocked(repository.getTakeoverPreparation).mockResolvedValueOnce({
+        intent: readyIntent,
+        territory: record,
+      });
+
+      const view = await service.getTakeoverPreparation(session, csrf);
+
+      expect(view.territoryState).toBe(state);
+      expect(view.territory?.status).toBe(status);
+      expect(view.intent?.id).toBe(intent.id);
+    },
+  );
+
+  it('refuses every preparation read and mutation without a valid session', async () => {
+    const { service } = createHarness();
+
+    await expect(service.getTakeoverPreparation('nope', 'nope')).rejects.toMatchObject({
+      code: 'AUTHORIZATION_REQUIRED',
+    });
+    await expect(
+      service.startTakeoverPreparation(
+        { territoryExternalRef: 'ai-coding' },
+        'nope',
+        'nope',
+        context,
+      ),
+    ).rejects.toMatchObject({ code: 'AUTHORIZATION_REQUIRED' });
+    await expect(
+      service.cancelTakeoverIntent(intent.id, 'nope', 'nope', context),
+    ).rejects.toMatchObject({ code: 'AUTHORIZATION_REQUIRED' });
+  });
+
+  it('starts preparation for the session contact with the configured draft lifetime', async () => {
+    const { csrf, service, session, repository } = authorizedHarness();
+    vi.mocked(repository.startTakeoverPreparation).mockResolvedValueOnce({
+      created: true,
+      intent: readyIntent,
+      kind: 'ready',
+      territory,
+    });
+
+    const view = await service.startTakeoverPreparation(
+      { territoryExternalRef: 'ai-coding' },
+      session,
+      csrf,
+      context,
+    );
+
+    expect(view).toMatchObject({ territoryState: 'available', checkoutAvailable: false });
+    expect(repository.startTakeoverPreparation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: company.id,
+        contactId,
+        expiresAt: new Date(now.getTime() + 86_400 * 1000),
+        sessionId: '66666666-6666-4666-8666-666666666666',
+        territoryExternalRef: 'ai-coding',
+      }),
+    );
+  });
+
+  it.each([
+    ['territory_missing', 'TERRITORY_NOT_FOUND', 404],
+    ['territory_disabled', 'TERRITORY_DISABLED', 409],
+    ['unauthorized', 'AUTHORIZATION_REQUIRED', 401],
+  ] as const)('maps a %s start outcome to %s', async (kind, code, statusCode) => {
+    const { csrf, service, session, repository } = authorizedHarness();
+    vi.mocked(repository.startTakeoverPreparation).mockResolvedValueOnce({ kind });
+
+    await expect(
+      service.startTakeoverPreparation(
+        { territoryExternalRef: 'ai-coding' },
+        session,
+        csrf,
+        context,
+      ),
+    ).rejects.toMatchObject({ code, statusCode });
+  });
+
+  it('cancels only an intent the repository confirms belongs to this company', async () => {
+    const { csrf, service, session, repository } = authorizedHarness();
+    vi.mocked(repository.cancelTakeoverIntent).mockResolvedValueOnce({
+      intent: { ...readyIntent, status: 'CANCELLED' },
+      territory,
+    });
+
+    const view = await service.cancelTakeoverIntent(intent.id, session, csrf, context);
+
+    expect(view.intent?.status).toBe('cancelled');
+    expect(view.territoryState).toBe('available');
+    expect(repository.cancelTakeoverIntent).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: company.id, contactId, intentId: intent.id }),
+    );
+
+    vi.mocked(repository.cancelTakeoverIntent).mockResolvedValueOnce(null);
+    await expect(
+      service.cancelTakeoverIntent(intent.id, session, csrf, context),
+    ).rejects.toMatchObject({ code: 'AUTHORIZATION_REQUIRED' });
   });
 });

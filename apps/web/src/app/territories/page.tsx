@@ -5,7 +5,7 @@ import { TerritoryMosaic } from '@/components/territory/territory-mosaic';
 import { ErrorState } from '@/components/ui/error-state';
 import { PageHeader } from '@/components/ui/page-header';
 import { describeReadFailure } from '@/lib/data/failure';
-import { getTerritories, getTerritoryCategories } from '@/lib/data/territories';
+import { getAllTerritories, getTerritoryCategories } from '@/lib/data/territories';
 import { publicPageMetadata } from '@/lib/metadata';
 
 export const metadata: Metadata = publicPageMetadata({
@@ -26,7 +26,7 @@ export default async function TerritoriesPage({ searchParams }: PageProps) {
   let territories: TerritorySummary[];
   let categories: TerritoryCategory[];
   try {
-    [territories, categories] = await Promise.all([getTerritories(), getTerritoryCategories()]);
+    [territories, categories] = await Promise.all([getAllTerritories(), getTerritoryCategories()]);
   } catch (error: unknown) {
     // No fixture fallback and no empty board: an unreadable board says so.
     const failure = describeReadFailure(error, 'the territory board');

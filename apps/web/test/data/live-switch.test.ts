@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TERRITORY_API_PATHS } from '../../src/lib/api/territories.js';
 import { getPublicCompany, getCompanyTerritories } from '../../src/lib/data/companies.js';
 import {
+  getAllTerritories,
   getTerritories,
   getTerritoryBySlug,
   getTerritoryCategories,
@@ -165,6 +166,64 @@ describe('territory-list', () => {
     });
 
     await expect(getTerritories()).rejects.toThrow();
+  });
+});
+
+describe('territory-list (whole board)', () => {
+  /** A distinct valid territory per page, so page assembly is observable. */
+  function pageOf(index: number, nextCursor?: string) {
+    const body = {
+      data: [{ ...firstTerritory(), slug: `page-${index}-territory`, id: firstTerritory().id }],
+      meta: { requestId: `req-${index}`, limit: 1, ...(nextCursor === undefined ? {} : { nextCursor }) },
+    };
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
+  it('reads fixtures without touching the network when not live', async () => {
+    expect(await getAllTerritories()).toEqual(TERRITORY_FIXTURES);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('follows the cursor until the API reports no further page', async () => {
+    live('territory-list');
+    fetchSpy
+      .mockResolvedValueOnce(pageOf(1, 'cursor-2'))
+      .mockResolvedValueOnce(pageOf(2, 'cursor-3'))
+      .mockResolvedValueOnce(pageOf(3));
+
+    const territories = await getAllTerritories();
+
+    expect(territories.map((territory) => territory.slug)).toEqual([
+      'page-1-territory',
+      'page-2-territory',
+      'page-3-territory',
+    ]);
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(String(fetchSpy.mock.calls[1]?.[0])).toContain('cursor=cursor-2');
+    expect(String(fetchSpy.mock.calls[2]?.[0])).toContain('cursor=cursor-3');
+  });
+
+  it('asks for the largest page the contract allows so the board needs the fewest requests', async () => {
+    live('territory-list');
+    fetchSpy.mockResolvedValueOnce(pageOf(1));
+
+    await getAllTerritories();
+
+    expect(new URL(requestedUrl()).searchParams.get('limit')).toBe('100');
+  });
+
+  it('fails loudly instead of truncating when the page cap is exceeded', async () => {
+    live('territory-list');
+    fetchSpy.mockImplementation(async (url: string) => {
+      const index = Number(new URL(url).searchParams.get('cursor')?.replace('cursor-', '') ?? '1');
+      return pageOf(index, `cursor-${index + 1}`);
+    });
+
+    await expect(getAllTerritories({ maxPages: 3 })).rejects.toThrow(/3 pages/);
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
   });
 });
 

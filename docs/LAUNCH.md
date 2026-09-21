@@ -36,7 +36,7 @@ docker compose -f compose.yaml -f compose.local.yaml up -d --build
 docker compose -f compose.yaml -f compose.local.yaml logs -f api
 ```
 
-The overlay runs the API with `NODE_ENV=development`, `EMAIL_PROVIDER=development`, `DEV_EMAIL_LOG_ENABLED=true` and `WEB_APP_ORIGIN=http://localhost:${WEB_PORT}`. No mail is sent; every verification, management and access-review link is written to the api log as an `email.development.captured` event with a `link` field (emitted at `info`, so keep `LOG_LEVEL` at its default). Open that link in the browser that submitted the form. Links stay single-use and expiring exactly as in production. All three settings are rejected under `NODE_ENV=production`, and the overlay leaves the database and API internal, the web listener on loopback, and `DODO_LIVE_ENABLED=false`.
+The overlay runs the API with `NODE_ENV=development`, `EMAIL_PROVIDER=development`, `DEV_EMAIL_LOG_ENABLED=true` and `WEB_APP_ORIGIN=http://localhost:${WEB_PORT}`. No mail is sent; every verification, management and access-review link is written to the api log as an `email.development.captured` event with a `link` field (emitted at `info`, so keep `LOG_LEVEL` at its default). Open that link in the browser that submitted the form. Links stay single-use and expiring exactly as in production. A fresh database renders an empty board until the reviewed territory seed is applied once: `docker compose -f compose.yaml -f compose.local.yaml exec api node packages/database/dist/territory-seed-cli.js`. All three settings are rejected under `NODE_ENV=production`, and the overlay leaves the database and API internal, the web listener on loopback, and `DODO_LIVE_ENABLED=false`.
 
 ## Deployment
 

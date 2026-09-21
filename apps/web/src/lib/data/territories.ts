@@ -69,6 +69,54 @@ export async function getTerritories(
   return (await getTerritoryPage(query)).items;
 }
 
+/**
+ * Upper bound on pages the board will assemble before refusing.
+ *
+ * With `TERRITORY_BOARD_PAGE_SIZE` this allows 1,000 territories, far beyond
+ * the reviewed taxonomy. The cap exists so a cursor that never terminates
+ * fails loudly instead of looping, and so growth past it is a deliberate
+ * decision rather than a silent truncation.
+ */
+export const TERRITORY_BOARD_MAX_PAGES = 10;
+
+/** The largest page `territoryListQuerySchema` accepts; fewest round trips. */
+export const TERRITORY_BOARD_PAGE_SIZE = 100;
+
+type WholeBoardOptions = Omit<Partial<TerritoryListQuery>, 'cursor'> & { maxPages?: number };
+
+/**
+ * Every territory, not just the first page.
+ *
+ * The board promises to show the whole map, and the API pages its list, so the
+ * board must follow `nextCursor` to the end. Reading one page and dropping the
+ * cursor would silently truncate the map — and its count — once the taxonomy
+ * outgrows a single page.
+ */
+export async function getAllTerritories(
+  options: WholeBoardOptions = {},
+): Promise<TerritorySummary[]> {
+  const {
+    maxPages = TERRITORY_BOARD_MAX_PAGES,
+    limit = TERRITORY_BOARD_PAGE_SIZE,
+    ...rest
+  } = options;
+  const query = { ...rest, limit };
+  const territories: TerritorySummary[] = [];
+  let cursor: string | undefined;
+
+  for (let pageNumber = 1; ; pageNumber += 1) {
+    const page = await getTerritoryPage({ ...query, ...(cursor === undefined ? {} : { cursor }) });
+    territories.push(...page.items);
+    if (page.nextCursor === undefined) return territories;
+    if (pageNumber >= maxPages) {
+      throw new Error(
+        `Territory board exceeded ${maxPages} pages; refusing to render a truncated map`,
+      );
+    }
+    cursor = page.nextCursor;
+  }
+}
+
 export async function getTerritoryBySlug(slug: string): Promise<TerritoryDetail | null> {
   if (resolveSource('territory-detail') === 'live') {
     try {

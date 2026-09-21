@@ -36,6 +36,8 @@ export async function emailPlugin(
   }
 
   const { capture, provider } = createDevelopmentEmailProvider({
+    // Opt-in only; parseApiConfig rejects it under NODE_ENV=production.
+    ...(options.identity.developmentEmailLogEnabled ? { logger: app.log } : {}),
     webAppOrigin: options.identity.webAppOrigin,
   });
   app.decorate('emailProvider', provider);

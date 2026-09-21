@@ -21,6 +21,10 @@ The adapter makes one request per operation and does not retry. A timeout or net
 
 Error messages exclude recipients, capability links, raw tokens, provider response bodies, and API credentials. Operational logging should record only safe identifiers and the stable `EMAIL_DELIVERY_FAILED` code.
 
+## Development transport
+
+`EMAIL_PROVIDER=development` retains messages in a bounded in-memory capture and sends nothing. By default it never touches the application logger; `GET /__dev/email-captures/:messageId` exposes a capture only when development mode, `DEV_EMAIL_CAPTURE_ENABLED=true` and a loopback `API_HOST` all hold. For an out-of-process stack such as the local Compose overlay, `DEV_EMAIL_LOG_ENABLED=true` additionally writes each capability link to the API log as an `email.development.captured` event. `parseApiConfig` rejects `EMAIL_PROVIDER=development`, `DEV_EMAIL_CAPTURE_ENABLED=true` and `DEV_EMAIL_LOG_ENABLED=true` under `NODE_ENV=production`, so production keeps failing closed whenever Resend is not configured. See [LAUNCH.md](LAUNCH.md) for the Compose overlay.
+
 ## External launch gates
 
 Production enablement still requires a verified sending domain/address, a least-privilege Resend sending key in the deployment secret store, and an authorized delivery test. Unit tests use an injected fetch implementation and never call Resend or load real credentials.

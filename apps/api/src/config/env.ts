@@ -34,6 +34,7 @@ const apiEnvironmentSchema = z
       .pipe(z.array(z.union([z.ipv4(), z.ipv6()])).max(16)),
     DATABASE_URL: z.url().optional(),
     DEV_EMAIL_CAPTURE_ENABLED: booleanString.default(false),
+    DEV_EMAIL_LOG_ENABLED: booleanString.default(false),
     DRAFT_TTL_SECONDS: positiveSeconds.default(86_400),
     EMAIL_PROVIDER: z.enum(['development', 'unavailable', 'resend']).default('development'),
     RESEND_API_KEY: z.string().trim().min(1).optional(),
@@ -125,6 +126,13 @@ const apiEnvironmentSchema = z
           path: ['DEV_EMAIL_CAPTURE_ENABLED'],
         });
       }
+      if (value.DEV_EMAIL_LOG_ENABLED) {
+        context.addIssue({
+          code: 'custom',
+          message: 'development link logging is forbidden in production',
+          path: ['DEV_EMAIL_LOG_ENABLED'],
+        });
+      }
       if (webUrl.protocol !== 'https:') {
         context.addIssue({
           code: 'custom',
@@ -148,6 +156,7 @@ const apiEnvironmentSchema = z
 export type IdentityConfig = Readonly<{
   accessRequestTtlSeconds: number;
   developmentEmailCaptureEnabled: boolean;
+  developmentEmailLogEnabled: boolean;
   draftTtlSeconds: number;
   emailProvider: 'development' | 'unavailable' | 'resend';
   productionEmail?: { apiKey: string; fromEmail: string; timeoutMs: number };
@@ -277,6 +286,7 @@ export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
   const identity: IdentityConfig = Object.freeze({
     accessRequestTtlSeconds: result.data.ACCESS_REQUEST_TTL_SECONDS,
     developmentEmailCaptureEnabled: result.data.DEV_EMAIL_CAPTURE_ENABLED,
+    developmentEmailLogEnabled: result.data.DEV_EMAIL_LOG_ENABLED,
     draftTtlSeconds: result.data.DRAFT_TTL_SECONDS,
     emailProvider: result.data.EMAIL_PROVIDER,
     ...(result.data.EMAIL_PROVIDER === 'resend' ? { productionEmail: {

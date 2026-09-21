@@ -27,6 +27,17 @@ pnpm smoke:api
 
 The reset command is only for the disposable test database. Integration suites may truncate fixture tables; do not run multiple suites concurrently against one database. `compose.test.yaml` stores data in tmpfs; stopping/removing its container discards that test data. Unit tests do not need PostgreSQL. The production smoke test requires a migrated database and checks actual database readiness.
 
+## Local Compose stack without an email provider
+
+`compose.yaml` on its own is the production shape: the API image runs with `NODE_ENV=production`, so `EMAIL_PROVIDER=development` is refused and `EMAIL_PROVIDER=unavailable` fails every claim with `EMAIL_DELIVERY_UNAVAILABLE`. To exercise the full claim/manage flow locally, layer `compose.local.yaml` on top (it is never auto-loaded):
+
+```powershell
+docker compose -f compose.yaml -f compose.local.yaml up -d --build
+docker compose -f compose.yaml -f compose.local.yaml logs -f api
+```
+
+The overlay runs the API with `NODE_ENV=development`, `EMAIL_PROVIDER=development`, `DEV_EMAIL_LOG_ENABLED=true` and `WEB_APP_ORIGIN=http://localhost:${WEB_PORT}`. No mail is sent; every verification, management and access-review link is written to the api log as an `email.development.captured` event with a `link` field (emitted at `info`, so keep `LOG_LEVEL` at its default). Open that link in the browser that submitted the form. Links stay single-use and expiring exactly as in production. All three settings are rejected under `NODE_ENV=production`, and the overlay leaves the database and API internal, the web listener on loopback, and `DODO_LIVE_ENABLED=false`.
+
 ## Deployment
 
 `compose.yaml` provides PostgreSQL, an explicit migration job, API and web services. The database and API are internal; the web listener binds to loopback for a separately configured HTTPS reverse proxy. Set `WEB_PORT` in `.env` if the default 3000 is unavailable; Windows commonly reserves it for Hyper-V/WinNAT (`netsh interface ipv4 show excludedportrange protocol=tcp`). Configure a domain, TLS, ingress request/connection limits, alert routing, and backups before public traffic.

@@ -75,6 +75,47 @@ describe('development email provider', () => {
     expect(capture.list()).toEqual([]);
   });
 
+  it('logs each capability link when a development logger is configured', async () => {
+    const logger = { info: vi.fn() };
+    let nextId = 0;
+    const { capture, provider } = createDevelopmentEmailProvider({
+      createMessageId: () => `dev-message-${++nextId}`,
+      logger,
+      now: () => new Date('2026-08-30T00:00:00.000Z'),
+      webAppOrigin: 'http://localhost:3100',
+    });
+
+    await provider.sendVerification({
+      companyName: 'Acme',
+      rawToken: 'verification-secret',
+      toEmail: 'founder@gmail.com',
+    });
+    await provider.sendAccessDecisionNotification({
+      companyName: 'Acme',
+      decision: 'rejected',
+      toEmail: 'founder@gmail.com',
+    });
+
+    expect(logger.info).toHaveBeenCalledTimes(2);
+    expect(logger.info).toHaveBeenNthCalledWith(
+      1,
+      {
+        event: 'email.development.captured',
+        link: 'http://localhost:3100/verify#token=verification-secret',
+        messageId: 'dev-message-1',
+        toEmail: 'founder@gmail.com',
+        type: 'verification',
+      },
+      'Development email captured (not delivered): open the link to continue',
+    );
+    expect(logger.info).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ link: null, messageId: 'dev-message-2', type: 'access_decision' }),
+      expect.any(String),
+    );
+    expect(capture.list()).toHaveLength(2);
+  });
+
   it('returns accepted delivery evidence without exposing the raw link', async () => {
     const { provider } = createHarness();
 

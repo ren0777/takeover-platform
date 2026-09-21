@@ -15,6 +15,7 @@ describe('parseApiConfig', () => {
       identity: {
         accessRequestTtlSeconds: 604_800,
         developmentEmailCaptureEnabled: false,
+        developmentEmailLogEnabled: false,
         draftTtlSeconds: 86_400,
         emailProvider: 'development',
         emailVerificationTtlSeconds: 900,
@@ -63,6 +64,12 @@ describe('parseApiConfig', () => {
     ).toMatchObject({ host: '0.0.0.0', logLevel: 'warn', nodeEnv: 'production', port: 8080 });
   });
 
+  it('enables development email logging outside production', () => {
+    const config = parseApiConfig({ DEV_EMAIL_LOG_ENABLED: 'true', EMAIL_PROVIDER: 'development' });
+
+    expect(config.identity.developmentEmailLogEnabled).toBe(true);
+  });
+
   it('rejects secrets shorter than 256 bits after decoding', () => {
     expect(() => parseApiConfig({ TOKEN_HMAC_SECRET: 'dG9vLXNob3J0' })).toThrow(
       'TOKEN_HMAC_SECRET',
@@ -78,6 +85,13 @@ describe('parseApiConfig', () => {
     },
     {
       DEV_EMAIL_CAPTURE_ENABLED: 'true',
+      EMAIL_PROVIDER: 'unavailable',
+      NODE_ENV: 'production',
+      TOKEN_HMAC_SECRET: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY',
+      WEB_APP_ORIGIN: 'https://takeover.com',
+    },
+    {
+      DEV_EMAIL_LOG_ENABLED: 'true',
       EMAIL_PROVIDER: 'unavailable',
       NODE_ENV: 'production',
       TOKEN_HMAC_SECRET: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY',
@@ -101,6 +115,7 @@ describe('parseApiConfig', () => {
     ['DATABASE_URL', { DATABASE_URL: 'not-a-url' }],
     ['EMAIL_VERIFICATION_TTL_SECONDS', { EMAIL_VERIFICATION_TTL_SECONDS: '0' }],
     ['DEV_EMAIL_CAPTURE_ENABLED', { DEV_EMAIL_CAPTURE_ENABLED: 'sometimes' }],
+    ['DEV_EMAIL_LOG_ENABLED', { DEV_EMAIL_LOG_ENABLED: 'sometimes' }],
     ['TAKEOVER_RECONCILIATION_BATCH_SIZE', { TAKEOVER_RECONCILIATION_BATCH_SIZE: '0' }],
     ['TAKEOVER_RECONCILIATION_INTERVAL_SECONDS', { TAKEOVER_RECONCILIATION_INTERVAL_SECONDS: '0' }],
   ])('rejects invalid %s without echoing secret values', (name, source) => {

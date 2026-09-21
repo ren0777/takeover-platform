@@ -22,9 +22,18 @@ export type DevelopmentEmailCapture = {
   list(): DevelopmentEmailMessage[];
 };
 
+/**
+ * Development-only sink for captured links. Production configuration forbids
+ * enabling it because the raw capability link is written to the log stream.
+ */
+export type DevelopmentEmailLogger = {
+  info(payload: Record<string, unknown>, message: string): void;
+};
+
 type DevelopmentEmailProviderOptions = {
   capacity?: number;
   createMessageId?: () => string;
+  logger?: DevelopmentEmailLogger;
   now?: () => Date;
   webAppOrigin: string;
 };
@@ -50,6 +59,7 @@ export function createDevelopmentEmailProvider(options: DevelopmentEmailProvider
     type: DevelopmentEmailMessage['type'],
     toEmail: string,
     body: string,
+    link: string | null,
   ): EmailDeliveryResult => {
     const acceptedAt = now();
     const messageId = createMessageId();
@@ -59,40 +69,46 @@ export function createDevelopmentEmailProvider(options: DevelopmentEmailProvider
       if (oldestId === undefined) break;
       messages.delete(oldestId);
     }
+    options.logger?.info(
+      { event: 'email.development.captured', link, messageId, toEmail, type },
+      'Development email captured (not delivered): open the link to continue',
+    );
     return { acceptedAt, messageId };
   };
 
   const provider: EmailProvider = {
     async sendVerification(input: VerificationEmail) {
+      const link = fragmentLink(options.webAppOrigin, '/verify', input.rawToken);
       return retain(
         'verification',
         input.toEmail,
-        `Verify contact for ${input.companyName}: ${fragmentLink(options.webAppOrigin, '/verify', input.rawToken)}`,
+        `Verify contact for ${input.companyName}: ${link}`,
+        link,
       );
     },
     async sendManagementLink(input: ManagementLinkEmail) {
-      return retain(
-        'management_link',
-        input.toEmail,
-        `Manage ${input.companyName}: ${fragmentLink(options.webAppOrigin, '/manage', input.rawToken)}`,
-      );
+      const link = fragmentLink(options.webAppOrigin, '/manage', input.rawToken);
+      return retain('management_link', input.toEmail, `Manage ${input.companyName}: ${link}`, link);
     },
     async sendAccessRequestNotification(input: AccessRequestEmail) {
+      const link = fragmentLink(options.webAppOrigin, '/access-review', input.rawReviewToken);
       return retain(
         'access_request',
         input.toEmail,
-        `${input.requesterEmail} requested access to ${input.companyName}: ${fragmentLink(options.webAppOrigin, '/access-review', input.rawReviewToken)}`,
+        `${input.requesterEmail} requested access to ${input.companyName}: ${link}`,
+        link,
       );
     },
     async sendAccessDecisionNotification(input: AccessDecisionEmail) {
-      const continuation =
+      const link =
         input.rawManagementToken === undefined
-          ? ''
-          : ` ${fragmentLink(options.webAppOrigin, '/manage', input.rawManagementToken)}`;
+          ? null
+          : fragmentLink(options.webAppOrigin, '/manage', input.rawManagementToken);
       return retain(
         'access_decision',
         input.toEmail,
-        `Access to ${input.companyName} was ${input.decision}.${continuation}`,
+        `Access to ${input.companyName} was ${input.decision}.${link === null ? '' : ` ${link}`}`,
+        link,
       );
     },
   };

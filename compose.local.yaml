@@ -1,0 +1,22 @@
+# Local development overlay for compose.yaml. Never auto-loaded: pass it explicitly.
+#
+#   docker compose -f compose.yaml -f compose.local.yaml up -d --build
+#   docker compose -f compose.yaml -f compose.local.yaml logs -f api
+#
+# It swaps the production email adapter for the development transport, which
+# writes every capability link (verify, manage, access review) to the api
+# service log instead of sending mail, and points those links at the loopback
+# web listener. parseApiConfig rejects all three email settings under
+# NODE_ENV=production, so this overlay cannot be applied to a production stack
+# by mistake without the API refusing to start.
+#
+# Everything else in compose.yaml is unchanged: the database and API stay
+# internal, the web listener stays on 127.0.0.1, and live payments stay off.
+services:
+  api:
+    environment:
+      NODE_ENV: development
+      WEB_APP_ORIGIN: http://localhost:${WEB_PORT:-3000}
+      EMAIL_PROVIDER: development
+      DEV_EMAIL_LOG_ENABLED: 'true'
+      DODO_LIVE_ENABLED: 'false'

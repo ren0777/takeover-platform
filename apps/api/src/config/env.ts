@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { Webhook } from 'standardwebhooks';
+import { TAKEOVER_QUOTE_TTL_SECONDS } from '@takeover/shared';
 import { z } from 'zod';
 import type { OperatorConfig } from '../modules/operator/index.js';
 
@@ -63,7 +64,7 @@ const apiEnvironmentSchema = z
     MANAGER_NOTIFICATION_COOLDOWN_SECONDS: positiveSeconds.default(3_600),
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     RECOVERY_REQUEST_TTL_SECONDS: positiveSeconds.default(604_800),
-    TAKEOVER_QUOTE_TTL_SECONDS: positiveSeconds.max(3_600).default(300),
+    TAKEOVER_QUOTE_TTL_SECONDS: positiveSeconds.max(3_600).default(TAKEOVER_QUOTE_TTL_SECONDS),
     RECOVERY_REQUESTS_PER_CONTACT_COMPANY_PER_DAY: positiveSeconds.default(2),
     TOKEN_EXCHANGE_ATTEMPTS_PER_IP_PER_HOUR: positiveSeconds.default(60),
     TOKEN_EXCHANGE_FAILURES_PER_SELECTOR: positiveSeconds.default(10),

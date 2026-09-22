@@ -100,6 +100,7 @@ function createRepository(): TakeoverRepository {
       territory: {
         availabilityStatus: 'ACTIVE' as const,
         currency: 'USD',
+        claimedNextPriceMinor: null,
         hasActiveOwner: false,
         id: territoryId,
         minimumTakeoverAmountMinor: 1500n,
@@ -114,6 +115,7 @@ function createRepository(): TakeoverRepository {
     findTerritoryForQuote: vi.fn(async () => ({
       availabilityStatus: 'ACTIVE' as const,
       currency: 'USD',
+      claimedNextPriceMinor: null,
       hasActiveOwner: false,
       id: territoryId,
       minimumTakeoverAmountMinor: 1500n,
@@ -233,6 +235,7 @@ describe('TakeoverService quote and checkout orchestration', () => {
       territory: {
         availabilityStatus: 'ACTIVE',
         currency: 'USD',
+        claimedNextPriceMinor: null,
         hasActiveOwner: false,
         id: territoryId,
         minimumTakeoverAmountMinor: 1500n,
@@ -698,6 +701,7 @@ describe('TakeoverService quote and checkout orchestration', () => {
       territory: {
         availabilityStatus: 'ACTIVE',
         currency: 'USD',
+        claimedNextPriceMinor: null,
         hasActiveOwner: false,
         id: territoryId,
         minimumTakeoverAmountMinor: 1500n,
@@ -722,6 +726,7 @@ describe('TakeoverService pricing guards', () => {
     vi.mocked(repository.findTerritoryForQuote).mockResolvedValueOnce({
       availabilityStatus: 'ACTIVE',
       currency: 'USD',
+      claimedNextPriceMinor: null,
       hasActiveOwner: false,
       id: territoryId,
       minimumTakeoverAmountMinor: 0n,
@@ -760,6 +765,7 @@ describe('TakeoverService pricing guards', () => {
         territory: {
           availabilityStatus: 'ACTIVE',
           currency: 'USD',
+          claimedNextPriceMinor: null,
           hasActiveOwner: false,
           id: territoryId,
           minimumTakeoverAmountMinor: 1500n,
@@ -830,6 +836,7 @@ describe('TakeoverService checkout capability', () => {
     vi.mocked(repository.findTerritoryForQuote).mockResolvedValueOnce({
       availabilityStatus: 'ACTIVE',
       currency: 'USD',
+      claimedNextPriceMinor: null,
       hasActiveOwner: true,
       id: territoryId,
       minimumTakeoverAmountMinor: 1500n,
@@ -842,5 +849,67 @@ describe('TakeoverService checkout capability', () => {
       service.createQuote({ companyId, territorySlug: 'ai-coding' }),
     ).rejects.toBeInstanceOf(ClaimedTerritoryPricingNotConfiguredError);
     expect(repository.createQuote).not.toHaveBeenCalled();
+  });
+});
+
+describe('checkout freshness on a held territory', () => {
+  const heldQuote = {
+    companyId,
+    consumedAt: null,
+    currency: 'USD',
+    expiresAt: later,
+    id: quoteId,
+    minimumAmountMinor: 1_440n,
+    status: 'ACTIVE' as const,
+    territory: {
+      availabilityStatus: 'ACTIVE' as const,
+      // The stored minimum lags behind: the quote was priced from the
+      // previous settled capture, which is what must be compared.
+      claimedNextPriceMinor: 1_440n,
+      currency: 'USD',
+      hasActiveOwner: true,
+      id: territoryId,
+      minimumTakeoverAmountMinor: 1_200n,
+      slug: 'ai-coding',
+      version: 7n,
+    },
+    territoryId,
+    territoryVersion: 7n,
+  };
+
+  it('accepts a quote that still matches the derived price', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.findQuoteForCheckout).mockResolvedValueOnce(heldQuote);
+    const service = createService(repository);
+
+    await expect(service.createCheckout({ companyId, quoteId })).resolves.toMatchObject({
+      checkoutId: expect.any(String),
+    });
+  });
+
+  it('rejects a quote once the derived price moves', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.findQuoteForCheckout).mockResolvedValueOnce({
+      ...heldQuote,
+      territory: { ...heldQuote.territory, claimedNextPriceMinor: 1_730n },
+    });
+    const service = createService(repository);
+
+    await expect(service.createCheckout({ companyId, quoteId })).rejects.toMatchObject({
+      code: 'TAKEOVER_PRICE_CHANGED',
+    });
+  });
+
+  it('rejects a quote whose territory can no longer prove a price', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.findQuoteForCheckout).mockResolvedValueOnce({
+      ...heldQuote,
+      territory: { ...heldQuote.territory, claimedNextPriceMinor: null },
+    });
+    const service = createService(repository);
+
+    await expect(service.createCheckout({ companyId, quoteId })).rejects.toMatchObject({
+      code: 'TAKEOVER_PRICE_CHANGED',
+    });
   });
 });

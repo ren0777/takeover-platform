@@ -1,4 +1,10 @@
 import { getDatabaseClient, Prisma, type PrismaClient } from '@takeover/database';
+import { nextTakeoverPriceMinor } from '@takeover/shared';
+import {
+  findSettledCapturePrice,
+  quotablePriceForSettledCapture,
+  type SettledCapturePriceClient,
+} from './settled-capture-price.js';
 import {
   createTerritoryOwnershipTransactionClient,
   PrismaTerritoryOwnershipRepository,
@@ -70,17 +76,20 @@ function staleRefundClaimCutoffForNow(now: Date): string {
   return `${REFUND_CLAIM_PREFIX}${String(now.getTime() - REFUND_CLAIM_LEASE_MS).padStart(13, '0')}_~`;
 }
 
-function mapTerritory(row: {
-  availabilityStatus: 'ACTIVE' | 'DISABLED';
-  currency: string;
-  id: string;
-  minimumTakeoverAmountMinor: bigint;
-  ownershipHistory: Array<{ id: string }>;
-  slug: string;
-  version: bigint;
-}): TerritoryQuoteRecord {
+function mapTerritory(
+  row: {
+    availabilityStatus: 'ACTIVE' | 'DISABLED';
+    currency: string;
+    id: string;
+    minimumTakeoverAmountMinor: bigint;
+    ownershipHistory: Array<{ id: string }>;
+    slug: string;
+    version: bigint;
+  },
+  claimedNextPriceMinor: bigint | null,
+): TerritoryQuoteRecord {
   const { ownershipHistory, ...territory } = row;
-  return { ...territory, hasActiveOwner: ownershipHistory.length > 0 };
+  return { ...territory, claimedNextPriceMinor, hasActiveOwner: ownershipHistory.length > 0 };
 }
 
 /** Territory columns a quote needs, plus whether a reign is currently open. */
@@ -167,7 +176,28 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
       select: territoryForQuoteSelect,
       where: { slug },
     });
-    return territory === null ? null : mapTerritory(territory);
+    if (territory === null) return null;
+    return mapTerritory(
+      territory,
+      await this.resolveClaimedPrice(territory.id, territory.currency),
+    );
+  }
+
+  /**
+   * The price a held territory may be quoted at, proven from its previous
+   * settled capture. Null for an unclaimed territory or unprovable history.
+   */
+  private async resolveClaimedPrice(
+    territoryId: string,
+    currency: string,
+  ): Promise<bigint | null> {
+    const settled = await findSettledCapturePrice(
+      this.prisma as unknown as SettledCapturePriceClient,
+      territoryId,
+    );
+    const price = quotablePriceForSettledCapture(settled);
+    // A settled amount in another currency proves nothing about this one.
+    return price !== null && price.currency === currency ? price.amountMinor : null;
   }
 
   async findActiveQuote(input: {
@@ -225,6 +255,10 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
       where: { id: quote.territoryId },
     });
     if (territory === null) return null;
+    const claimedNextPriceMinor = await this.resolveClaimedPrice(
+      territory.id,
+      territory.currency,
+    );
     const intent =
       quote.takeoverIntentId === null
         ? null
@@ -234,7 +268,7 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
           });
     return {
       ...mapQuote(quote, territory.slug),
-      territory: mapTerritory(territory),
+      territory: mapTerritory(territory, claimedNextPriceMinor),
       // A dangling reference is treated as a dead intent, never as "no intent".
       ...(quote.takeoverIntentId === null
         ? {}
@@ -1027,6 +1061,11 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
         },
       }));
 
+    // Computed before anything moves: a settled amount the policy refuses
+    // aborts the whole transaction rather than leaving ownership transferred
+    // against a price that could not be written.
+    const nextPriceMinor = nextTakeoverPriceMinor(payment.amountMinor);
+
     // Serialize the capture timestamp with season finalization and activity IDs.
     // The matching ownership trigger holds this transaction lock through commit.
     await transaction.$queryRaw`SELECT pg_advisory_xact_lock(724260920)::text`;
@@ -1045,6 +1084,15 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
       await transaction.ownershipCapture.update({
         data: { completedAt: new Date(), status: 'COMPLETED' },
         where: { id: capture.id },
+      });
+      // The next takeover costs 20% more than what was actually settled here.
+      // Written in the same transaction as the ownership change, so price and
+      // ownership can never disagree. Checkout is disabled in this phase, so
+      // this path does not run yet; the rule lives with the transaction that
+      // will use it rather than in a later, separate write.
+      await transaction.territory.update({
+        data: { currency: payment.currency, minimumTakeoverAmountMinor: nextPriceMinor },
+        where: { id: quote.territoryId },
       });
       await transaction.checkoutSession.update({
         data: { status: 'COMPLETED' },

@@ -32,9 +32,9 @@ import { z } from 'zod';
 import {
   ClaimedTerritoryPricingNotConfiguredError,
   classifyQuote,
-  isQuotablePricing,
   PricingNotConfiguredError,
   quoteAvailabilityFor,
+  quotablePriceMinor,
 } from '../takeover/quote-state.js';
 import type { IdentityConfig } from '../../config/env.js';
 import type { EmailProvider } from '../../integrations/email/email-provider.js';
@@ -239,11 +239,16 @@ function mapPreparationView(record: TakeoverPreparationRecord, now: Date): Takeo
         ? {}
         : { currentOwner: record.territory.currentOwner }),
       minimumTakeoverAmount: {
-        amountMinor: safeMinorAmount(record.territory.minimumTakeoverAmountMinor),
+        // What a takeover would cost right now: the configured minimum while
+        // unclaimed, or the price derived from the previous settled capture.
+        // Zero when no price can be established, so the panel says so rather
+        // than showing a stored minimum that does not apply.
+        amountMinor: safeMinorAmount(quotablePriceMinor(record.territory) ?? 0n),
         currency: record.territory.currency,
       },
       name: record.territory.name,
-      pricingConfigured: isQuotablePricing(record.territory),
+      // "Configured" means a price can actually be quoted right now.
+      pricingConfigured: quotablePriceMinor(record.territory) !== null,
       quoteAvailability: quoteAvailabilityFor(record.territory),
       slug: record.territory.slug,
       status: territoryState === 'available' ? 'unclaimed' : territoryState,

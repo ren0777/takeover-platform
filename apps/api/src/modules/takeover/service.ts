@@ -9,10 +9,11 @@ import {
   type CheckoutResponse,
   type Money,
   type QuoteResponse,
+  TAKEOVER_QUOTE_TTL_SECONDS,
 } from '@takeover/shared';
 import { hashSecurityScope } from '../../security/scope-key.js';
 import { PaymentProviderUnavailableError } from './payment-provider.js';
-import { assertQuotableTerritory } from './quote-state.js';
+import { assertQuotablePrice, quotablePriceMinor } from './quote-state.js';
 
 export type Clock = { now(): Date };
 
@@ -61,6 +62,8 @@ export type PaymentProvider = {
 
 export type TerritoryQuoteRecord = {
   availabilityStatus: 'ACTIVE' | 'DISABLED';
+  /** Price derived from the previous settled capture; null when unprovable. */
+  claimedNextPriceMinor: bigint | null;
   currency: string;
   /** True while an ownership reign is open on the territory. */
   hasActiveOwner: boolean;
@@ -434,8 +437,11 @@ function assertCheckoutQuoteCurrent(quote: QuoteForCheckoutRecord, now: Date): v
   if (quote.territory.version !== quote.territoryVersion) {
     throw new TakeoverStaleTerritoryVersionError();
   }
+  // The same rule that issued the quote decides whether it is still current:
+  // a held territory is priced from its settled capture, not from the stored
+  // minimum, so comparing against that column would reject valid quotes.
   if (
-    quote.territory.minimumTakeoverAmountMinor !== quote.minimumAmountMinor ||
+    quotablePriceMinor(quote.territory) !== quote.minimumAmountMinor ||
     quote.territory.currency !== quote.currency
   ) {
     throw new TakeoverPriceChangedError();
@@ -530,7 +536,7 @@ export class TakeoverService {
     if (dependencies.statusTokenSecret.byteLength < 32) {
       throw new Error('Status token secret must contain at least 32 bytes');
     }
-    this.quoteTtlSeconds = dependencies.quoteTtlSeconds ?? 300;
+    this.quoteTtlSeconds = dependencies.quoteTtlSeconds ?? TAKEOVER_QUOTE_TTL_SECONDS;
     this.checkoutReusePollAttempts = dependencies.checkoutReusePollAttempts ?? 40;
     this.checkoutReusePollIntervalMs = dependencies.checkoutReusePollIntervalMs ?? 150;
   }
@@ -540,10 +546,10 @@ export class TakeoverService {
     const territory = await this.dependencies.repository.findTerritoryForQuote(input.territorySlug);
     if (territory === null) throw new TakeoverTerritoryNotFoundError();
     if (territory.availabilityStatus === 'DISABLED') throw new TakeoverTerritoryDisabledError();
-    // A claimed territory has no approved takeover pricing policy, and a zero
-    // or malformed minimum is "no price decided": refuse rather than quote a
-    // number nobody approved or let the CHECK constraint become a 500.
-    assertQuotableTerritory(territory);
+    // A held territory is priced from its previous settled capture, and an
+    // unclaimed one from its configured minimum; either way the amount comes
+    // from the server, and anything unprovable refuses rather than guesses.
+    const priceMinor = assertQuotablePrice(territory);
 
     const existing = await this.dependencies.repository.findActiveQuote({
       companyId: input.companyId,
@@ -553,7 +559,7 @@ export class TakeoverService {
     if (
       existing !== null &&
       existing.expiresAt > now &&
-      existing.minimumAmountMinor === territory.minimumTakeoverAmountMinor &&
+      existing.minimumAmountMinor === priceMinor &&
       existing.currency === territory.currency
     ) {
       return mapQuote({ ...existing, territorySlug: territory.slug }, this.dependencies.checkout);
@@ -563,7 +569,7 @@ export class TakeoverService {
       companyId: input.companyId,
       currency: territory.currency,
       expiresAt: addSeconds(now, this.quoteTtlSeconds),
-      minimumAmountMinor: territory.minimumTakeoverAmountMinor,
+      minimumAmountMinor: priceMinor,
       observedAt: now,
       territoryId: territory.id,
       territorySlug: territory.slug,

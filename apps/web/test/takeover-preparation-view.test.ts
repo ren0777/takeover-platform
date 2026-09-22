@@ -351,3 +351,65 @@ describe('TakeoverPreparationPanel on a claimed territory', () => {
     expect(html).toContain('$10.00');
   });
 });
+
+describe('MVP pricing disclosures', () => {
+  const html = render({
+    checkoutAvailable: false,
+    intent,
+    territory,
+    territoryState: 'available',
+  });
+
+  it('states the price, the five-minute validity and the 20% increase', () => {
+    expect(html).toContain('Takeover price');
+    expect(html).toContain('$250.00');
+    // Derived from the policy TTL (or the quote itself), never hardcoded prose.
+    expect(html).toContain('valid for 5 minutes');
+    expect(html).toContain('120% of the amount actually paid');
+    expect(html).toContain('rounded up to the next cent');
+  });
+
+  it('says a takeover replaces the placement and pays the previous holder nothing', () => {
+    expect(html).toContain('replaces the current placement');
+    expect(html).toContain('no payout and no revenue share');
+  });
+
+  it('describes temporary promotional placement, never equity or permanent ownership', () => {
+    expect(html).toContain('temporary promotional placement');
+    expect(html).toMatch(
+      /not equity, intellectual property, permanent ownership, or an investment/,
+    );
+  });
+
+  it('keeps saying that checkout is unavailable and nothing can be charged', () => {
+    expect(html).toContain('checkout is unavailable and nothing can be charged');
+    expect(html).toContain('Checkout is unavailable');
+  });
+});
+
+describe('quote validity wording', () => {
+  it('uses the lifetime the server actually applied to the quote', () => {
+    const html = render({
+      checkoutAvailable: false,
+      intent,
+      quote: {
+        amount: { amountMinor: 1_000, currency: 'USD' },
+        checkoutAvailable: false,
+        createdAt: '2026-09-22T10:00:00.000Z',
+        expiresAt: '2026-09-22T10:10:00.000Z',
+        id: '44444444-4444-4444-8444-444444444444',
+        intentId: intent.id,
+        status: 'active',
+        territorySlug: 'ai-coding',
+        territoryVersion: '3',
+        usable: true,
+      },
+      quoteState: 'active',
+      territory,
+      territoryState: 'available',
+    });
+
+    expect(html).toContain('valid for 10 minutes');
+    expect(html).not.toContain('valid for 5 minutes');
+  });
+});

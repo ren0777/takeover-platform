@@ -41,7 +41,12 @@ import type {
   GeneratePreparationQuoteResult,
   PreparationQuoteRecord,
 } from './repository.js';
-import { classifyQuote, isQuotablePricing } from '../takeover/quote-state.js';
+import { classifyQuote, quotablePriceMinor } from '../takeover/quote-state.js';
+import {
+  findSettledCapturePrice,
+  quotablePriceForSettledCapture,
+  type SettledCapturePriceClient,
+} from '../takeover/settled-capture-price.js';
 
 type IdentityPrismaClient = PrismaClient | Prisma.TransactionClient;
 
@@ -1572,7 +1577,21 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
     });
     if (territory === null) return null;
     const owner = territory.ownershipHistory[0]?.company;
+    // A held territory is priced from its previous settled capture, not from
+    // the stored minimum, and fails closed when that cannot be proven.
+    const settled =
+      owner === undefined
+        ? null
+        : quotablePriceForSettledCapture(
+            await findSettledCapturePrice(
+              client as unknown as SettledCapturePriceClient,
+              territory.id,
+            ),
+          );
     return {
+      // A settled amount in another currency proves nothing about this one.
+      claimedNextPriceMinor:
+        settled !== null && settled.currency === territory.currency ? settled.amountMinor : null,
       availabilityStatus: territory.availabilityStatus,
       categoryName: territory.category.name,
       currency: territory.currency,
@@ -1684,8 +1703,12 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
       if (territory.availabilityStatus === 'DISABLED') return { kind: 'territory_disabled' };
       // No approved policy prices a takeover of a claimed territory; the
       // stored minimum predates its capture and is never quoted.
-      if (territory.hasActiveOwner) return { kind: 'claimed_pricing_not_configured' };
-      if (!isQuotablePricing(territory)) return { kind: 'pricing_not_configured' };
+      const priceMinor = quotablePriceMinor(territory);
+      if (priceMinor === null) {
+        return territory.hasActiveOwner
+          ? { kind: 'claimed_pricing_not_configured' }
+          : { kind: 'pricing_not_configured' };
+      }
 
       // Only this intent's quotes are ever touched: another manager's
       // preparation on the same territory keeps its own quote untouched, and
@@ -1720,7 +1743,7 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
           companyId: input.companyId,
           currency: territory.currency,
           expiresAt: input.expiresAt,
-          minimumAmountMinor: territory.minimumTakeoverAmountMinor,
+          minimumAmountMinor: priceMinor,
           observedAt: input.now,
           status: 'ACTIVE',
           takeoverIntentId: intent.id,

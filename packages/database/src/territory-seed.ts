@@ -5,6 +5,7 @@ import {
   territorySummarySchema,
   territoryVisualMetadataSchema,
 } from '@takeover/shared';
+import { TAKEOVER_BASE_PRICE_MINOR, TAKEOVER_CURRENCY } from '@takeover/shared';
 import type { Prisma, PrismaClient } from './generated/prisma/client.js';
 
 export type TerritorySeedCategory = {
@@ -296,8 +297,10 @@ export async function applyTerritorySeed(
             name: territory.name,
             description: territory.description,
             categoryId: territory.categoryId,
+            currency: TAKEOVER_CURRENCY,
             displayWeight: territory.displayWeight,
             availabilityStatus: territory.availabilityStatus,
+            minimumTakeoverAmountMinor: TAKEOVER_BASE_PRICE_MINOR,
             visualMetadata: {
               iconKey: territory.visualMetadata.iconKey,
               accentColor: territory.visualMetadata.accentColor,
@@ -315,6 +318,15 @@ export async function applyTerritorySeed(
               accentColor: territory.visualMetadata.accentColor,
             } as Prisma.InputJsonValue,
           },
+        });
+        // Seeding never overwrites a price an operator (or a capture) has
+        // set: only a territory still at zero receives the base price.
+        await transaction.territory.updateMany({
+          data: {
+            currency: TAKEOVER_CURRENCY,
+            minimumTakeoverAmountMinor: TAKEOVER_BASE_PRICE_MINOR,
+          },
+          where: { id: territory.id, minimumTakeoverAmountMinor: 0n },
         });
       }
       return {

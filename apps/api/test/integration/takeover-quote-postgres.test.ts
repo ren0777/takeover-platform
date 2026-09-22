@@ -30,7 +30,9 @@ async function resetTables(): Promise<void> {
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE
     "security_rate_limit_buckets", "audit_logs", "email_verification_challenges",
     "company_management_sessions", "company_management_grants", "company_verifications",
-    "company_access_requests", "takeover_quotes", "takeover_intents", "company_contacts",
+    "company_access_requests", "ownership_captures", "payments", "checkout_status_tokens",
+    "checkout_sessions", "payment_reconciliation_actions", "payment_webhook_events",
+    "takeover_quotes", "takeover_intents", "company_contacts",
     "companies", "territory_ownerships"
     RESTART IDENTITY CASCADE`);
   await prisma.territory.deleteMany({ where: { categoryId: CATEGORY_ID } });
@@ -602,5 +604,253 @@ describe('takeover preparation quotes in PostgreSQL', () => {
     expect(await prisma.checkoutSession.count()).toBe(0);
     expect(await prisma.payment.count()).toBe(0);
     expect(await prisma.territoryOwnership.count()).toBe(0);
+  });
+});
+
+describe('pricing a held territory from its settled capture', () => {
+  /** A completed capture backed by a confirmed payment, as the capture transaction writes it. */
+  async function recordSettledCapture(input: {
+    amountMinor: bigint;
+    currency?: string;
+    ownerId: string;
+    paymentStatus?: 'CONFIRMED' | 'REFUNDED' | 'PENDING' | 'FAILED';
+    captureStatus?: 'COMPLETED' | 'FAILED' | 'REFUNDED';
+    territoryId: string;
+    territoryVersion: bigint;
+  }) {
+    const quoteRow = await prisma.takeoverQuote.create({
+      data: {
+        companyId: input.ownerId,
+        currency: input.currency ?? 'USD',
+        expiresAt: soon(),
+        minimumAmountMinor: input.amountMinor,
+        observedAt: now(),
+        status: 'CANCELLED',
+        territoryId: input.territoryId,
+        territoryVersion: input.territoryVersion - 1n,
+      },
+    });
+    const checkout = await prisma.checkoutSession.create({
+      data: {
+        companyId: input.ownerId,
+        provider: 'TEST',
+        providerCheckoutId: randomUUID(),
+        providerCheckoutUrl: 'https://provider.example/checkout',
+        quoteId: quoteRow.id,
+        status: 'COMPLETED',
+      },
+    });
+    const payment = await prisma.payment.create({
+      data: {
+        amountMinor: input.amountMinor,
+        checkoutId: checkout.id,
+        confirmedAt: now(),
+        currency: input.currency ?? 'USD',
+        provider: 'TEST',
+        providerPaymentId: randomUUID(),
+        status: input.paymentStatus ?? 'CONFIRMED',
+      },
+    });
+    const capture = await prisma.ownershipCapture.create({
+      data: {
+        completedAt: now(),
+        expectedTerritoryVersion: input.territoryVersion - 1n,
+        newOwnerCompanyId: input.ownerId,
+        paymentId: payment.id,
+        status: input.captureStatus ?? 'COMPLETED',
+        territoryId: input.territoryId,
+      },
+    });
+    return { capture, checkout, payment };
+  }
+
+  async function createOwner(label: string) {
+    return prisma.company.create({
+      data: {
+        activatedAt: now(),
+        name: label,
+        normalizedName: label,
+        normalizedWebsite: `https://${label}.example/`,
+        slug: label,
+        status: 'ACTIVE',
+        websiteUrl: `https://${label}.example/`,
+      },
+    });
+  }
+
+  /** Puts the territory under an open reign at the given version. */
+  async function claim(territoryId: string, ownerId: string, territoryVersion: bigint) {
+    await prisma.territoryOwnership.create({
+      data: {
+        capturedAt: now(),
+        companyId: ownerId,
+        source: 'PAID_CAPTURE',
+        territoryId,
+        territoryVersion,
+      },
+    });
+    await prisma.territory.update({
+      data: { version: territoryVersion },
+      where: { id: territoryId },
+    });
+  }
+
+  it('quotes 20% above the settled amount, rounded up, and never the stored minimum', async () => {
+    const managed = await createManagedCompany('settled');
+    const owner = await createOwner('settled-owner');
+    const territory = await createTerritory('settled-priced', 1_000n);
+    await claim(territory.id, owner.id, 2n);
+    // The stored minimum is deliberately wrong; the settled amount decides.
+    await prisma.territory.update({
+      data: { minimumTakeoverAmountMinor: 9_999n },
+      where: { id: territory.id },
+    });
+    await recordSettledCapture({
+      amountMinor: 1_201n,
+      ownerId: owner.id,
+      territoryId: territory.id,
+      territoryVersion: 2n,
+    });
+    await prepare(managed, territory.slug);
+
+    const quoted = await generate(managed);
+
+    // ceil(1201 * 6 / 5) = 1442
+    expect(quoted.quote.minimumAmountMinor).toBe(1_442n);
+    expect(quoted.quote.currency).toBe('USD');
+    expect(quoted.territory.currentOwner).toEqual({ name: 'settled-owner', slug: 'settled-owner' });
+  });
+
+  it.each([
+    ['a seeded reign with no capture', { skipCapture: true }],
+    ['a refunded capture', { captureStatus: 'REFUNDED' as const }],
+    ['a failed capture', { captureStatus: 'FAILED' as const }],
+    ['a refunded payment', { paymentStatus: 'REFUNDED' as const }],
+    ['a pending payment', { paymentStatus: 'PENDING' as const }],
+    ['a failed payment', { paymentStatus: 'FAILED' as const }],
+  ])('fails closed for %s', async (label, options) => {
+    const slug = `unprovable-${label.replace(/[^a-z]+/g, '-')}`;
+    const managed = await createManagedCompany(slug);
+    const owner = await createOwner(`${slug}-owner`);
+    const territory = await createTerritory(slug, 1_000n);
+    await claim(territory.id, owner.id, 2n);
+    if (!('skipCapture' in options)) {
+      await recordSettledCapture({
+        amountMinor: 1_200n,
+        ownerId: owner.id,
+        territoryId: territory.id,
+        territoryVersion: 2n,
+        ...options,
+      });
+    }
+    await prepare(managed, territory.slug);
+
+    await expect(repository.generatePreparationQuote(quoteInput(managed))).resolves.toEqual({
+      kind: 'claimed_pricing_not_configured',
+    });
+    expect(await prisma.takeoverQuote.count({ where: { takeoverIntentId: { not: null } } })).toBe(
+      0,
+    );
+  });
+
+  it('fails closed when two completed captures make the price ambiguous', async () => {
+    const managed = await createManagedCompany('ambiguous');
+    const owner = await createOwner('ambiguous-owner');
+    const territory = await createTerritory('ambiguous-priced', 1_000n);
+    await claim(territory.id, owner.id, 2n);
+    await recordSettledCapture({
+      amountMinor: 1_200n,
+      ownerId: owner.id,
+      territoryId: territory.id,
+      territoryVersion: 2n,
+    });
+    await recordSettledCapture({
+      amountMinor: 3_000n,
+      ownerId: owner.id,
+      territoryId: territory.id,
+      territoryVersion: 2n,
+    });
+    await prepare(managed, territory.slug);
+
+    await expect(repository.generatePreparationQuote(quoteInput(managed))).resolves.toEqual({
+      kind: 'claimed_pricing_not_configured',
+    });
+  });
+
+  it('makes an existing quote stale once the canonical price changes', async () => {
+    const managed = await createManagedCompany('repriced');
+    const territory = await createTerritory('repriced-territory', 1_000n);
+    await prepare(managed, territory.slug);
+    const first = await generate(managed);
+    expect(first.quote.minimumAmountMinor).toBe(1_000n);
+
+    // A capture would raise the stored minimum exactly this way.
+    await prisma.territory.update({
+      data: { minimumTakeoverAmountMinor: 1_200n },
+      where: { id: territory.id },
+    });
+
+    const view = await repository.getTakeoverPreparation({
+      companyId: managed.company.id,
+      contactId: managed.contact.id,
+      now: now(),
+    });
+    expect(view.quote).toMatchObject({ id: first.quote.id, minimumAmountMinor: 1_000n });
+    const second = await generate(managed);
+    expect(second.reused).toBe(false);
+    expect(second.quote.minimumAmountMinor).toBe(1_200n);
+  });
+
+  it('prices concurrent generations on a held territory identically, creating one quote', async () => {
+    const managed = await createManagedCompany('concurrent-priced');
+    const owner = await createOwner('concurrent-owner');
+    const territory = await createTerritory('concurrent-territory', 1_000n);
+    await claim(territory.id, owner.id, 2n);
+    await recordSettledCapture({
+      amountMinor: 1_200n,
+      ownerId: owner.id,
+      territoryId: territory.id,
+      territoryVersion: 2n,
+    });
+    await prepare(managed, territory.slug);
+
+    const results = await Promise.all(Array.from({ length: 5 }, () => generate(managed)));
+
+    expect(new Set(results.map((result) => result.quote.id)).size).toBe(1);
+    for (const result of results) {
+      expect(result.quote.minimumAmountMinor).toBe(1_440n);
+    }
+    expect(await prisma.takeoverQuote.count({ where: { takeoverIntentId: { not: null } } })).toBe(
+      1,
+    );
+  });
+
+  it('records no payout, credit, reconciliation or ownership change while pricing', async () => {
+    const managed = await createManagedCompany('no-payout');
+    const owner = await createOwner('no-payout-owner');
+    const territory = await createTerritory('no-payout-territory', 1_000n);
+    await claim(territory.id, owner.id, 2n);
+    const settled = await recordSettledCapture({
+      amountMinor: 1_200n,
+      ownerId: owner.id,
+      territoryId: territory.id,
+      territoryVersion: 2n,
+    });
+    await prepare(managed, territory.slug);
+
+    await generate(managed);
+
+    // Exactly the rows the fixture created: quoting adds no money movement,
+    // and the previous owner receives nothing.
+    expect(await prisma.payment.count()).toBe(1);
+    expect(await prisma.payment.count({ where: { id: settled.payment.id } })).toBe(1);
+    expect(await prisma.checkoutSession.count()).toBe(1);
+    expect(await prisma.ownershipCapture.count()).toBe(1);
+    expect(await prisma.paymentReconciliationAction.count()).toBe(0);
+    expect(await prisma.paymentWebhookEvent.count()).toBe(0);
+    // The reign is untouched: same owner, same version, still open.
+    await expect(
+      prisma.territoryOwnership.findFirstOrThrow({ where: { territoryId: territory.id } }),
+    ).resolves.toMatchObject({ companyId: owner.id, endedAt: null, territoryVersion: 2n });
   });
 });

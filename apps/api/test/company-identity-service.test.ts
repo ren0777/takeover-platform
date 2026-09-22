@@ -802,6 +802,7 @@ describe('takeover preparation lifecycle', () => {
     categoryName: 'AI',
     currency: 'USD',
     currentOwner: null,
+    claimedNextPriceMinor: null,
     hasActiveOwner: false,
     id: '21000000-0000-4000-8000-000000000001',
     minimumTakeoverAmountMinor: 25_000n,
@@ -866,6 +867,7 @@ describe('takeover preparation lifecycle', () => {
       territory: {
         ...territory,
         currentOwner: { name: 'Northwind', slug: 'northwind' },
+        claimedNextPriceMinor: null,
         hasActiveOwner: true,
       },
     });
@@ -877,8 +879,12 @@ describe('takeover preparation lifecycle', () => {
       intent: { id: intent.id, status: 'identity_ready', checkoutAvailable: false },
       territory: {
         currentOwner: { name: 'Northwind', slug: 'northwind' },
-        minimumTakeoverAmount: { amountMinor: 25_000, currency: 'USD' },
+        // Held with no provable settled price: no amount is shown at all,
+        // rather than the stored minimum that no longer applies.
+        minimumTakeoverAmount: { amountMinor: 0, currency: 'USD' },
         name: 'AI Coding',
+        pricingConfigured: false,
+        quoteAvailability: 'claimed_pricing_not_configured',
         status: 'claimed',
       },
       territoryState: 'claimed',
@@ -1002,6 +1008,7 @@ describe('takeover preparation quotes', () => {
     categoryName: 'AI',
     currency: 'USD',
     currentOwner: null,
+    claimedNextPriceMinor: null,
     hasActiveOwner: false,
     id: '21000000-0000-4000-8000-000000000001',
     minimumTakeoverAmountMinor: 1_000n,
@@ -1198,6 +1205,63 @@ describe('takeover preparation quotes on claimed territories', () => {
     ).rejects.toMatchObject({
       code: 'CLAIMED_TERRITORY_PRICING_NOT_CONFIGURED',
       statusCode: 409,
+    });
+  });
+});
+
+describe('pricing shown for a held territory', () => {
+  it('shows the proven next price when the settled capture can be established', async () => {
+    const harness = createHarness();
+    const tokens = createOpaqueTokenService(
+      parseApiConfig({ NODE_ENV: 'test' }).identity.tokenHmacSecret,
+    );
+    const session = tokens.issueSessionToken();
+    const csrf = tokens.issueSessionToken();
+    vi.mocked(harness.repository.resolveManagementSession).mockResolvedValue({
+      company,
+      companyId: company.id,
+      contactId: '22222222-2222-4222-8222-222222222222',
+      csrfDigest: tokens.digestCsrfToken(csrf.rawToken),
+      expiresAt: new Date('2026-08-30T21:00:00.000Z'),
+      grantId: '55555555-5555-4555-8555-555555555555',
+      sessionId: '66666666-6666-4666-8666-666666666666',
+      verificationLevels: ['CONTACT_VERIFIED'],
+    });
+    vi.mocked(harness.repository.getTakeoverPreparation).mockResolvedValueOnce({
+      intent: {
+        ...intent,
+        currency: null,
+        intendedAmountMinor: null,
+        quoteObservedAt: null,
+        quotedMinimumAmountMinor: null,
+        quotedOwnerCompanyId: null,
+        quotedTerritoryVersion: null,
+        quotedWinningAmountMinor: null,
+        status: 'IDENTITY_READY' as const,
+      },
+      quote: null,
+      territory: {
+        availabilityStatus: 'ACTIVE' as const,
+        categoryName: 'AI',
+        claimedNextPriceMinor: 1_440n,
+        currency: 'USD',
+        currentOwner: { name: 'Northwind', slug: 'northwind' },
+        hasActiveOwner: true,
+        id: '21000000-0000-4000-8000-000000000001',
+        // Deliberately stale: the derived price is what must be shown.
+        minimumTakeoverAmountMinor: 1_200n,
+        name: 'AI Coding',
+        slug: 'ai-coding',
+        version: 3n,
+      },
+    });
+
+    const view = await harness.service.getTakeoverPreparation(session.rawToken, csrf.rawToken);
+
+    expect(view.territory).toMatchObject({
+      minimumTakeoverAmount: { amountMinor: 1_440, currency: 'USD' },
+      pricingConfigured: true,
+      quoteAvailability: 'quotable',
     });
   });
 });

@@ -278,6 +278,8 @@ export type TakeoverIntentPreparationRecord = IntentRecord & {
 export type PreparationTerritoryRecord = {
   availabilityStatus: 'ACTIVE' | 'DISABLED';
   categoryName: string;
+  /** Price proven from the previous settled capture; null when unprovable. */
+  claimedNextPriceMinor: bigint | null;
   currency: string;
   currentOwner: { name: string; slug: string } | null;
   /** Derived from currentOwner; kept explicit for the shared pricing rules. */

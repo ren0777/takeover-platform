@@ -134,8 +134,34 @@ export {
   type TakeoverPreparationView,
 } from './company-claim.js';
 export { createMoney, CURRENCY_CODE_PATTERN, isMoney, moneySchema, type Money } from './money.js';
-export { attemptStateEnum, attemptStatusSchema, type AttemptState, type AttemptStatus } from './attempt-state.js';
-export { quoteResponseSchema, quoteStatusEnum, type QuoteResponse, type QuoteStatus } from './quote-contract.js';
-export { checkoutRequestSchema, checkoutResponseSchema, type CheckoutRequest, type CheckoutResponse } from './checkout-contract.js';
+export {
+  attemptStateEnum,
+  attemptStatusSchema,
+  type AttemptState,
+  type AttemptStatus,
+} from './attempt-state.js';
+export {
+  quoteResponseSchema,
+  quoteStatusEnum,
+  type QuoteResponse,
+  type QuoteStatus,
+} from './quote-contract.js';
+export {
+  checkoutRequestSchema,
+  checkoutResponseSchema,
+  type CheckoutRequest,
+  type CheckoutResponse,
+} from './checkout-contract.js';
 export * from './competition.js';
 export * from './operator.js';
+export {
+  isTakeoverCurrency,
+  MAX_SAFE_AMOUNT_MINOR,
+  nextTakeoverPriceMinor,
+  TAKEOVER_BASE_PRICE_MINOR,
+  TAKEOVER_CURRENCY,
+  TAKEOVER_PRICE_INCREASE_DENOMINATOR,
+  TAKEOVER_PRICE_INCREASE_NUMERATOR,
+  TAKEOVER_QUOTE_TTL_SECONDS,
+  TakeoverPricingError,
+} from './pricing.js';

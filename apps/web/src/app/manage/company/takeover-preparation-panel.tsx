@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import {
+  TAKEOVER_QUOTE_TTL_SECONDS,
   type TakeoverPreparationQuote,
   type TakeoverPreparationQuoteState,
   type TakeoverPreparationTerritoryState,
@@ -78,13 +79,22 @@ function QuoteSection({
   quoteState: TakeoverPreparationQuoteState;
 }) {
   const presentation = describeQuoteState(quoteState);
+  // Taken from the quote itself when there is one, so the wording can never
+  // drift from the lifetime the server actually applied.
+  const validityMinutes =
+    quote === null
+      ? Math.round(TAKEOVER_QUOTE_TTL_SECONDS / 60)
+      : Math.max(
+          1,
+          Math.round((Date.parse(quote.expiresAt) - Date.parse(quote.createdAt)) / 60_000),
+        );
   return (
     <div className="rounded-[var(--radius-control)] border border-[var(--color-border)] p-4">
       <h3 className="text-sm font-semibold">Quote</h3>
       {quote === null ? (
         <p className="mt-1 text-sm text-[var(--color-muted)]">
-          No quote has been generated. A quote records the current minimum takeover amount for a few
-          minutes; it cannot be paid and reserves nothing.
+          No quote has been generated. A quote records the current takeover price for{' '}
+          {validityMinutes} minutes; it cannot be paid and reserves nothing.
         </p>
       ) : (
         <dl className="mt-2 grid gap-3 text-sm sm:grid-cols-2">
@@ -128,9 +138,22 @@ function QuoteSection({
           )}
         </dl>
       )}
-      <p className="mt-3 text-xs text-[var(--color-muted)]">
-        A quote cannot be paid: checkout is unavailable and nothing can be charged.
-      </p>
+      <ul className="mt-3 space-y-1 text-xs text-[var(--color-muted)]">
+        <li>A quote is valid for {validityMinutes} minutes, then it must be refreshed.</li>
+        <li>
+          A successful takeover raises the next takeover price to 120% of the amount actually paid,
+          rounded up to the next cent.
+        </li>
+        <li>
+          Taking over a held territory replaces the current placement. The previous holder receives
+          no payout and no revenue share.
+        </li>
+        <li>
+          This buys temporary promotional placement — control of the territory until someone takes
+          it over. It is not equity, intellectual property, permanent ownership, or an investment.
+        </li>
+        <li>A quote cannot be paid: checkout is unavailable and nothing can be charged.</li>
+      </ul>
       {canQuote && (
         <div className="mt-3">
           <Button
@@ -230,7 +253,7 @@ export function TakeoverPreparationPanel({
           </dd>
         </div>
         <div>
-          <dt className="text-[var(--color-muted)]">Minimum takeover amount</dt>
+          <dt className="text-[var(--color-muted)]">Takeover price</dt>
           <dd className="mt-1 font-[family-name:var(--font-mono)]">
             {territory === null ? (
               '—'
@@ -284,11 +307,19 @@ export function TakeoverPreparationPanel({
       )}
       {territoryState === 'claimed' && isActive && (
         <Notice variant="pending" title="Another company holds this territory">
-          <p>
-            Takeover pricing for this claimed territory is not available yet: no rule decides what
-            taking it over would cost, so no quote can be issued. The territory and its owner are
-            unchanged; your preparation records your interest only.
-          </p>
+          {territory?.quoteAvailability === 'claimed_pricing_not_configured' ? (
+            <p>
+              Takeover pricing for this claimed territory is not available: what they paid cannot be
+              established from settled records, so no quote can be issued. The territory and its
+              holder are unchanged; your preparation records your interest only.
+            </p>
+          ) : (
+            <p>
+              Taking it over replaces their placement at 120% of what they paid, and they receive no
+              payout or revenue share. Their placement and this territory are unchanged until a
+              takeover completes; your preparation records your interest only.
+            </p>
+          )}
         </Notice>
       )}
 

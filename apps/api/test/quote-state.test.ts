@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   assertQuotablePricing,
-  assertQuotableTerritory,
+  assertQuotablePrice,
   ClaimedTerritoryPricingNotConfiguredError,
   classifyQuote,
+  isQuotablePricing,
   PricingNotConfiguredError,
   quoteAvailabilityFor,
+  quotablePriceMinor,
 } from '../src/modules/takeover/quote-state.js';
 
 const now = new Date('2026-09-22T10:00:00.000Z');
@@ -105,8 +107,8 @@ describe('classifyQuote', () => {
   });
 });
 
-describe('quoteAvailabilityFor / assertQuotableTerritory', () => {
-  const base = { ...territory, hasActiveOwner: false };
+describe('quoteAvailabilityFor / assertQuotablePrice', () => {
+  const base = { ...territory, claimedNextPriceMinor: null, hasActiveOwner: false };
 
   it('quotes only an active, unowned territory with a configured price', () => {
     expect(quoteAvailabilityFor(base)).toBe('quotable');
@@ -122,13 +124,69 @@ describe('quoteAvailabilityFor / assertQuotableTerritory', () => {
   });
 
   it('refuses a claimed territory even when its stored minimum is positive', () => {
-    expect(() => assertQuotableTerritory({ ...base, hasActiveOwner: true })).toThrow(
+    expect(() => assertQuotablePrice({ ...base, hasActiveOwner: true })).toThrow(
       ClaimedTerritoryPricingNotConfiguredError,
     );
     expect(new ClaimedTerritoryPricingNotConfiguredError()).toMatchObject({
       code: 'CLAIMED_TERRITORY_PRICING_NOT_CONFIGURED',
       statusCode: 409,
     });
-    expect(() => assertQuotableTerritory(base)).not.toThrow();
+    expect(() => assertQuotablePrice(base)).not.toThrow();
+  });
+});
+
+describe('pricing a held territory from its settled capture', () => {
+  const claimed = { ...territory, hasActiveOwner: true };
+
+  it('quotes the proven next price and refuses when it cannot be proven', () => {
+    expect(quotablePriceMinor({ ...claimed, claimedNextPriceMinor: 1_440n })).toBe(1_440n);
+    expect(quoteAvailabilityFor({ ...claimed, claimedNextPriceMinor: 1_440n })).toBe('quotable');
+    expect(assertQuotablePrice({ ...claimed, claimedNextPriceMinor: 1_440n })).toBe(1_440n);
+
+    expect(quotablePriceMinor({ ...claimed, claimedNextPriceMinor: null })).toBeNull();
+    expect(quoteAvailabilityFor({ ...claimed, claimedNextPriceMinor: null })).toBe(
+      'claimed_pricing_not_configured',
+    );
+    expect(() => assertQuotablePrice({ ...claimed, claimedNextPriceMinor: null })).toThrow(
+      ClaimedTerritoryPricingNotConfiguredError,
+    );
+  });
+
+  it('never falls back to the stored minimum for a held territory', () => {
+    // The stored minimum is positive, but the reign has no provable price.
+    expect(
+      quotablePriceMinor({
+        ...claimed,
+        claimedNextPriceMinor: null,
+        minimumTakeoverAmountMinor: 9_999n,
+      }),
+    ).toBeNull();
+  });
+
+  it.each([0n, -1n, BigInt(Number.MAX_SAFE_INTEGER) + 1n])(
+    'refuses an unusable proven price (%s)',
+    (price) => {
+      expect(quotablePriceMinor({ ...claimed, claimedNextPriceMinor: price })).toBeNull();
+    },
+  );
+
+  it('prices an unclaimed territory from its configured minimum', () => {
+    expect(
+      quotablePriceMinor({ ...territory, claimedNextPriceMinor: null, hasActiveOwner: false }),
+    ).toBe(1_000n);
+  });
+});
+
+describe('single-currency enforcement', () => {
+  it.each(['EUR', 'INR', 'usd'])('refuses to quote in %s', (currency) => {
+    const foreign = { ...territory, claimedNextPriceMinor: null, currency, hasActiveOwner: false };
+    expect(isQuotablePricing(foreign)).toBe(false);
+    expect(quotablePriceMinor(foreign)).toBeNull();
+    expect(quoteAvailabilityFor(foreign)).toBe('pricing_not_configured');
+    expect(() => assertQuotablePrice(foreign)).toThrow(PricingNotConfiguredError);
+  });
+
+  it('accepts USD', () => {
+    expect(isQuotablePricing({ ...territory, currency: 'USD' })).toBe(true);
   });
 });

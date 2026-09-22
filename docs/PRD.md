@@ -94,6 +94,37 @@ All journeys below are **PLANNED**.
 - Physical mosaic position and CSS adjacency carry no gameplay meaning.
 - Initial categories and territories enter through a small deterministic reviewed seed; Phase 2 does not introduce a general administrator mutation surface.
 
+### MVP takeover pricing — IMPLEMENTED NOW (CHECKOUT DISABLED)
+
+These rules are approved for the MVP and encoded once, in
+`packages/shared/src/pricing.ts`, which both quote generation and the
+capture-completion transaction read.
+
+- **Currency:** USD only. A territory in any other currency is not quotable.
+- **Base price:** every reviewed seeded territory starts at **$10.00 USD**
+  (`1000` minor units). Seeding and the base-price migration only fill a price
+  of zero; a price an operator configured, or one a capture raised, is never
+  overwritten.
+- **Quote lifetime:** five minutes. A quote is an immutable snapshot; it
+  reserves nothing and locks nothing.
+- **After a successful capture:** the next takeover price becomes **120% of the
+  amount actually settled** for that capture, computed in integer minor units
+  as `ceil(paid * 6 / 5)` and never below the territory's base price.
+  Examples: $10.00 → $12.00; $12.00 → $14.40; $12.01 → $14.42 (a fractional
+  cent always rounds up). No floating-point arithmetic is used anywhere.
+- **Source of truth for "actually settled":** the open reign's
+  `TerritoryOwnership` row, the `OwnershipCapture` marked `COMPLETED` for the
+  version it observed, and that capture's `Payment` marked `CONFIRMED`. A
+  quoted, intended, abandoned, pending, failed, refunded or ambiguous amount is
+  never used. A held territory whose price cannot be proven this way is not
+  quotable and fails closed.
+- **The previous holder receives no payout and no revenue share.** The payment
+  is platform revenue for temporary promotional placement: control of the
+  territory until someone else takes it over. It is never equity, intellectual
+  property, permanent ownership, or an investment.
+- **Checkout and every payment operation are disabled** in this phase; quotes
+  report that nothing can be charged.
+
 ### Bidding and payments — PLANNED
 
 - The backend calculates the legal amount and validates company-scoped authority, verification, territory state/version, currency, and idempotency.

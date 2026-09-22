@@ -38,6 +38,23 @@ docker compose -f compose.yaml -f compose.local.yaml logs -f api
 
 The overlay runs the API with `NODE_ENV=development`, `EMAIL_PROVIDER=development`, `DEV_EMAIL_LOG_ENABLED=true` and `WEB_APP_ORIGIN=http://localhost:${WEB_PORT}`. No mail is sent; every verification, management and access-review link is written to the api log as an `email.development.captured` event with a `link` field (emitted at `info`, so keep `LOG_LEVEL` at its default). Open that link in the browser that submitted the form. Links stay single-use and expiring exactly as in production. A fresh database renders an empty board until the reviewed territory seed is applied once: `docker compose -f compose.yaml -f compose.local.yaml exec api node packages/database/dist/territory-seed-cli.js`. All three settings are rejected under `NODE_ENV=production`, and the overlay leaves the database and API internal, the web listener on loopback, and `DODO_LIVE_ENABLED=false`.
 
+## MVP pricing policy
+
+Every reviewed seeded territory is priced at **$10.00 USD**; quotes last five
+minutes; a successful capture sets the next price to **120% of the amount
+actually settled**, rounded up to the next cent and never below the base price.
+The previous holder receives no payout — the payment is platform revenue for
+temporary promotional placement. The rules live in
+`packages/shared/src/pricing.ts` and are applied by quote generation and by the
+capture transaction; do not restate them elsewhere.
+
+Migration `20260922140000_seeded_territory_base_price` gives seeded territories
+still priced at zero the base price in USD and leaves every other price alone,
+so it is safe to re-run. A held territory is quotable only when its previous
+settled capture amount can be proven from `OwnershipCapture` (COMPLETED) and
+`Payment` (CONFIRMED); otherwise the API answers
+`CLAIMED_TERRITORY_PRICING_NOT_CONFIGURED` and nothing is quoted.
+
 ## Deployment
 
 `compose.yaml` provides PostgreSQL, an explicit migration job, API and web services. The database and API are internal; the web listener binds to loopback for a separately configured HTTPS reverse proxy. Set `WEB_PORT` in `.env` if the default 3000 is unavailable; Windows commonly reserves it for Hyper-V/WinNAT (`netsh interface ipv4 show excludedportrange protocol=tcp`). Configure a domain, TLS, ingress request/connection limits, alert routing, and backups before public traffic.

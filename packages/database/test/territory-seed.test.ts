@@ -31,6 +31,10 @@ function createSeedPrisma(options?: {
         events.push('territory.findMany');
         return options?.territories ?? [];
       }),
+      updateMany: vi.fn(async () => {
+        events.push('territory.updateMany');
+        return { count: 0 };
+      }),
       upsert: vi.fn(async () => {
         events.push('territory.upsert');
         await options?.onTerritoryUpsert?.();
@@ -98,7 +102,7 @@ describe('approved territory seed validation', () => {
         {
           $transaction: transaction,
           territoryCategory: { findMany: vi.fn() },
-          territory: { findMany: vi.fn() },
+          territory: { findMany: vi.fn(), updateMany: vi.fn() },
         },
         definition,
       ),
@@ -238,7 +242,16 @@ describe('approved territory seed validation', () => {
     );
     expect(events.slice(0, 2)).toEqual(['category.findMany', 'territory.findMany']);
     expect(events.slice(2, 10)).toEqual(Array(8).fill('category.upsert'));
-    expect(events.slice(10)).toEqual(Array(27).fill('territory.upsert'));
+    // Each territory upsert is followed by the base-price fill, which only
+    // touches rows still priced at zero.
+    expect(events.slice(10)).toEqual(
+      Array.from({ length: 27 }, () => ['territory.upsert', 'territory.updateMany']).flat(),
+    );
+    expect(transactionClient.territory.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ minimumTakeoverAmountMinor: 0n }),
+      }),
+    );
   });
 
   it('maps concurrent unique-constraint failures to a deterministic seed collision error', async () => {

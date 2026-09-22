@@ -40,6 +40,7 @@ function createProvider(): PaymentProvider {
 
 function createService() {
   return new TakeoverService({
+    checkout: { enabled: true },
     clock: { now: () => now },
     provider: createProvider(),
     repository: new PrismaTakeoverRepository(prisma),

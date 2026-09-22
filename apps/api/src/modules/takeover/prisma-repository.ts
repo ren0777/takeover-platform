@@ -33,6 +33,7 @@ type TakeoverPrismaClient = Pick<
   | 'ownershipCapture'
   | 'payment'
   | 'paymentReconciliationAction'
+  | 'takeoverIntent'
   | 'takeoverQuote'
   | 'territory'
   | 'territoryOwnership'
@@ -74,11 +75,24 @@ function mapTerritory(row: {
   currency: string;
   id: string;
   minimumTakeoverAmountMinor: bigint;
+  ownershipHistory: Array<{ id: string }>;
   slug: string;
   version: bigint;
 }): TerritoryQuoteRecord {
-  return row;
+  const { ownershipHistory, ...territory } = row;
+  return { ...territory, hasActiveOwner: ownershipHistory.length > 0 };
 }
+
+/** Territory columns a quote needs, plus whether a reign is currently open. */
+const territoryForQuoteSelect = {
+  availabilityStatus: true,
+  currency: true,
+  id: true,
+  minimumTakeoverAmountMinor: true,
+  ownershipHistory: { select: { id: true }, take: 1, where: { endedAt: null } },
+  slug: true,
+  version: true,
+} as const;
 
 function mapQuote(
   row: {
@@ -150,14 +164,7 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
 
   async findTerritoryForQuote(slug: string): Promise<TerritoryQuoteRecord | null> {
     const territory = await this.prisma.territory.findUnique({
-      select: {
-        availabilityStatus: true,
-        currency: true,
-        id: true,
-        minimumTakeoverAmountMinor: true,
-        slug: true,
-        version: true,
-      },
+      select: territoryForQuoteSelect,
       where: { slug },
     });
     return territory === null ? null : mapTerritory(territory);
@@ -173,6 +180,9 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
       where: {
         companyId: input.companyId,
         status: 'ACTIVE',
+        // Preparation quotes belong to their intent; the public path only
+        // ever reuses a public quote.
+        takeoverIntentId: null,
         territoryId: input.territoryId,
         territoryVersion: input.territoryVersion,
       },
@@ -211,18 +221,25 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
     const quote = await this.prisma.takeoverQuote.findUnique({ where: { id: quoteId } });
     if (quote === null) return null;
     const territory = await this.prisma.territory.findUnique({
-      select: {
-        availabilityStatus: true,
-        currency: true,
-        id: true,
-        minimumTakeoverAmountMinor: true,
-        slug: true,
-        version: true,
-      },
+      select: territoryForQuoteSelect,
       where: { id: quote.territoryId },
     });
     if (territory === null) return null;
-    return { ...mapQuote(quote, territory.slug), territory: mapTerritory(territory) };
+    const intent =
+      quote.takeoverIntentId === null
+        ? null
+        : await this.prisma.takeoverIntent.findUnique({
+            select: { companyId: true, expiresAt: true, status: true },
+            where: { id: quote.takeoverIntentId },
+          });
+    return {
+      ...mapQuote(quote, territory.slug),
+      territory: mapTerritory(territory),
+      // A dangling reference is treated as a dead intent, never as "no intent".
+      ...(quote.takeoverIntentId === null
+        ? {}
+        : { intent: intent ?? { companyId: '', expiresAt: new Date(0), status: 'MISSING' } }),
+    };
   }
 
   async findCheckoutByQuote(quoteId: string): Promise<CheckoutRecord | null> {

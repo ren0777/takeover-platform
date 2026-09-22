@@ -1,7 +1,10 @@
 import Link from 'next/link';
 import {
+  type TakeoverPreparationQuote,
+  type TakeoverPreparationQuoteState,
   type TakeoverPreparationTerritoryState,
   type TakeoverPreparationView,
+  type TakeoverQuoteStaleReason,
 } from '@takeover/shared';
 import { Button } from '@/components/ui/button';
 import { Notice } from '@/components/ui/notice';
@@ -25,23 +28,143 @@ export function describePreparationTerritory(
   return TERRITORY_STATE[state];
 }
 
+const QUOTE_STATE: Record<TakeoverPreparationQuoteState, TerritoryPresentation> = {
+  none: { label: 'No quote', tone: 'neutral' },
+  active: { label: 'Active', tone: 'info' },
+  expired: { label: 'Expired', tone: 'warning' },
+  stale: { label: 'Out of date', tone: 'warning' },
+  cancelled: { label: 'Cancelled', tone: 'neutral' },
+};
+
+const STALE_REASON: Record<TakeoverQuoteStaleReason, string> = {
+  territory_version_changed: 'The territory changed after this quote was issued.',
+  territory_claimed:
+    'This territory was claimed by another company after this quote was issued, and takeover pricing for claimed territories is not available yet.',
+  pricing_changed: 'The price changed after this quote was issued.',
+  territory_disabled: 'The territory became unavailable after this quote was issued.',
+  territory_missing: 'The territory no longer exists.',
+  intent_not_ready: 'The preparation this quote belongs to is no longer active.',
+};
+
+export function describeQuoteState(state: TakeoverPreparationQuoteState): TerritoryPresentation {
+  return QUOTE_STATE[state];
+}
+
 type PanelProps = {
   busy: boolean;
   company: { id: string; name: string };
   onCancel: (intentId: string) => void;
+  onQuote: () => void;
   onRestart: (territoryExternalRef: string) => void;
   view: TakeoverPreparationView;
 };
 
 /**
+ * The quote as stored: amount and currency are the server's snapshot and are
+ * shown verbatim even when the quote is no longer usable, so a person can see
+ * what changed.
+ */
+function QuoteSection({
+  busy,
+  canQuote,
+  onQuote,
+  quote,
+  quoteState,
+}: {
+  busy: boolean;
+  canQuote: boolean;
+  onQuote: () => void;
+  quote: TakeoverPreparationQuote | null;
+  quoteState: TakeoverPreparationQuoteState;
+}) {
+  const presentation = describeQuoteState(quoteState);
+  return (
+    <div className="rounded-[var(--radius-control)] border border-[var(--color-border)] p-4">
+      <h3 className="text-sm font-semibold">Quote</h3>
+      {quote === null ? (
+        <p className="mt-1 text-sm text-[var(--color-muted)]">
+          No quote has been generated. A quote records the current minimum takeover amount for a few
+          minutes; it cannot be paid and reserves nothing.
+        </p>
+      ) : (
+        <dl className="mt-2 grid gap-3 text-sm sm:grid-cols-2">
+          <div>
+            <dt className="text-[var(--color-muted)]">Quoted amount</dt>
+            <dd className="mt-1 font-[family-name:var(--font-mono)]">
+              {formatMoney(quote.amount)} {quote.amount.currency}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[var(--color-muted)]">Quote status</dt>
+            <dd className="mt-1">
+              <StatusBadge tone={presentation.tone} label={presentation.label} />
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[var(--color-muted)]">Quote expires</dt>
+            <dd className="mt-1 font-[family-name:var(--font-mono)]">
+              {formatAbsoluteDateTime(quote.expiresAt)}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[var(--color-muted)]">Quote ID</dt>
+            <dd className="mt-1 font-[family-name:var(--font-mono)] text-xs break-all">
+              {quote.id}
+            </dd>
+          </div>
+          {quoteState === 'expired' && (
+            <p className="text-[var(--color-muted)] sm:col-span-2">
+              This quote expired. Refresh it to get the current amount.
+            </p>
+          )}
+          {quoteState === 'cancelled' && (
+            <p className="text-[var(--color-muted)] sm:col-span-2">This quote was cancelled.</p>
+          )}
+          {quote.staleReason !== undefined && (
+            <p className="text-[var(--color-muted)] sm:col-span-2">
+              {STALE_REASON[quote.staleReason]}
+              {canQuote ? ' Refresh it to see the current amount.' : ''}
+            </p>
+          )}
+        </dl>
+      )}
+      <p className="mt-3 text-xs text-[var(--color-muted)]">
+        A quote cannot be paid: checkout is unavailable and nothing can be charged.
+      </p>
+      {canQuote && (
+        <div className="mt-3">
+          <Button
+            variant="secondary"
+            onClick={onQuote}
+            busy={busy}
+            busyLabel="Working…"
+            disabled={busy}
+          >
+            {quote === null ? 'Generate quote' : 'Refresh quote'}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * The preparation as the server reports it, with nothing computed here.
  *
- * Pure: every fact on screen (territory state, minimum amount, intent status)
- * comes from the view, and every action is a callback, so the container owns
- * the fetch/mutation lifecycle and this component can be rendered statically.
+ * Pure: every fact on screen (territory state, minimum amount, intent status,
+ * quote verdict) comes from the view, and every action is a callback, so the
+ * container owns the fetch/mutation lifecycle and this component can be
+ * rendered statically.
  */
-export function TakeoverPreparationPanel({ busy, company, onCancel, onRestart, view }: PanelProps) {
-  const { intent, territory, territoryState } = view;
+export function TakeoverPreparationPanel({
+  busy,
+  company,
+  onCancel,
+  onQuote,
+  onRestart,
+  view,
+}: PanelProps) {
+  const { intent, quote, quoteState, territory, territoryState } = view;
 
   if (intent === null) {
     return (
@@ -63,6 +186,8 @@ export function TakeoverPreparationPanel({ busy, company, onCancel, onRestart, v
     !isActive &&
     territory !== null &&
     (territoryState === 'available' || territoryState === 'claimed');
+  // Quoting needs a live preparation and a territory the server would quote.
+  const canQuote = isActive && territory !== null && territory.quoteAvailability === 'quotable';
 
   return (
     <div className="mt-3 space-y-4">
@@ -109,7 +234,7 @@ export function TakeoverPreparationPanel({ busy, company, onCancel, onRestart, v
           <dd className="mt-1 font-[family-name:var(--font-mono)]">
             {territory === null ? (
               '—'
-            ) : territory.minimumTakeoverAmount.amountMinor === 0 ? (
+            ) : !territory.pricingConfigured ? (
               // Zero is "no price set", not a free territory: say so rather
               // than print a currency amount nobody has decided.
               <span className="font-sans text-[var(--color-muted)]">Pricing not configured</span>
@@ -160,11 +285,23 @@ export function TakeoverPreparationPanel({ busy, company, onCancel, onRestart, v
       {territoryState === 'claimed' && isActive && (
         <Notice variant="pending" title="Another company holds this territory">
           <p>
-            Taking it over means beating the current price, which is decided server-side at
-            checkout. Preparation records your interest only.
+            Takeover pricing for this claimed territory is not available yet: no rule decides what
+            taking it over would cost, so no quote can be issued. The territory and its owner are
+            unchanged; your preparation records your interest only.
           </p>
         </Notice>
       )}
+
+      {territory !== null &&
+        (quote !== null || territory.quoteAvailability !== 'pricing_not_configured') && (
+          <QuoteSection
+            busy={busy}
+            canQuote={canQuote}
+            onQuote={onQuote}
+            quote={quote}
+            quoteState={quoteState}
+          />
+        )}
 
       <Notice variant="warning" title="Checkout is unavailable">
         <p>

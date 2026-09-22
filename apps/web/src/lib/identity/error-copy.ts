@@ -46,6 +46,28 @@ const COPY: Record<string, IdentityErrorCopy> = {
     message: 'Someone else completed this action first. Reload to see the current state.',
     canRetry: false,
   },
+  [ERROR_CODES.CLAIMED_TERRITORY_PRICING_NOT_CONFIGURED]: {
+    title: 'Takeover pricing not available',
+    message:
+      'This territory is claimed, and no rule yet decides what taking it over would cost, so no quote can be issued. Nothing was charged.',
+    canRetry: false,
+  },
+  [ERROR_CODES.PRICING_NOT_CONFIGURED]: {
+    title: 'Pricing not configured',
+    message:
+      'No takeover price has been set for this territory, so no quote can be issued. Nothing was charged.',
+    canRetry: false,
+  },
+  [ERROR_CODES.TERRITORY_DISABLED]: {
+    title: 'This territory is unavailable',
+    message: 'It cannot be quoted or taken over right now. Nothing was charged.',
+    canRetry: false,
+  },
+  [ERROR_CODES.TERRITORY_NOT_FOUND]: {
+    title: 'This territory no longer exists',
+    message: 'Choose another territory on the board. Nothing was charged.',
+    canRetry: false,
+  },
   [ERROR_CODES.CONTACT_VERIFICATION_REQUIRED]: {
     title: 'Verify your contact email first',
     message: 'Open the link sent to your contact email, then try again.',

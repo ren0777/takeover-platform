@@ -37,7 +37,11 @@ import type {
   StartTakeoverPreparationInput,
   StartTakeoverPreparationResult,
   TakeoverPreparationRecord,
+  GeneratePreparationQuoteInput,
+  GeneratePreparationQuoteResult,
+  PreparationQuoteRecord,
 } from './repository.js';
+import { classifyQuote, isQuotablePricing } from '../takeover/quote-state.js';
 
 type IdentityPrismaClient = PrismaClient | Prisma.TransactionClient;
 
@@ -94,6 +98,24 @@ function mapIntent(intent: {
 }): IntentRecord {
   return intent;
 }
+
+function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
+const quoteSelect = {
+  companyId: true,
+  consumedAt: true,
+  createdAt: true,
+  currency: true,
+  expiresAt: true,
+  id: true,
+  minimumAmountMinor: true,
+  status: true,
+  takeoverIntentId: true,
+  territoryId: true,
+  territoryVersion: true,
+} as const;
 
 export class PrismaCompanyIdentityRepository implements CompanyIdentityRepository {
   constructor(private readonly prisma: PrismaClient = getDatabaseClient()) {}
@@ -1292,9 +1314,10 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
-    if (intent === null) return { intent: null, territory: null };
+    if (intent === null) return { intent: null, quote: null, territory: null };
     return {
       intent,
+      quote: await this.findLatestQuote(this.prisma, intent.id),
       territory: await this.findPreparationTerritory(this.prisma, intent.territoryExternalRef),
     };
   }
@@ -1330,7 +1353,13 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
       ) {
         // Same territory, still live: the repeated request is the same
         // preparation, so nothing is created and nothing is cancelled.
-        return { created: false, intent: current, kind: 'ready', territory };
+        return {
+          created: false,
+          intent: current,
+          kind: 'ready',
+          quote: await this.findLatestQuote(transaction, current.id),
+          territory,
+        };
       }
 
       // Anything else (different territory, expired, or a stale duplicate
@@ -1340,6 +1369,13 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         await transaction.takeoverIntent.updateMany({
           where: { id: { in: active.map((intent) => intent.id) } },
           data: { status: 'CANCELLED' },
+        });
+        await this.cancelActiveQuotesForIntents(transaction, {
+          actorId: input.sessionId,
+          actorType: 'MANAGEMENT_SESSION',
+          companyId: input.companyId,
+          intentIds: active.map((intent) => intent.id),
+          ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
         });
         for (const superseded of active) {
           await this.writeAudit(transaction, {
@@ -1372,7 +1408,7 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         targetId: intent.id,
         targetType: 'takeover_intent',
       });
-      return { created: true, intent, kind: 'ready', territory };
+      return { created: true, intent, kind: 'ready', quote: null, territory };
     });
   }
 
@@ -1396,11 +1432,18 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
       // finished one is left alone so a retried cancel converges on the same
       // state instead of erroring.
       if (intent.status !== 'IDENTITY_READY') {
-        return { intent, territory };
+        return { intent, quote: await this.findLatestQuote(transaction, intent.id), territory };
       }
       const cancelled = await transaction.takeoverIntent.update({
         where: { id: intent.id },
         data: { status: 'CANCELLED' },
+      });
+      await this.cancelActiveQuotesForIntents(transaction, {
+        actorId: input.sessionId,
+        actorType: 'MANAGEMENT_SESSION',
+        companyId: input.companyId,
+        intentIds: [intent.id],
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
       });
       await this.writeAudit(transaction, {
         action: 'takeover_intent.cancelled',
@@ -1411,7 +1454,11 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
         targetId: intent.id,
         targetType: 'takeover_intent',
       });
-      return { intent: cancelled, territory };
+      return {
+        intent: cancelled,
+        quote: await this.findLatestQuote(transaction, intent.id),
+        territory,
+      };
     });
   }
 
@@ -1450,6 +1497,13 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
     await transaction.takeoverIntent.updateMany({
       where: { id: { in: superseded.map((intent) => intent.id) } },
       data: { status: 'CANCELLED' },
+    });
+    await this.cancelActiveQuotesForIntents(transaction, {
+      actorId: input.contactId,
+      actorType: 'CONTACT',
+      companyId: input.companyId,
+      intentIds: superseded.map((intent) => intent.id),
+      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
     });
     for (const intent of superseded) {
       await this.writeAudit(transaction, {
@@ -1523,11 +1577,169 @@ export class PrismaCompanyIdentityRepository implements CompanyIdentityRepositor
       categoryName: territory.category.name,
       currency: territory.currency,
       currentOwner: owner === undefined ? null : { name: owner.name, slug: owner.slug ?? owner.id },
+      hasActiveOwner: owner !== undefined,
       id: territory.id,
       minimumTakeoverAmountMinor: territory.minimumTakeoverAmountMinor,
       name: territory.name,
       slug: territory.slug,
+      version: territory.version,
     };
+  }
+
+  /** The intent's newest quote of any status; the read model classifies it. */
+  private async findLatestQuote(
+    client: IdentityPrismaClient,
+    intentId: string,
+  ): Promise<PreparationQuoteRecord | null> {
+    return client.takeoverQuote.findFirst({
+      where: { takeoverIntentId: intentId },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select: quoteSelect,
+    });
+  }
+
+  /**
+   * A quote only ever describes the intent it was generated for, so when that
+   * intent stops being live its active quotes are closed with it.
+   */
+  private async cancelActiveQuotesForIntents(
+    transaction: IdentityPrismaClient,
+    input: {
+      actorId: string;
+      actorType: 'CONTACT' | 'MANAGEMENT_SESSION';
+      companyId: string;
+      intentIds: string[];
+      requestId?: string;
+    },
+  ): Promise<void> {
+    if (input.intentIds.length === 0) return;
+    const quotes = await transaction.takeoverQuote.findMany({
+      where: { status: 'ACTIVE', takeoverIntentId: { in: input.intentIds } },
+      select: { id: true },
+    });
+    if (quotes.length === 0) return;
+    await transaction.takeoverQuote.updateMany({
+      where: { id: { in: quotes.map((quote) => quote.id) } },
+      data: { status: 'CANCELLED' },
+    });
+    for (const quote of quotes) {
+      await this.writeAudit(transaction, {
+        action: 'takeover_quote.cancelled',
+        actorId: input.actorId,
+        actorType: input.actorType,
+        companyId: input.companyId,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        targetId: quote.id,
+        targetType: 'takeover_quote',
+      });
+    }
+  }
+
+  async generatePreparationQuote(
+    input: GeneratePreparationQuoteInput,
+  ): Promise<GeneratePreparationQuoteResult> {
+    // Every write here is serialized by the per-contact lock, and the unique
+    // index is per intent, so a violation means a same-intent race slipped
+    // through the lock (it should not). One retry then observes the winner.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.generatePreparationQuoteOnce(input);
+      } catch (error) {
+        if (attempt > 0 || !isUniqueViolation(error)) throw error;
+      }
+    }
+  }
+
+  private async generatePreparationQuoteOnce(
+    input: GeneratePreparationQuoteInput,
+  ): Promise<GeneratePreparationQuoteResult> {
+    return this.prisma.$transaction(async (transaction) => {
+      // Same lock as start/restart/cancel: one preparation mutation at a time
+      // per contact and company, so concurrent generates see one another.
+      await this.lockPreparation(transaction, input.companyId, input.contactId);
+      const authorized = await this.lockAuthorizedSession(transaction, input);
+      if (!authorized) return { kind: 'unauthorized' };
+
+      const intent = await transaction.takeoverIntent.findFirst({
+        where: {
+          companyId: input.companyId,
+          contactId: input.contactId,
+          expiresAt: { gt: input.now },
+          status: 'IDENTITY_READY',
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+      if (intent === null) return { kind: 'no_intent' };
+
+      // The territory row is locked so its version and price cannot move
+      // between being read and being written into the quote.
+      await transaction.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "territories" WHERE "slug" = ${intent.territoryExternalRef} FOR SHARE
+      `);
+      const territory = await this.findPreparationTerritory(
+        transaction,
+        intent.territoryExternalRef,
+      );
+      if (territory === null) return { kind: 'territory_missing' };
+      if (territory.availabilityStatus === 'DISABLED') return { kind: 'territory_disabled' };
+      // No approved policy prices a takeover of a claimed territory; the
+      // stored minimum predates its capture and is never quoted.
+      if (territory.hasActiveOwner) return { kind: 'claimed_pricing_not_configured' };
+      if (!isQuotablePricing(territory)) return { kind: 'pricing_not_configured' };
+
+      // Only this intent's quotes are ever touched: another manager's
+      // preparation on the same territory keeps its own quote untouched, and
+      // the unique index is per intent so both can be active side by side.
+      const active = await transaction.takeoverQuote.findMany({
+        where: { status: 'ACTIVE', takeoverIntentId: intent.id },
+        select: quoteSelect,
+      });
+      for (const quote of active) {
+        const verdict = classifyQuote({ intentReady: true, now: input.now, quote, territory });
+        if (verdict.usable) {
+          return { intent, kind: 'quoted', quote, reused: true, territory };
+        }
+      }
+      for (const quote of active) {
+        const verdict = classifyQuote({ intentReady: true, now: input.now, quote, territory });
+        const status = verdict.state === 'expired' ? 'EXPIRED' : 'CANCELLED';
+        await transaction.takeoverQuote.update({ where: { id: quote.id }, data: { status } });
+        await this.writeAudit(transaction, {
+          action: status === 'EXPIRED' ? 'takeover_quote.expired' : 'takeover_quote.replaced',
+          actorId: input.sessionId,
+          actorType: 'MANAGEMENT_SESSION',
+          companyId: input.companyId,
+          ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+          targetId: quote.id,
+          targetType: 'takeover_quote',
+        });
+      }
+
+      const quote = await transaction.takeoverQuote.create({
+        data: {
+          companyId: input.companyId,
+          currency: territory.currency,
+          expiresAt: input.expiresAt,
+          minimumAmountMinor: territory.minimumTakeoverAmountMinor,
+          observedAt: input.now,
+          status: 'ACTIVE',
+          takeoverIntentId: intent.id,
+          territoryId: territory.id,
+          territoryVersion: territory.version,
+        },
+        select: quoteSelect,
+      });
+      await this.writeAudit(transaction, {
+        action: 'takeover_quote.created',
+        actorId: input.sessionId,
+        actorType: 'MANAGEMENT_SESSION',
+        companyId: input.companyId,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+        targetId: quote.id,
+        targetType: 'takeover_quote',
+      });
+      return { intent, kind: 'quoted', quote, reused: false, territory };
+    });
   }
 
   private async writeAudit(

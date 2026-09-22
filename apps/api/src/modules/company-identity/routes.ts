@@ -218,6 +218,20 @@ export async function companyIdentityRoutes(
     return { data, meta: { requestId: request.id } };
   });
 
+  // No request body is read: the quote is priced entirely from the territory row.
+  app.post('/api/company-management/takeover-preparation/quote', async (request) => {
+    const { csrfToken, sessionToken } = managementMutationSecrets(
+      request,
+      options.config.webAppOrigin,
+    );
+    const data = await options.service.generateTakeoverQuote(
+      sessionToken,
+      csrfToken,
+      requestContext(request),
+    );
+    return { data, meta: { requestId: request.id } };
+  });
+
   app.post<{ Params: { id: string } }>('/api/takeover-intents/:id/cancel', async (request) => {
     const intentId = accessRequestIdSchema.parse(request.params.id);
     const { csrfToken, sessionToken } = managementMutationSecrets(

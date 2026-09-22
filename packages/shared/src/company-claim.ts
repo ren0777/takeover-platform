@@ -293,20 +293,83 @@ export type TakeoverPreparationTerritoryState = z.infer<
   typeof takeoverPreparationTerritoryStateSchema
 >;
 
+export const TAKEOVER_QUOTE_AVAILABILITY = [
+  'quotable',
+  'pricing_not_configured',
+  'claimed_pricing_not_configured',
+  'territory_disabled',
+] as const;
+export type TakeoverQuoteAvailability = (typeof TAKEOVER_QUOTE_AVAILABILITY)[number];
+
 export const takeoverPreparationTerritorySchema = z.object({
   slug: z.string().min(1).max(120),
   name: z.string().min(1).max(120),
   categoryName: z.string().min(1).max(100),
   status: z.enum(TERRITORY_PUBLIC_STATUSES),
   minimumTakeoverAmount: moneySchema,
+  /** False when the stored minimum is zero: no price has been decided, so no quote can exist. */
+  pricingConfigured: z.boolean(),
+  /**
+   * Whether the server would issue a quote right now, and if not, why. A
+   * claimed territory has no approved takeover pricing policy yet, so its
+   * stored minimum is shown but never quoted.
+   */
+  quoteAvailability: z.enum(TAKEOVER_QUOTE_AVAILABILITY),
   currentOwner: z.object({ name: z.string().min(1), slug: z.string().min(1) }).optional(),
 });
 export type TakeoverPreparationTerritory = z.infer<typeof takeoverPreparationTerritorySchema>;
+
+/**
+ * Why an otherwise active quote can no longer be relied on. Computed by the
+ * server at read time against the territory and intent as they are now.
+ */
+export const TAKEOVER_QUOTE_STALE_REASONS = [
+  'territory_version_changed',
+  'territory_claimed',
+  'pricing_changed',
+  'territory_disabled',
+  'territory_missing',
+  'intent_not_ready',
+] as const;
+export const takeoverQuoteStaleReasonSchema = z.enum(TAKEOVER_QUOTE_STALE_REASONS);
+export type TakeoverQuoteStaleReason = z.infer<typeof takeoverQuoteStaleReasonSchema>;
+
+/**
+ * An immutable, server-priced quote bound to one takeover intent. The amount
+ * is what the server read from the territory when the quote was created and
+ * never changes; `usable` says whether it still matches the world.
+ */
+export const takeoverPreparationQuoteSchema = z.object({
+  id: opaqueIdSchema,
+  intentId: opaqueIdSchema,
+  territorySlug: z.string().min(1).max(120),
+  territoryVersion: z.string().regex(/^[1-9][0-9]*$/),
+  amount: moneySchema.refine(({ amountMinor }) => amountMinor > 0, 'quoted amount must be positive'),
+  createdAt: isoDateTimeSchema,
+  expiresAt: isoDateTimeSchema,
+  status: z.enum(['active', 'expired', 'cancelled']),
+  usable: z.boolean(),
+  staleReason: takeoverQuoteStaleReasonSchema.optional(),
+  checkoutAvailable: z.literal(false),
+});
+export type TakeoverPreparationQuote = z.infer<typeof takeoverPreparationQuoteSchema>;
+
+export const TAKEOVER_PREPARATION_QUOTE_STATES = [
+  'none',
+  'active',
+  'expired',
+  'stale',
+  'cancelled',
+] as const;
+export const takeoverPreparationQuoteStateSchema = z.enum(TAKEOVER_PREPARATION_QUOTE_STATES);
+export type TakeoverPreparationQuoteState = z.infer<typeof takeoverPreparationQuoteStateSchema>;
 
 export const takeoverPreparationViewSchema = z.object({
   intent: takeoverIntentSchema.nullable(),
   territory: takeoverPreparationTerritorySchema.nullable(),
   territoryState: takeoverPreparationTerritoryStateSchema,
+  quote: takeoverPreparationQuoteSchema.nullable(),
+  quoteState: takeoverPreparationQuoteStateSchema,
   checkoutAvailable: z.literal(false),
 });
 export type TakeoverPreparationView = z.infer<typeof takeoverPreparationViewSchema>;

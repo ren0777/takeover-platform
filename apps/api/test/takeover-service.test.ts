@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AttemptStatus } from '@takeover/shared';
 import {
+  CheckoutNotFoundError,
   CheckoutQuoteExpiredError,
   InvalidStatusTokenError,
   PaymentProviderRefundError,
@@ -9,6 +10,10 @@ import {
   type PaymentProvider,
   type TakeoverRepository,
 } from '../src/modules/takeover/service.js';
+import {
+  ClaimedTerritoryPricingNotConfiguredError,
+  PricingNotConfiguredError,
+} from '../src/modules/takeover/quote-state.js';
 
 const now = new Date('2026-09-03T10:00:00.000Z');
 const later = new Date('2026-09-03T10:05:00.000Z');
@@ -95,6 +100,7 @@ function createRepository(): TakeoverRepository {
       territory: {
         availabilityStatus: 'ACTIVE' as const,
         currency: 'USD',
+        hasActiveOwner: false,
         id: territoryId,
         minimumTakeoverAmountMinor: 1500n,
         slug: 'ai-coding',
@@ -108,6 +114,7 @@ function createRepository(): TakeoverRepository {
     findTerritoryForQuote: vi.fn(async () => ({
       availabilityStatus: 'ACTIVE' as const,
       currency: 'USD',
+      hasActiveOwner: false,
       id: territoryId,
       minimumTakeoverAmountMinor: 1500n,
       slug: 'ai-coding',
@@ -176,6 +183,7 @@ function createProvider(): PaymentProvider {
 
 function createService(repository = createRepository(), provider = createProvider()) {
   return new TakeoverService({
+    checkout: { enabled: true },
     clock: { now: () => now },
     provider,
     repository,
@@ -225,6 +233,7 @@ describe('TakeoverService quote and checkout orchestration', () => {
       territory: {
         availabilityStatus: 'ACTIVE',
         currency: 'USD',
+        hasActiveOwner: false,
         id: territoryId,
         minimumTakeoverAmountMinor: 1500n,
         slug: 'ai-coding',
@@ -342,6 +351,7 @@ describe('TakeoverService quote and checkout orchestration', () => {
         updatedAt: later,
       });
     const service = new TakeoverService({
+      checkout: { enabled: true },
       checkoutReusePollAttempts: 5,
       checkoutReusePollIntervalMs: 1,
       clock: { now: () => now },
@@ -391,6 +401,7 @@ describe('TakeoverService quote and checkout orchestration', () => {
       updatedAt: now,
     });
     const service = new TakeoverService({
+      checkout: { enabled: true },
       checkoutReusePollAttempts: 3,
       checkoutReusePollIntervalMs: 1,
       clock: { now: () => now },
@@ -431,6 +442,7 @@ describe('TakeoverService quote and checkout orchestration', () => {
     // The released reservation leaves no checkout row behind.
     vi.mocked(repository.findCheckoutByQuote).mockResolvedValue(null);
     const service = new TakeoverService({
+      checkout: { enabled: true },
       checkoutReusePollAttempts: 2,
       checkoutReusePollIntervalMs: 1,
       clock: { now: () => now },
@@ -686,6 +698,7 @@ describe('TakeoverService quote and checkout orchestration', () => {
       territory: {
         availabilityStatus: 'ACTIVE',
         currency: 'USD',
+        hasActiveOwner: false,
         id: territoryId,
         minimumTakeoverAmountMinor: 1500n,
         slug: 'ai-coding',
@@ -700,5 +713,134 @@ describe('TakeoverService quote and checkout orchestration', () => {
       CheckoutQuoteExpiredError,
     );
     expect(provider.createCheckout).not.toHaveBeenCalled();
+  });
+});
+
+describe('TakeoverService pricing guards', () => {
+  it('refuses to quote a territory whose minimum is zero instead of failing the CHECK constraint', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.findTerritoryForQuote).mockResolvedValueOnce({
+      availabilityStatus: 'ACTIVE',
+      currency: 'USD',
+      hasActiveOwner: false,
+      id: territoryId,
+      minimumTakeoverAmountMinor: 0n,
+      slug: 'ai-coding',
+      version: 7n,
+    });
+    const service = createService(repository);
+
+    await expect(
+      service.createQuote({ companyId, territorySlug: 'ai-coding' }),
+    ).rejects.toBeInstanceOf(PricingNotConfiguredError);
+    expect(repository.createQuote).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['cancelled', { companyId, expiresAt: later, status: 'CANCELLED' }],
+    ['expired', { companyId, expiresAt: new Date(now.getTime() - 1), status: 'IDENTITY_READY' }],
+    [
+      'owned by another company',
+      { companyId: 'other', expiresAt: later, status: 'IDENTITY_READY' },
+    ],
+    ['missing', { companyId: '', expiresAt: new Date(0), status: 'MISSING' }],
+  ])(
+    'refuses checkout for a preparation quote whose intent is %s, as if the quote did not exist',
+    async (_label, intent) => {
+      const repository = createRepository();
+      vi.mocked(repository.findQuoteForCheckout).mockResolvedValueOnce({
+        companyId,
+        consumedAt: null,
+        currency: 'USD',
+        expiresAt: later,
+        id: quoteId,
+        intent,
+        minimumAmountMinor: 1500n,
+        status: 'ACTIVE',
+        territory: {
+          availabilityStatus: 'ACTIVE',
+          currency: 'USD',
+          hasActiveOwner: false,
+          id: territoryId,
+          minimumTakeoverAmountMinor: 1500n,
+          slug: 'ai-coding',
+          version: 7n,
+        },
+        territoryId,
+        territoryVersion: 7n,
+      });
+      const service = createService(repository);
+
+      await expect(service.createCheckout({ companyId, quoteId })).rejects.toBeInstanceOf(
+        CheckoutNotFoundError,
+      );
+      expect(repository.reserveCheckout).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe('TakeoverService checkout capability', () => {
+  function createDisabledService(repository = createRepository(), provider = createProvider()) {
+    return new TakeoverService({
+      checkout: { enabled: false, unavailableReason: 'Checkout is not available here.' },
+      clock: { now: () => now },
+      provider,
+      repository,
+      statusTokenSecret: new Uint8Array(32).fill(1),
+      statusTokenTtlSeconds: 60,
+      trustedWebOrigin: 'https://app.example',
+    });
+  }
+
+  it('never advertises checkout for a valid quote when the runtime cannot charge', async () => {
+    const service = createDisabledService();
+
+    const quote = await service.createQuote({ companyId, territorySlug: 'ai-coding' });
+
+    expect(quote.status).toBe('ACTIVE');
+    expect(quote.checkoutAvailable).toBe(false);
+    expect(quote.eligibilityReason).toBe('Checkout is not available here.');
+  });
+
+  it('refuses checkout creation before touching the repository or provider when disabled', async () => {
+    const repository = createRepository();
+    const provider = createProvider();
+    const service = createDisabledService(repository, provider);
+
+    await expect(service.createCheckout({ companyId, quoteId })).rejects.toMatchObject({
+      code: 'SERVICE_UNAVAILABLE',
+      statusCode: 503,
+    });
+    expect(repository.findQuoteForCheckout).not.toHaveBeenCalled();
+    expect(repository.reserveCheckout).not.toHaveBeenCalled();
+    expect(provider.createCheckout).not.toHaveBeenCalled();
+  });
+
+  it('advertises checkout only when the capability is enabled and the quote is live', async () => {
+    const service = createService();
+
+    const quote = await service.createQuote({ companyId, territorySlug: 'ai-coding' });
+
+    expect(quote.checkoutAvailable).toBe(true);
+    expect(quote.eligibilityReason).toBeUndefined();
+  });
+
+  it('refuses to quote a claimed territory at its stale stored minimum', async () => {
+    const repository = createRepository();
+    vi.mocked(repository.findTerritoryForQuote).mockResolvedValueOnce({
+      availabilityStatus: 'ACTIVE',
+      currency: 'USD',
+      hasActiveOwner: true,
+      id: territoryId,
+      minimumTakeoverAmountMinor: 1500n,
+      slug: 'ai-coding',
+      version: 7n,
+    });
+    const service = createService(repository);
+
+    await expect(
+      service.createQuote({ companyId, territorySlug: 'ai-coding' }),
+    ).rejects.toBeInstanceOf(ClaimedTerritoryPricingNotConfiguredError);
+    expect(repository.createQuote).not.toHaveBeenCalled();
   });
 });

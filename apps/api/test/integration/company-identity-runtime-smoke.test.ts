@@ -39,6 +39,14 @@ type ManagementContextResponse = {
 type PreparationView = {
   checkoutAvailable: boolean;
   intent: { id: string; status: string; territoryExternalRef: string } | null;
+  quote: {
+    amount: { amountMinor: number; currency: string };
+    checkoutAvailable: boolean;
+    id: string;
+    status: string;
+    usable: boolean;
+  } | null;
+  quoteState: string;
   territory: {
     minimumTakeoverAmount: { amountMinor: number; currency: string };
     name: string;
@@ -235,6 +243,52 @@ describe('Phase 1 loopback runtime identity smoke', () => {
           where: { companyId: initialClaimBody.data.company.id, status: 'IDENTITY_READY' },
         }),
       ).toBe(1);
+
+      // Quotes: server-priced from the fixture territory, idempotent under a
+      // concurrent pair, never offering checkout, and refused without Origin.
+      const quoteHeaders = {
+        cookie: managerCookies,
+        origin: config.identity.webAppOrigin,
+        'x-csrf-token': initialContextBody.data.csrfToken,
+      };
+      const [quoteA, quoteB] = await Promise.all([
+        request('/api/company-management/takeover-preparation/quote', {
+          headers: quoteHeaders,
+          method: 'POST',
+        }),
+        request('/api/company-management/takeover-preparation/quote', {
+          headers: quoteHeaders,
+          method: 'POST',
+        }),
+      ]);
+      expect([quoteA.status, quoteB.status]).toEqual([200, 200]);
+      const quotedA = ((await quoteA.json()) as { data: PreparationView }).data;
+      const quotedB = ((await quoteB.json()) as { data: PreparationView }).data;
+      expect(quotedA.quote?.id).toBe(quotedB.quote?.id);
+      expect(quotedA).toMatchObject({
+        checkoutAvailable: false,
+        quote: {
+          amount: { amountMinor: 30_000, currency: 'USD' },
+          checkoutAvailable: false,
+          status: 'active',
+          usable: true,
+        },
+        quoteState: 'active',
+      });
+      expect(
+        await prisma.takeoverQuote.count({
+          where: { companyId: initialClaimBody.data.company.id },
+        }),
+      ).toBe(1);
+      expect(await readPreparation()).toMatchObject({
+        quote: { id: quotedA.quote?.id },
+        quoteState: 'active',
+      });
+      const quoteNoOrigin = await request('/api/company-management/takeover-preparation/quote', {
+        headers: { cookie: managerCookies, 'x-csrf-token': initialContextBody.data.csrfToken },
+        method: 'POST',
+      });
+      expect(quoteNoOrigin.status).toBe(403);
 
       const foreignOriginStart = await request('/api/company-management/takeover-preparation', {
         body: startBody,

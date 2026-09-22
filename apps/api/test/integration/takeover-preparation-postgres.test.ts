@@ -296,7 +296,7 @@ describe('takeover preparation PostgreSQL invariants', () => {
         contactId: owner.contact.id,
         now: now(),
       }),
-    ).resolves.toEqual({ intent: null, territory: null });
+    ).resolves.toEqual({ intent: null, quote: null, territory: null });
 
     const restarted = await repository.startTakeoverPreparation(
       startInput(owner, 'cancel-territory'),
@@ -376,6 +376,6 @@ describe('takeover preparation PostgreSQL invariants', () => {
       contactId: managed.contact.id,
       now: new Date(Date.now() + 7_200_000),
     });
-    expect(expired).toEqual({ intent: null, territory: null });
+    expect(expired).toEqual({ intent: null, quote: null, territory: null });
   });
 });

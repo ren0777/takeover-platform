@@ -84,6 +84,7 @@ function createProvider() {
 
 function createService(repository: TakeoverRepository, provider: PaymentProvider) {
   return new TakeoverService({
+    checkout: { enabled: true },
     clock: { now: () => now },
     provider,
     repository,

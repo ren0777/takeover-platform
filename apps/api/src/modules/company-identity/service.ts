@@ -24,10 +24,18 @@ import {
   type RecoveryRequestResult,
   type TakeoverIntent,
   type TakeoverPreparationRequest,
+  type TakeoverPreparationQuote,
   type TakeoverPreparationStartRequest,
   type TakeoverPreparationView,
 } from '@takeover/shared';
 import { z } from 'zod';
+import {
+  ClaimedTerritoryPricingNotConfiguredError,
+  classifyQuote,
+  isQuotablePricing,
+  PricingNotConfiguredError,
+  quoteAvailabilityFor,
+} from '../takeover/quote-state.js';
 import type { IdentityConfig } from '../../config/env.js';
 import type { EmailProvider } from '../../integrations/email/email-provider.js';
 import type { OpaqueTokenService } from '../../security/opaque-token.js';
@@ -44,6 +52,8 @@ import type {
   CompanyRecord,
   IntentRecord,
   ManagementSessionAuthority,
+  PreparationQuoteRecord,
+  PreparationTerritoryRecord,
   TakeoverIntentPreparationRecord,
   TakeoverPreparationRecord,
 } from './repository.js';
@@ -52,6 +62,16 @@ import {
   ManagementAuthorizationRequiredError,
   type ManagementAuthority,
 } from './authorization.js';
+
+export class NoActivePreparationError extends Error {
+  readonly code = 'CONFLICT';
+  readonly statusCode = 409;
+
+  constructor() {
+    super('No active takeover preparation to quote');
+    this.name = 'NoActivePreparationError';
+  }
+}
 
 export type Clock = { now(): Date };
 export type IdentityRequestContext = { ipAddress: string; requestId: string };
@@ -174,13 +194,34 @@ function mapPreparedIntent(record: TakeoverIntentPreparationRecord): TakeoverInt
  * its current row, so a territory that was claimed, disabled or removed since
  * the intent was created reports that state rather than the stale reference.
  */
-function mapPreparationView(record: TakeoverPreparationRecord): TakeoverPreparationView {
+function mapPreparationView(record: TakeoverPreparationRecord, now: Date): TakeoverPreparationView {
   if (record.intent === null) {
-    return { checkoutAvailable: false, intent: null, territory: null, territoryState: 'none' };
+    return {
+      checkoutAvailable: false,
+      intent: null,
+      quote: null,
+      quoteState: 'none',
+      territory: null,
+      territoryState: 'none',
+    };
   }
   const intent = mapPreparedIntent(record.intent);
+  const intentReady = record.intent.status === 'IDENTITY_READY' && record.intent.expiresAt > now;
+  const quoteView = mapQuoteView(
+    record.quote,
+    record.territory,
+    record.intent.territoryExternalRef,
+    intentReady,
+    now,
+  );
   if (record.territory === null) {
-    return { checkoutAvailable: false, intent, territory: null, territoryState: 'missing' };
+    return {
+      checkoutAvailable: false,
+      intent,
+      ...quoteView,
+      territory: null,
+      territoryState: 'missing',
+    };
   }
   const territoryState =
     record.territory.availabilityStatus === 'DISABLED'
@@ -191,6 +232,7 @@ function mapPreparationView(record: TakeoverPreparationRecord): TakeoverPreparat
   return {
     checkoutAvailable: false,
     intent,
+    ...quoteView,
     territory: {
       categoryName: record.territory.categoryName,
       ...(record.territory.currentOwner === null
@@ -201,11 +243,43 @@ function mapPreparationView(record: TakeoverPreparationRecord): TakeoverPreparat
         currency: record.territory.currency,
       },
       name: record.territory.name,
+      pricingConfigured: isQuotablePricing(record.territory),
+      quoteAvailability: quoteAvailabilityFor(record.territory),
       slug: record.territory.slug,
       status: territoryState === 'available' ? 'unclaimed' : territoryState,
     },
     territoryState,
   };
+}
+
+/**
+ * The stored quote is immutable; only its verdict is computed here, against
+ * the territory and intent as they stand now.
+ */
+function mapQuoteView(
+  quote: PreparationQuoteRecord | null,
+  territory: PreparationTerritoryRecord | null,
+  territoryExternalRef: string,
+  intentReady: boolean,
+  now: Date,
+): Pick<TakeoverPreparationView, 'quote' | 'quoteState'> {
+  if (quote === null || quote.takeoverIntentId === null) return { quote: null, quoteState: 'none' };
+  const verdict = classifyQuote({ intentReady, now, quote, territory });
+  const view: TakeoverPreparationQuote = {
+    amount: { amountMinor: safeMinorAmount(quote.minimumAmountMinor), currency: quote.currency },
+    checkoutAvailable: false,
+    createdAt: quote.createdAt.toISOString(),
+    expiresAt: quote.expiresAt.toISOString(),
+    id: quote.id,
+    intentId: quote.takeoverIntentId,
+    status: verdict.state === 'stale' ? 'active' : verdict.state,
+    ...(verdict.state === 'stale' ? { staleReason: verdict.staleReason } : {}),
+    // The reference the quote was issued against, even if the row is gone.
+    territorySlug: territory?.slug ?? territoryExternalRef,
+    territoryVersion: quote.territoryVersion.toString(10),
+    usable: verdict.usable,
+  };
+  return { quote: view, quoteState: verdict.state };
 }
 
 function parseLinkToken(rawToken: string): { secret: string; selector: string } | null {
@@ -970,12 +1044,13 @@ export function createCompanyIdentityService(dependencies: CompanyIdentityServic
       csrfToken: string,
     ): Promise<TakeoverPreparationView> {
       const authority = await requireSessionAuthority(sessionToken, csrfToken);
+      const now = dependencies.clock.now();
       const record = await dependencies.repository.getTakeoverPreparation({
         companyId: authority.companyId,
         contactId: authority.contactId,
-        now: dependencies.clock.now(),
+        now,
       });
-      return mapPreparationView(record);
+      return mapPreparationView(record, now);
     },
 
     async startTakeoverPreparation(
@@ -1004,7 +1079,7 @@ export function createCompanyIdentityService(dependencies: CompanyIdentityServic
         case 'unauthorized':
           throw new ManagementAuthorizationRequiredError();
         case 'ready':
-          return mapPreparationView(result);
+          return mapPreparationView(result, now);
       }
     },
 
@@ -1015,17 +1090,57 @@ export function createCompanyIdentityService(dependencies: CompanyIdentityServic
       context: IdentityRequestContext,
     ): Promise<TakeoverPreparationView> {
       const authority = await requireSessionAuthority(sessionToken, csrfToken);
+      const now = dependencies.clock.now();
       const record = await dependencies.repository.cancelTakeoverIntent({
         companyId: authority.companyId,
         contactId: authority.contactId,
         intentId,
-        now: dependencies.clock.now(),
+        now,
         requestId: context.requestId,
         sessionId: authority.sessionId,
       });
       // Not this company's intent: indistinguishable from no authority.
       if (record === null) throw new ManagementAuthorizationRequiredError();
-      return mapPreparationView(record);
+      return mapPreparationView(record, now);
+    },
+
+    /**
+     * Generates (or returns) the server-priced quote for the contact's live
+     * preparation. Nothing from the request body is read: the amount, the
+     * currency and the version all come from the territory row inside the
+     * locked transaction.
+     */
+    async generateTakeoverQuote(
+      sessionToken: string,
+      csrfToken: string,
+      context: IdentityRequestContext,
+    ): Promise<TakeoverPreparationView> {
+      const authority = await requireSessionAuthority(sessionToken, csrfToken);
+      const now = dependencies.clock.now();
+      const result = await dependencies.repository.generatePreparationQuote({
+        companyId: authority.companyId,
+        contactId: authority.contactId,
+        expiresAt: addSeconds(now, dependencies.config.quoteTtlSeconds),
+        now,
+        requestId: context.requestId,
+        sessionId: authority.sessionId,
+      });
+      switch (result.kind) {
+        case 'unauthorized':
+          throw new ManagementAuthorizationRequiredError();
+        case 'no_intent':
+          throw new NoActivePreparationError();
+        case 'territory_missing':
+          throw new PreparationTerritoryNotFoundError();
+        case 'territory_disabled':
+          throw new PreparationTerritoryDisabledError();
+        case 'pricing_not_configured':
+          throw new PricingNotConfiguredError();
+        case 'claimed_pricing_not_configured':
+          throw new ClaimedTerritoryPricingNotConfiguredError();
+        case 'quoted':
+          return mapPreparationView(result, now);
+      }
     },
   };
 }

@@ -11,6 +11,8 @@ import {
   type QuoteResponse,
 } from '@takeover/shared';
 import { hashSecurityScope } from '../../security/scope-key.js';
+import { PaymentProviderUnavailableError } from './payment-provider.js';
+import { assertQuotableTerritory } from './quote-state.js';
 
 export type Clock = { now(): Date };
 
@@ -60,6 +62,8 @@ export type PaymentProvider = {
 export type TerritoryQuoteRecord = {
   availabilityStatus: 'ACTIVE' | 'DISABLED';
   currency: string;
+  /** True while an ownership reign is open on the territory. */
+  hasActiveOwner: boolean;
   id: string;
   minimumTakeoverAmountMinor: bigint;
   slug: string;
@@ -83,6 +87,8 @@ export type QuoteRecord = {
 
 export type QuoteForCheckoutRecord = QuoteRecord & {
   territory: TerritoryQuoteRecord;
+  /** Present when the quote was generated for a takeover preparation. */
+  intent?: { companyId: string; expiresAt: Date; status: string };
 };
 
 export type CheckoutRecord = {
@@ -346,7 +352,23 @@ export class PaymentProviderRefundError extends Error {
   }
 }
 
+/**
+ * Whether checkout may be offered at all in this runtime. Derived at wiring
+ * time from the configured provider and explicit payment enablement, never
+ * from a quote's own validity: a valid quote in a runtime that cannot charge
+ * must still say checkout is unavailable.
+ */
+export type CheckoutCapability = {
+  enabled: boolean;
+  /** Shown to the person when checkout is not offered. */
+  unavailableReason?: string;
+};
+
+export const CHECKOUT_UNAVAILABLE_REASON =
+  'Checkout is not available in this environment. Nothing can be charged.';
+
 type TakeoverServiceDependencies = {
+  checkout: CheckoutCapability;
   clock: Clock;
   provider: PaymentProvider;
   quoteTtlSeconds?: number;
@@ -377,9 +399,13 @@ function mapMoney(amountMinor: bigint, currency: string): Money {
   return { amountMinor: safeMinorAmount(amountMinor), currency };
 }
 
-function mapQuote(record: QuoteRecord): QuoteResponse {
+function mapQuote(record: QuoteRecord, checkout: CheckoutCapability): QuoteResponse {
+  const quoteUsable = record.status === 'ACTIVE' && record.consumedAt === null;
   return quoteResponseSchema.parse({
-    checkoutAvailable: record.status === 'ACTIVE' && record.consumedAt === null,
+    checkoutAvailable: checkout.enabled && quoteUsable,
+    ...(checkout.enabled
+      ? {}
+      : { eligibilityReason: checkout.unavailableReason ?? CHECKOUT_UNAVAILABLE_REASON }),
     expiresAt: record.expiresAt.toISOString(),
     minimumAmount: mapMoney(record.minimumAmountMinor, record.currency),
     quoteId: record.id,
@@ -514,6 +540,10 @@ export class TakeoverService {
     const territory = await this.dependencies.repository.findTerritoryForQuote(input.territorySlug);
     if (territory === null) throw new TakeoverTerritoryNotFoundError();
     if (territory.availabilityStatus === 'DISABLED') throw new TakeoverTerritoryDisabledError();
+    // A claimed territory has no approved takeover pricing policy, and a zero
+    // or malformed minimum is "no price decided": refuse rather than quote a
+    // number nobody approved or let the CHECK constraint become a 500.
+    assertQuotableTerritory(territory);
 
     const existing = await this.dependencies.repository.findActiveQuote({
       companyId: input.companyId,
@@ -526,7 +556,7 @@ export class TakeoverService {
       existing.minimumAmountMinor === territory.minimumTakeoverAmountMinor &&
       existing.currency === territory.currency
     ) {
-      return mapQuote({ ...existing, territorySlug: territory.slug });
+      return mapQuote({ ...existing, territorySlug: territory.slug }, this.dependencies.checkout);
     }
 
     const quote = await this.dependencies.repository.createQuote({
@@ -539,15 +569,27 @@ export class TakeoverService {
       territorySlug: territory.slug,
       territoryVersion: territory.version,
     });
-    return mapQuote({ ...quote, territorySlug: territory.slug });
+    return mapQuote({ ...quote, territorySlug: territory.slug }, this.dependencies.checkout);
   }
 
   async createCheckout(input: { companyId: string; quoteId: string }): Promise<CheckoutResponse> {
+    // The capability the quote advertised is the capability enforced here.
+    if (!this.dependencies.checkout.enabled) throw new PaymentProviderUnavailableError();
     const now = this.dependencies.clock.now();
     const quote = await this.dependencies.repository.findQuoteForCheckout(input.quoteId);
     if (quote === null) throw new CheckoutNotFoundError();
     if (quote.companyId !== input.companyId) throw new CheckoutNotFoundError();
     assertCheckoutQuoteCurrent(quote, now);
+    // A preparation-bound quote is only as live as its intent. Anything else
+    // is reported exactly like a missing quote, disclosing nothing.
+    if (
+      quote.intent !== undefined &&
+      (quote.intent.status !== 'IDENTITY_READY' ||
+        quote.intent.expiresAt <= now ||
+        quote.intent.companyId !== quote.companyId)
+    ) {
+      throw new CheckoutNotFoundError();
+    }
 
     // The provider must observe at most one creation call per quote: either
     // this request reserves a fresh checkout, or it waits for the winner to

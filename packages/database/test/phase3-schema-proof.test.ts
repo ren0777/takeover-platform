@@ -41,10 +41,7 @@ async function indexDefinition(indexName: string): Promise<string | undefined> {
 
 type Column = { is_nullable: string; data_type: string; column_default: string | null };
 
-async function column(
-  table: string,
-  name: string,
-): Promise<Column | undefined> {
+async function column(table: string, name: string): Promise<Column | undefined> {
   const rows = await prisma.$queryRawUnsafe<Array<Column>>(
     `SELECT is_nullable, data_type, column_default FROM information_schema.columns
      WHERE table_schema = 'public' AND table_name = '${table}' AND column_name = '${name}'`,
@@ -95,9 +92,14 @@ describe('Phase 3 migration shape', () => {
     const definition = await indexDefinition('uq_takeover_quote_active');
     expect(definition, 'the partial unique index exists').toBeDefined();
     expect(definition).toContain('UNIQUE INDEX');
-    expect(definition).toContain('(territory_id, company_id, territory_version)');
+    // Per intent: preparation quotes never collide across managers, while
+    // public quotes (NULL intent) stay unique thanks to NULLS NOT DISTINCT.
+    expect(definition).toContain(
+      '(territory_id, company_id, territory_version, takeover_intent_id)',
+    );
+    expect(definition).toContain('NULLS NOT DISTINCT');
     expect(definition).toContain('WHERE');
-    expect(definition).toContain("'ACTIVE'::\"QuoteStatus\"");
+    expect(definition).toContain('\'ACTIVE\'::"QuoteStatus"');
   });
 
   it('stores webhook payloads as NOT NULL jsonb', async () => {
@@ -156,9 +158,7 @@ describe('Phase 3 migration shape', () => {
   });
 
   it('declares the money CHECK constraints', async () => {
-    expect(
-      await constraintExists('chk_territory_minimum_amount_nonnegative', 'c'),
-    ).toBe(true);
+    expect(await constraintExists('chk_territory_minimum_amount_nonnegative', 'c')).toBe(true);
     expect(await constraintExists('TakeoverQuote_minimum_amount_minor_check', 'c')).toBe(true);
     expect(await constraintExists('Payment_amount_minor_check', 'c')).toBe(true);
   });

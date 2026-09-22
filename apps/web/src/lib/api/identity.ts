@@ -198,3 +198,16 @@ export function cancelTakeoverIntent(intentId: string): Promise<TakeoverPreparat
     withCsrf: true,
   });
 }
+
+/**
+ * Generates or refreshes the server-priced quote for the active preparation.
+ * Sends no body: the amount, currency and territory version are the server's.
+ */
+export function generateTakeoverQuote(): Promise<TakeoverPreparationView> {
+  return apiRequest({
+    method: 'POST',
+    path: '/api/company-management/takeover-preparation/quote',
+    schema: takeoverPreparationViewSchema,
+    withCsrf: true,
+  });
+}

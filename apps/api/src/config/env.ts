@@ -29,8 +29,12 @@ const apiEnvironmentSchema = z
     ACCESS_REQUESTS_PER_IP_PER_HOUR: positiveSeconds.default(10),
     API_HOST: z.string().min(1).default('127.0.0.1'),
     API_PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
-    API_TRUSTED_PROXIES: z.string().default('')
-      .transform((value) => value.trim() === '' ? [] : value.split(',').map((address) => address.trim()))
+    API_TRUSTED_PROXIES: z
+      .string()
+      .default('')
+      .transform((value) =>
+        value.trim() === '' ? [] : value.split(',').map((address) => address.trim()),
+      )
       .pipe(z.array(z.union([z.ipv4(), z.ipv6()])).max(16)),
     DATABASE_URL: z.url().optional(),
     DEV_EMAIL_CAPTURE_ENABLED: booleanString.default(false),
@@ -42,7 +46,10 @@ const apiEnvironmentSchema = z
     EMAIL_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(10_000),
     OPERATOR_ID: z.string().uuid().optional(),
     OPERATOR_CREDENTIAL: z.string().optional(),
-    OPERATOR_PERMISSIONS: z.string().default('read').transform((value) => value.split(',').map((v) => v.trim()))
+    OPERATOR_PERMISSIONS: z
+      .string()
+      .default('read')
+      .transform((value) => value.split(',').map((v) => v.trim()))
       .pipe(z.array(z.enum(['read', 'moderate'])).min(1))
       .refine((permissions) => new Set(permissions).size === permissions.length),
     SEASON_DURATION_DAYS: z.coerce.number().int().min(1).max(366).default(30),
@@ -56,6 +63,7 @@ const apiEnvironmentSchema = z
     MANAGER_NOTIFICATION_COOLDOWN_SECONDS: positiveSeconds.default(3_600),
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     RECOVERY_REQUEST_TTL_SECONDS: positiveSeconds.default(604_800),
+    TAKEOVER_QUOTE_TTL_SECONDS: positiveSeconds.max(3_600).default(300),
     RECOVERY_REQUESTS_PER_CONTACT_COMPANY_PER_DAY: positiveSeconds.default(2),
     TOKEN_EXCHANGE_ATTEMPTS_PER_IP_PER_HOUR: positiveSeconds.default(60),
     TOKEN_EXCHANGE_FAILURES_PER_SELECTOR: positiveSeconds.default(10),
@@ -66,6 +74,7 @@ const apiEnvironmentSchema = z
     WEB_APP_ORIGIN: z.url().default('http://localhost:3000'),
     DODO_API_KEY: z.string().nonempty().optional(),
     DODO_LIVE_ENABLED: booleanString.default(false),
+    PAYMENTS_ENABLED: booleanString.default(false),
     DODO_BASE_URL: z.string().url().default('https://test.dodopayments.com/'),
     DODO_PRODUCT_IDS: z.string().optional(),
     DODO_DEFAULT_PRODUCT_ID: z.string().nonempty().optional(),
@@ -83,14 +92,32 @@ const apiEnvironmentSchema = z
     const webUrl = new URL(value.WEB_APP_ORIGIN);
     if (value.EMAIL_PROVIDER === 'resend') {
       for (const field of ['RESEND_API_KEY', 'EMAIL_FROM'] as const) {
-        if (value[field] === undefined) context.addIssue({ code: 'custom', message: 'required for Resend', path: [field] });
+        if (value[field] === undefined)
+          context.addIssue({ code: 'custom', message: 'required for Resend', path: [field] });
       }
-      if (webUrl.protocol !== 'https:') context.addIssue({ code: 'custom', message: 'production email links require HTTPS', path: ['WEB_APP_ORIGIN'] });
+      if (webUrl.protocol !== 'https:')
+        context.addIssue({
+          code: 'custom',
+          message: 'production email links require HTTPS',
+          path: ['WEB_APP_ORIGIN'],
+        });
     }
     if (value.OPERATOR_ID !== undefined || value.OPERATOR_CREDENTIAL !== undefined) {
-      if (value.OPERATOR_ID === undefined) context.addIssue({ code: 'custom', message: 'required for operator access', path: ['OPERATOR_ID'] });
-      if (value.OPERATOR_CREDENTIAL === undefined || decodedSecret(value.OPERATOR_CREDENTIAL) === null) {
-        context.addIssue({ code: 'custom', message: 'must be a random base64url secret of at least 32 bytes', path: ['OPERATOR_CREDENTIAL'] });
+      if (value.OPERATOR_ID === undefined)
+        context.addIssue({
+          code: 'custom',
+          message: 'required for operator access',
+          path: ['OPERATOR_ID'],
+        });
+      if (
+        value.OPERATOR_CREDENTIAL === undefined ||
+        decodedSecret(value.OPERATOR_CREDENTIAL) === null
+      ) {
+        context.addIssue({
+          code: 'custom',
+          message: 'must be a random base64url secret of at least 32 bytes',
+          path: ['OPERATOR_CREDENTIAL'],
+        });
       }
     }
     if (webUrl.origin !== value.WEB_APP_ORIGIN.replace(/\/$/, '')) {
@@ -103,7 +130,11 @@ const apiEnvironmentSchema = z
 
     if (value.NODE_ENV === 'production') {
       if (value.DATABASE_URL === undefined) {
-        context.addIssue({ code: 'custom', message: 'required in production', path: ['DATABASE_URL'] });
+        context.addIssue({
+          code: 'custom',
+          message: 'required in production',
+          path: ['DATABASE_URL'],
+        });
       }
       if (value.TOKEN_HMAC_SECRET === DEVELOPMENT_TOKEN_SECRET) {
         context.addIssue({
@@ -173,6 +204,8 @@ export type IdentityConfig = Readonly<{
     tokenExchangeAttemptsPerIpPerHour: number;
     tokenExchangeFailuresPerSelector: number;
   }>;
+  /** How long a generated takeover quote stays usable. Bounded to keep prices fresh. */
+  quoteTtlSeconds: number;
   recoveryRequestTtlSeconds: number;
   tokenHmacSecret: Uint8Array;
   webAppOrigin: string;
@@ -199,6 +232,11 @@ export type ApiConfig = {
     intervalSeconds: number;
   }>;
   dodo?: DodoConfig;
+  /**
+   * PAYMENTS_ENABLED: checkout is offered only with this explicit enablement,
+   * independently of DODO_LIVE_ENABLED, which alone guards the live host.
+   */
+  paymentsEnabled: boolean;
   operator?: OperatorConfig;
   competition: { seasonDurationDays: number; seasonStartsAt?: Date };
 };
@@ -206,8 +244,17 @@ export type ApiConfig = {
 export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
   // Compose and secret injectors commonly represent an unconfigured optional value as empty.
   const normalized = { ...source };
-  for (const field of ['RESEND_API_KEY', 'EMAIL_FROM', 'DODO_API_KEY', 'DODO_PRODUCT_IDS',
-    'DODO_WEBHOOK_SECRET', 'DODO_DEFAULT_PRODUCT_ID', 'OPERATOR_ID', 'OPERATOR_CREDENTIAL', 'SEASON_STARTS_AT']) {
+  for (const field of [
+    'RESEND_API_KEY',
+    'EMAIL_FROM',
+    'DODO_API_KEY',
+    'DODO_PRODUCT_IDS',
+    'DODO_WEBHOOK_SECRET',
+    'DODO_DEFAULT_PRODUCT_ID',
+    'OPERATOR_ID',
+    'OPERATOR_CREDENTIAL',
+    'SEASON_STARTS_AT',
+  ]) {
     if (normalized[field] === '') delete normalized[field];
   }
   const result = apiEnvironmentSchema.safeParse(normalized);
@@ -270,10 +317,21 @@ export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
     if (baseUrlObj.protocol !== 'https:') {
       throw new Error('DODO_BASE_URL must be HTTPS');
     }
-    if (baseUrlObj.username || baseUrlObj.password || baseUrlObj.search || baseUrlObj.hash || baseUrlObj.pathname !== '/') {
-      throw new Error('DODO_BASE_URL must be an origin without credentials, path, query, or fragment');
+    if (
+      baseUrlObj.username ||
+      baseUrlObj.password ||
+      baseUrlObj.search ||
+      baseUrlObj.hash ||
+      baseUrlObj.pathname !== '/'
+    ) {
+      throw new Error(
+        'DODO_BASE_URL must be an origin without credentials, path, query, or fragment',
+      );
     }
-    if (result.data.NODE_ENV === 'production' && !['test.dodopayments.com', 'live.dodopayments.com'].includes(baseUrlObj.host)) {
+    if (
+      result.data.NODE_ENV === 'production' &&
+      !['test.dodopayments.com', 'live.dodopayments.com'].includes(baseUrlObj.host)
+    ) {
       throw new Error('DODO_BASE_URL must use an official Dodo API host in production');
     }
     if (baseUrlObj.hostname === 'live.dodopayments.com' && !result.data.DODO_LIVE_ENABLED) {
@@ -289,25 +347,37 @@ export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
     developmentEmailLogEnabled: result.data.DEV_EMAIL_LOG_ENABLED,
     draftTtlSeconds: result.data.DRAFT_TTL_SECONDS,
     emailProvider: result.data.EMAIL_PROVIDER,
-    ...(result.data.EMAIL_PROVIDER === 'resend' ? { productionEmail: {
-      apiKey: result.data.RESEND_API_KEY!, fromEmail: result.data.EMAIL_FROM!, timeoutMs: result.data.EMAIL_TIMEOUT_MS,
-    } } : {}),
+    ...(result.data.EMAIL_PROVIDER === 'resend'
+      ? {
+          productionEmail: {
+            apiKey: result.data.RESEND_API_KEY!,
+            fromEmail: result.data.EMAIL_FROM!,
+            timeoutMs: result.data.EMAIL_TIMEOUT_MS,
+          },
+        }
+      : {}),
     emailVerificationTtlSeconds: result.data.EMAIL_VERIFICATION_TTL_SECONDS,
     managementLinkTtlSeconds: result.data.MANAGEMENT_LINK_TTL_SECONDS,
     managementSessionTtlSeconds: result.data.MANAGEMENT_SESSION_TTL_SECONDS,
     rateLimits,
+    quoteTtlSeconds: result.data.TAKEOVER_QUOTE_TTL_SECONDS,
     recoveryRequestTtlSeconds: result.data.RECOVERY_REQUEST_TTL_SECONDS,
     tokenHmacSecret,
     webAppOrigin: result.data.WEB_APP_ORIGIN.replace(/\/$/, ''),
   });
   const config: ApiConfig = {
-    competition: { seasonDurationDays: result.data.SEASON_DURATION_DAYS,
-      ...(result.data.SEASON_STARTS_AT === undefined ? {} : { seasonStartsAt: new Date(result.data.SEASON_STARTS_AT) }) },
+    competition: {
+      seasonDurationDays: result.data.SEASON_DURATION_DAYS,
+      ...(result.data.SEASON_STARTS_AT === undefined
+        ? {}
+        : { seasonStartsAt: new Date(result.data.SEASON_STARTS_AT) }),
+    },
     host: result.data.API_HOST,
     trustedProxies: result.data.API_TRUSTED_PROXIES,
     identity,
     logLevel: result.data.LOG_LEVEL,
     nodeEnv: result.data.NODE_ENV,
+    paymentsEnabled: result.data.PAYMENTS_ENABLED,
     port: result.data.API_PORT,
     takeoverReconciliation: Object.freeze({
       batchSize: result.data.TAKEOVER_RECONCILIATION_BATCH_SIZE,
@@ -317,8 +387,11 @@ export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
   };
 
   if (result.data.OPERATOR_ID !== undefined && result.data.OPERATOR_CREDENTIAL !== undefined) {
-    config.operator = { operatorId: result.data.OPERATOR_ID, credential: result.data.OPERATOR_CREDENTIAL,
-      permissions: result.data.OPERATOR_PERMISSIONS };
+    config.operator = {
+      operatorId: result.data.OPERATOR_ID,
+      credential: result.data.OPERATOR_CREDENTIAL,
+      permissions: result.data.OPERATOR_PERMISSIONS,
+    };
   }
 
   if (result.data.DODO_API_KEY !== undefined) {

@@ -232,3 +232,15 @@ describe('Dodo configuration', () => {
     ).toThrow('DODO_BASE_URL must be HTTPS');
   });
 });
+
+describe('payment enablement gates', () => {
+  it('keeps checkout enablement independent of the live-host gate', () => {
+    expect(parseApiConfig({}).paymentsEnabled).toBe(false);
+    expect(parseApiConfig({ DODO_LIVE_ENABLED: 'true' }).paymentsEnabled).toBe(false);
+    expect(parseApiConfig({ PAYMENTS_ENABLED: 'true' }).paymentsEnabled).toBe(true);
+    // The live provider host still needs its own explicit enablement.
+    expect(() =>
+      parseApiConfig({ PAYMENTS_ENABLED: 'true', DODO_BASE_URL: 'https://live.dodopayments.com' }),
+    ).toThrow('DODO_LIVE_ENABLED');
+  });
+});

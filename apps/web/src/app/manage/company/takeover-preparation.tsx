@@ -7,6 +7,7 @@ import { Notice } from '@/components/ui/notice';
 import { ApiRequestError } from '@/lib/api/client';
 import {
   cancelTakeoverIntent,
+  generateTakeoverQuote,
   getTakeoverPreparation,
   startTakeoverPreparation,
 } from '@/lib/api/identity';
@@ -98,6 +99,7 @@ export function TakeoverPreparation({ company }: { company: { id: string; name: 
         busy={state.busy}
         company={company}
         onCancel={(intentId) => void mutate(() => cancelTakeoverIntent(intentId))}
+        onQuote={() => void mutate(() => generateTakeoverQuote())}
         onRestart={(territoryExternalRef) =>
           void mutate(() => startTakeoverPreparation({ territoryExternalRef }))
         }

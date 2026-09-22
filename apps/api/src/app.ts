@@ -15,7 +15,7 @@ import { UnavailablePaymentProvider } from './modules/takeover/payment-provider.
 import { DodoPaymentProvider } from './modules/takeover/providers/dodo/DodoPaymentProvider.js';
 import { PrismaTakeoverRepository } from './modules/takeover/prisma-repository.js';
 import { TakeoverReconciliationDriver } from './modules/takeover/reconciliation-driver.js';
-import { TakeoverService } from './modules/takeover/service.js';
+import { CHECKOUT_UNAVAILABLE_REASON, TakeoverService } from './modules/takeover/service.js';
 import { companyIdentityPlugin } from './plugins/company-identity.js';
 import { databasePlugin } from './plugins/database.js';
 import { emailPlugin } from './plugins/email.js';
@@ -255,10 +255,19 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
           : new UnavailablePaymentProvider();
 
       const repository = new PrismaTakeoverRepository(takeoverApp.database);
+      // Checkout is offered only when a real provider is configured AND
+      // payments are explicitly enabled; either missing keeps every quote
+      // saying checkout is unavailable and refuses checkout creation.
+      const checkoutEnabled =
+        !(provider instanceof UnavailablePaymentProvider) && runtimeConfig.paymentsEnabled;
       const service = new TakeoverService({
+        checkout: {
+          enabled: checkoutEnabled,
+          ...(checkoutEnabled ? {} : { unavailableReason: CHECKOUT_UNAVAILABLE_REASON }),
+        },
         clock: { now: () => new Date() },
         provider,
-
+        quoteTtlSeconds: runtimeConfig.identity.quoteTtlSeconds,
         repository,
         statusTokenSecret: runtimeConfig.identity.tokenHmacSecret,
         statusTokenTtlSeconds: 86_400,

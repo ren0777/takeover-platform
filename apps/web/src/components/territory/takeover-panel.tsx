@@ -193,8 +193,9 @@ export function TakeoverPanel({ territorySlug }: { territorySlug: string }) {
       </dl>
 
       <p className="mt-3 text-xs text-[var(--color-muted)]">
-        This is the whole amount. It is set by us, not entered by you, and it is charged only if you
-        complete payment at our provider.
+        {quote.checkoutAvailable
+          ? 'This is the whole amount. It is set by us, not entered by you, and it is charged only if you complete payment at our provider.'
+          : 'This is the whole amount, set by us, not entered by you. Checkout is unavailable, so nothing can be charged.'}
       </p>
 
       {quote.checkoutAvailable ? (

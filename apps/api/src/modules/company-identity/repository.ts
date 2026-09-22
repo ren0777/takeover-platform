@@ -133,8 +133,7 @@ export type ManagementSessionAuthority = ManagementAuthority & {
 };
 
 export type ManagementLinkCompanyLocator =
-  | { normalizedSlug: string }
-  | { normalizedWebsite: string };
+  { normalizedSlug: string } | { normalizedWebsite: string };
 
 export type IssueManagementChallengeInput = Omit<
   IssueContactVerificationChallengeInput,
@@ -281,16 +280,62 @@ export type PreparationTerritoryRecord = {
   categoryName: string;
   currency: string;
   currentOwner: { name: string; slug: string } | null;
+  /** Derived from currentOwner; kept explicit for the shared pricing rules. */
+  hasActiveOwner: boolean;
   id: string;
   minimumTakeoverAmountMinor: bigint;
   name: string;
   slug: string;
+  /** Territory.version at read time; quotes are bound to it. */
+  version: bigint;
+};
+
+/** A stored quote row as the preparation surface reads it. Never mutated after creation. */
+export type PreparationQuoteRecord = {
+  companyId: string;
+  consumedAt: Date | null;
+  createdAt: Date;
+  currency: string;
+  expiresAt: Date;
+  id: string;
+  minimumAmountMinor: bigint;
+  status: 'ACTIVE' | 'EXPIRED' | 'CANCELLED';
+  takeoverIntentId: string | null;
+  territoryId: string;
+  territoryVersion: bigint;
 };
 
 export type TakeoverPreparationRecord = {
   intent: TakeoverIntentPreparationRecord | null;
+  /** The intent's most recent quote of any status, or null. */
+  quote: PreparationQuoteRecord | null;
   territory: PreparationTerritoryRecord | null;
 };
+
+export type GeneratePreparationQuoteInput = {
+  companyId: string;
+  contactId: string;
+  expiresAt: Date;
+  now: Date;
+  requestId?: string;
+  sessionId: string;
+};
+
+export type GeneratePreparationQuoteResult =
+  | { kind: 'unauthorized' }
+  | { kind: 'no_intent' }
+  | { kind: 'territory_missing' }
+  | { kind: 'territory_disabled' }
+  | { kind: 'pricing_not_configured' }
+  | { kind: 'claimed_pricing_not_configured' }
+  | {
+      kind: 'quoted';
+      /** True when an unexpired, still-accurate quote was returned instead of a new row. */
+      reused: boolean;
+      intent: TakeoverIntentPreparationRecord;
+      quote: PreparationQuoteRecord;
+      territory: PreparationTerritoryRecord;
+    };
 
 export type GetTakeoverPreparationInput = {
   companyId: string;
@@ -317,6 +362,8 @@ export type StartTakeoverPreparationResult =
       /** False when the request matched the live preparation and nothing changed. */
       created: boolean;
       intent: TakeoverIntentPreparationRecord;
+      /** The live intent's newest quote when it was reused; null for a new intent. */
+      quote: PreparationQuoteRecord | null;
       territory: PreparationTerritoryRecord;
     };
 
@@ -405,4 +452,7 @@ export interface CompanyIdentityRepository {
   ): Promise<StartTakeoverPreparationResult>;
   /** Resolves to null when the intent is not this company's. */
   cancelTakeoverIntent(input: CancelTakeoverIntentInput): Promise<TakeoverPreparationRecord | null>;
+  generatePreparationQuote(
+    input: GeneratePreparationQuoteInput,
+  ): Promise<GeneratePreparationQuoteResult>;
 }

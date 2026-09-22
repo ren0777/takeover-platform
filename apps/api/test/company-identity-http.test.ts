@@ -133,6 +133,22 @@ function createService(): CompanyIdentityService {
     })),
     getTakeoverPreparation: vi.fn(async () => preparationView),
     startTakeoverPreparation: vi.fn(async () => preparationView),
+    generateTakeoverQuote: vi.fn(async () => ({
+      ...preparationView,
+      quote: {
+        amount: { amountMinor: 1_000, currency: 'USD' },
+        checkoutAvailable: false as const,
+        createdAt: '2026-08-30T12:55:00.000Z',
+        expiresAt: '2026-08-30T13:00:00.000Z',
+        id: '44444444-4444-4444-8444-444444444444',
+        intentId: intent.id,
+        status: 'active' as const,
+        territorySlug: 'ai-coding',
+        territoryVersion: '3',
+        usable: true,
+      },
+      quoteState: 'active' as const,
+    })),
     cancelTakeoverIntent: vi.fn(async () => ({
       ...preparationView,
       intent: { ...preparationView.intent, status: 'cancelled' as const },
@@ -147,10 +163,14 @@ const preparationView = {
     categoryName: 'AI',
     minimumTakeoverAmount: { amountMinor: 25_000, currency: 'USD' },
     name: 'AI Coding',
+    pricingConfigured: true,
+    quoteAvailability: 'quotable' as const,
     slug: 'ai-coding',
     status: 'unclaimed' as const,
   },
   territoryState: 'available' as const,
+  quote: null,
+  quoteState: 'none' as const,
 };
 
 const managementHeaders = {
@@ -584,4 +604,49 @@ describe('company identity HTTP surface', () => {
       );
     },
   );
+});
+
+describe('takeover preparation quote route', () => {
+  it('generates a quote only with exact Origin, session and CSRF, ignoring any body', async () => {
+    const harness = buildIdentityApp();
+
+    const anonymous = await harness.app.inject({
+      method: 'POST',
+      url: '/api/company-management/takeover-preparation/quote',
+    });
+    // Origin is checked before anything else on every mutation route.
+    expect(anonymous.statusCode).toBe(403);
+    const foreign = await harness.app.inject({
+      method: 'POST',
+      url: '/api/company-management/takeover-preparation/quote',
+      headers: { ...managementHeaders, origin: 'https://evil.example' },
+    });
+    expect(foreign.statusCode).toBe(403);
+    const csrfMismatch = await harness.app.inject({
+      method: 'POST',
+      url: '/api/company-management/takeover-preparation/quote',
+      headers: { ...managementHeaders, 'x-csrf-token': 'other' },
+    });
+    expect(csrfMismatch.statusCode).toBe(401);
+    expect(harness.service.generateTakeoverQuote).not.toHaveBeenCalled();
+
+    // A browser-supplied amount, currency or version is never read, let alone trusted.
+    const response = await harness.app.inject({
+      method: 'POST',
+      url: '/api/company-management/takeover-preparation/quote',
+      headers: managementHeaders,
+      payload: { amountMinor: 1, currency: 'EUR', territoryVersion: '999' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(harness.service.generateTakeoverQuote).toHaveBeenCalledWith(
+      'session',
+      'csrf',
+      expect.objectContaining({ requestId: expect.any(String) }),
+    );
+    expect(response.json().data).toMatchObject({
+      checkoutAvailable: false,
+      quote: { amount: { amountMinor: 1_000, currency: 'USD' }, checkoutAvailable: false },
+      quoteState: 'active',
+    });
+  });
 });

@@ -44,6 +44,7 @@ function createService(provider = createProvider()) {
   return {
     provider,
     service: new TakeoverService({
+      checkout: { enabled: true },
       clock: { now: () => now },
       provider,
       repository: new PrismaTakeoverRepository(prisma),
@@ -1693,6 +1694,16 @@ describe('TakeoverService with real PostgreSQL repository', () => {
       providerCheckoutId: `provider-${checkout.checkoutId}`,
       quoteId: quote.quoteId,
     });
+    // A claimed territory is never quoted (no takeover pricing policy exists),
+    // so the first reign ends before the same company is quoted again. The
+    // scenario under test is provider payment-id reuse, not re-capture.
+    const reign = await prisma.territoryOwnership.findFirstOrThrow({
+      where: { endedAt: null, territoryId: fixture.territoryId },
+    });
+    await prisma.territoryOwnership.update({
+      data: { endedAt: new Date(reign.capturedAt.getTime() + 1_000) },
+      where: { id: reign.id },
+    });
     await prisma.territory.update({
       data: { minimumTakeoverAmountMinor: 2000n },
       where: { id: fixture.territoryId },
@@ -1882,10 +1893,12 @@ describe('TakeoverService with real PostgreSQL repository', () => {
     // Two fully independent service/repository pairs over one shared Postgres,
     // mirroring two API replicas racing the same quote.
     const first = new TakeoverService({
+      checkout: { enabled: true },
       ...serviceOptions,
       repository: new PrismaTakeoverRepository(prisma),
     });
     const second = new TakeoverService({
+      checkout: { enabled: true },
       ...serviceOptions,
       repository: new PrismaTakeoverRepository(prisma),
     });
@@ -1937,6 +1950,7 @@ describe('TakeoverService with real PostgreSQL repository', () => {
       lookupRefund: vi.fn(async () => null),
     };
     const first = new TakeoverService({
+      checkout: { enabled: true },
       clock: { now: () => now },
       provider: gatedProvider,
       repository: new PrismaTakeoverRepository(prisma),
@@ -1945,6 +1959,7 @@ describe('TakeoverService with real PostgreSQL repository', () => {
       trustedWebOrigin: 'https://app.example',
     });
     const second = new TakeoverService({
+      checkout: { enabled: true },
       clock: { now: () => now },
       checkoutReusePollAttempts: 4,
       checkoutReusePollIntervalMs: 5,

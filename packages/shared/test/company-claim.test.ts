@@ -15,8 +15,12 @@ import {
   recoveryRequestResultSchema,
   takeoverIntentSchema,
   takeoverPreparationRequestSchema,
+  takeoverPreparationQuoteSchema,
   takeoverPreparationStartRequestSchema,
+  takeoverPreparationTerritorySchema,
   takeoverPreparationViewSchema,
+  TAKEOVER_PREPARATION_QUOTE_STATES,
+  TAKEOVER_QUOTE_AVAILABILITY,
   TAKEOVER_PREPARATION_TERRITORY_STATES,
 } from '../src/index.js';
 
@@ -131,9 +135,13 @@ describe('company claim contracts', () => {
         categoryName: 'AI',
         status: 'claimed',
         minimumTakeoverAmount: { amountMinor: 26000, currency: 'USD' },
+        pricingConfigured: true,
+        quoteAvailability: 'claimed_pricing_not_configured',
         currentOwner: { name: 'Northwind', slug: 'northwind' },
       },
       territoryState: 'claimed',
+      quote: null,
+      quoteState: 'none',
       checkoutAvailable: false,
     });
 
@@ -153,6 +161,8 @@ describe('company claim contracts', () => {
         intent: null,
         territory: null,
         territoryState: 'none',
+        quote: null,
+        quoteState: 'none',
         checkoutAvailable: false,
       }).territoryState,
     ).toBe('none');
@@ -355,5 +365,102 @@ describe('company claim contracts', () => {
       CONFLICT: 'CONFLICT',
       MANUAL_RECOVERY_UNAVAILABLE: 'MANUAL_RECOVERY_UNAVAILABLE',
     });
+  });
+});
+
+describe('takeover preparation quotes', () => {
+  const quote = {
+    id: '44444444-4444-4444-8444-444444444444',
+    intentId: INTENT_ID,
+    territorySlug: 'ai-coding',
+    territoryVersion: '7',
+    amount: { amountMinor: 1000, currency: 'USD' },
+    createdAt: '2026-08-30T12:55:00.000Z',
+    expiresAt: '2026-08-30T13:00:00.000Z',
+    status: 'active',
+    usable: true,
+    checkoutAvailable: false,
+  };
+
+  it('publishes an immutable, server-priced quote that can never offer checkout', () => {
+    expect(takeoverPreparationQuoteSchema.parse(quote)).toEqual(quote);
+    expect(() =>
+      takeoverPreparationQuoteSchema.parse({ ...quote, checkoutAvailable: true }),
+    ).toThrow();
+    expect(() =>
+      takeoverPreparationQuoteSchema.parse({
+        ...quote,
+        amount: { amountMinor: 10.5, currency: 'USD' },
+      }),
+    ).toThrow();
+    expect(() =>
+      takeoverPreparationQuoteSchema.parse({ ...quote, amount: { amountMinor: 0, currency: 'USD' } }),
+    ).toThrow();
+    expect(() =>
+      takeoverPreparationQuoteSchema.parse({ ...quote, territoryVersion: 7 }),
+    ).toThrow();
+    expect(
+      takeoverPreparationQuoteSchema.parse({
+        ...quote,
+        status: 'active',
+        usable: false,
+        staleReason: 'pricing_changed',
+      }).staleReason,
+    ).toBe('pricing_changed');
+  });
+
+  it('carries the quote and its state in the preparation view', () => {
+    const view = takeoverPreparationViewSchema.parse({
+      intent: null,
+      territory: null,
+      territoryState: 'none',
+      quote: null,
+      quoteState: 'none',
+      checkoutAvailable: false,
+    });
+    expect(view.quoteState).toBe('none');
+    expect(TAKEOVER_PREPARATION_QUOTE_STATES).toEqual([
+      'none',
+      'active',
+      'expired',
+      'stale',
+      'cancelled',
+    ]);
+    expect(
+      takeoverPreparationTerritorySchema.parse({
+        slug: 'ai-coding',
+        name: 'AI Coding',
+        categoryName: 'AI',
+        status: 'unclaimed',
+        minimumTakeoverAmount: { amountMinor: 0, currency: 'USD' },
+        pricingConfigured: false,
+        quoteAvailability: 'pricing_not_configured',
+      }).pricingConfigured,
+    ).toBe(false);
+  });
+});
+
+describe('quote availability contract', () => {
+  it('names why a territory cannot be quoted, including claimed territories awaiting a policy', () => {
+    expect(TAKEOVER_QUOTE_AVAILABILITY).toEqual([
+      'quotable',
+      'pricing_not_configured',
+      'claimed_pricing_not_configured',
+      'territory_disabled',
+    ]);
+    expect(ERROR_CODES.CLAIMED_TERRITORY_PRICING_NOT_CONFIGURED).toBe(
+      'CLAIMED_TERRITORY_PRICING_NOT_CONFIGURED',
+    );
+    expect(() =>
+      takeoverPreparationTerritorySchema.parse({
+        slug: 'ai-coding',
+        name: 'AI Coding',
+        categoryName: 'AI',
+        status: 'claimed',
+        minimumTakeoverAmount: { amountMinor: 1000, currency: 'USD' },
+        pricingConfigured: true,
+        quoteAvailability: 'free_for_all',
+      }),
+    ).toThrow();
   });
 });

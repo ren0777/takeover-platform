@@ -17,6 +17,20 @@ export type QuoteFailure = {
 };
 
 const FAILURES: Record<string, QuoteFailure> = {
+  [ERROR_CODES.CLAIMED_TERRITORY_PRICING_NOT_CONFIGURED]: {
+    title: 'Takeover pricing not available',
+    message:
+      'This territory is claimed, and no rule yet decides what taking it over would cost, so no quote can be issued. Nothing was charged.',
+    canRetry: false,
+    requiresNewQuote: false,
+  },
+  [ERROR_CODES.PRICING_NOT_CONFIGURED]: {
+    title: 'Pricing not configured',
+    message:
+      'No takeover price has been set for this territory, so no quote can be issued. Nothing was charged.',
+    canRetry: false,
+    requiresNewQuote: false,
+  },
   [ERROR_CODES.TAKEOVER_PRICE_CHANGED]: {
     title: 'The price changed',
     message:

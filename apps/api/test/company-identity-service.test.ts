@@ -87,7 +87,8 @@ function createHarness(
     resolveManagementSession: vi.fn(async () => null),
     revokeManagementSession: vi.fn(async () => undefined),
     updateTakeoverPreparation: vi.fn(async () => null),
-    getTakeoverPreparation: vi.fn(async () => ({ intent: null, territory: null })),
+    getTakeoverPreparation: vi.fn(async () => ({ intent: null, quote: null, territory: null })),
+    generatePreparationQuote: vi.fn(async () => ({ kind: 'unauthorized' })),
     startTakeoverPreparation: vi.fn(async () => ({ kind: 'unauthorized' })),
     cancelTakeoverIntent: vi.fn(async () => null),
   } as unknown as CompanyIdentityRepository;
@@ -801,10 +802,12 @@ describe('takeover preparation lifecycle', () => {
     categoryName: 'AI',
     currency: 'USD',
     currentOwner: null,
+    hasActiveOwner: false,
     id: '21000000-0000-4000-8000-000000000001',
     minimumTakeoverAmountMinor: 25_000n,
     name: 'AI Coding',
     slug: 'ai-coding',
+    version: 3n,
   };
   const readyIntent = {
     ...intent,
@@ -845,6 +848,8 @@ describe('takeover preparation lifecycle', () => {
     await expect(service.getTakeoverPreparation(session, csrf)).resolves.toEqual({
       checkoutAvailable: false,
       intent: null,
+      quote: null,
+      quoteState: 'none',
       territory: null,
       territoryState: 'none',
     });
@@ -857,7 +862,12 @@ describe('takeover preparation lifecycle', () => {
     const { csrf, service, session, repository } = authorizedHarness();
     vi.mocked(repository.getTakeoverPreparation).mockResolvedValueOnce({
       intent: readyIntent,
-      territory: { ...territory, currentOwner: { name: 'Northwind', slug: 'northwind' } },
+      quote: null,
+      territory: {
+        ...territory,
+        currentOwner: { name: 'Northwind', slug: 'northwind' },
+        hasActiveOwner: true,
+      },
     });
 
     const view = await service.getTakeoverPreparation(session, csrf);
@@ -884,6 +894,7 @@ describe('takeover preparation lifecycle', () => {
       const { csrf, service, session, repository } = authorizedHarness();
       vi.mocked(repository.getTakeoverPreparation).mockResolvedValueOnce({
         intent: readyIntent,
+        quote: null,
         territory: record,
       });
 
@@ -920,6 +931,7 @@ describe('takeover preparation lifecycle', () => {
       created: true,
       intent: readyIntent,
       kind: 'ready',
+      quote: null,
       territory,
     });
 
@@ -964,6 +976,7 @@ describe('takeover preparation lifecycle', () => {
     const { csrf, service, session, repository } = authorizedHarness();
     vi.mocked(repository.cancelTakeoverIntent).mockResolvedValueOnce({
       intent: { ...readyIntent, status: 'CANCELLED' },
+      quote: null,
       territory,
     });
 
@@ -979,5 +992,212 @@ describe('takeover preparation lifecycle', () => {
     await expect(
       service.cancelTakeoverIntent(intent.id, session, csrf, context),
     ).rejects.toMatchObject({ code: 'AUTHORIZATION_REQUIRED' });
+  });
+});
+
+describe('takeover preparation quotes', () => {
+  const contactId = '22222222-2222-4222-8222-222222222222';
+  const territory = {
+    availabilityStatus: 'ACTIVE' as const,
+    categoryName: 'AI',
+    currency: 'USD',
+    currentOwner: null,
+    hasActiveOwner: false,
+    id: '21000000-0000-4000-8000-000000000001',
+    minimumTakeoverAmountMinor: 1_000n,
+    name: 'AI Coding',
+    slug: 'ai-coding',
+    version: 3n,
+  };
+  const readyIntent = {
+    ...intent,
+    currency: null,
+    intendedAmountMinor: null,
+    quoteObservedAt: null,
+    quotedMinimumAmountMinor: null,
+    quotedOwnerCompanyId: null,
+    quotedTerritoryVersion: null,
+    quotedWinningAmountMinor: null,
+    status: 'IDENTITY_READY' as const,
+  };
+  const quote = {
+    companyId: company.id,
+    consumedAt: null,
+    createdAt: new Date('2026-08-30T12:55:00.000Z'),
+    currency: 'USD',
+    expiresAt: new Date('2026-08-30T13:05:00.000Z'),
+    id: '44444444-4444-4444-8444-444444444444',
+    minimumAmountMinor: 1_000n,
+    status: 'ACTIVE' as const,
+    takeoverIntentId: intent.id,
+    territoryId: territory.id,
+    territoryVersion: 3n,
+  };
+  const context = { ipAddress: '203.0.113.20', requestId: 'quote-1' };
+
+  function authorizedHarness() {
+    const harness = createHarness();
+    const tokens = createOpaqueTokenService(
+      parseApiConfig({ NODE_ENV: 'test' }).identity.tokenHmacSecret,
+    );
+    const session = tokens.issueSessionToken();
+    const csrf = tokens.issueSessionToken();
+    vi.mocked(harness.repository.resolveManagementSession).mockResolvedValue({
+      company,
+      companyId: company.id,
+      contactId,
+      csrfDigest: tokens.digestCsrfToken(csrf.rawToken),
+      expiresAt: new Date('2026-08-30T21:00:00.000Z'),
+      grantId: '55555555-5555-4555-8555-555555555555',
+      sessionId: '66666666-6666-4666-8666-666666666666',
+      verificationLevels: ['CONTACT_VERIFIED'],
+    });
+    return { ...harness, csrf: csrf.rawToken, session: session.rawToken };
+  }
+
+  it('prices the quote from the territory row and never offers checkout', async () => {
+    const { csrf, service, session, repository } = authorizedHarness();
+    vi.mocked(repository.generatePreparationQuote).mockResolvedValueOnce({
+      intent: readyIntent,
+      kind: 'quoted',
+      quote,
+      reused: false,
+      territory,
+    });
+
+    const view = await service.generateTakeoverQuote(session, csrf, context);
+
+    expect(view).toMatchObject({
+      checkoutAvailable: false,
+      quote: {
+        amount: { amountMinor: 1_000, currency: 'USD' },
+        checkoutAvailable: false,
+        expiresAt: '2026-08-30T13:05:00.000Z',
+        id: quote.id,
+        intentId: intent.id,
+        status: 'active',
+        territoryVersion: '3',
+        usable: true,
+      },
+      quoteState: 'active',
+      territory: { pricingConfigured: true },
+    });
+    expect(repository.generatePreparationQuote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: company.id,
+        contactId,
+        // Default TAKEOVER_QUOTE_TTL_SECONDS is five minutes.
+        expiresAt: new Date(now.getTime() + 300 * 1000),
+        sessionId: '66666666-6666-4666-8666-666666666666',
+      }),
+    );
+  });
+
+  it.each([
+    ['unauthorized', 'AUTHORIZATION_REQUIRED', 401],
+    ['no_intent', 'CONFLICT', 409],
+    ['territory_missing', 'TERRITORY_NOT_FOUND', 404],
+    ['territory_disabled', 'TERRITORY_DISABLED', 409],
+    ['pricing_not_configured', 'PRICING_NOT_CONFIGURED', 409],
+  ] as const)('maps a %s outcome to %s', async (kind, code, statusCode) => {
+    const { csrf, service, session, repository } = authorizedHarness();
+    vi.mocked(repository.generatePreparationQuote).mockResolvedValueOnce({ kind });
+
+    await expect(service.generateTakeoverQuote(session, csrf, context)).rejects.toMatchObject({
+      code,
+      statusCode,
+    });
+  });
+
+  it('refuses to quote without a valid session before touching the repository', async () => {
+    const { service, repository } = createHarness();
+
+    await expect(service.generateTakeoverQuote('nope', 'nope', context)).rejects.toMatchObject({
+      code: 'AUTHORIZATION_REQUIRED',
+    });
+    expect(repository.generatePreparationQuote).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['expired', { expiresAt: new Date('2026-08-30T12:59:00.000Z') }, {}, 'expired', undefined],
+    ['stale after a version bump', {}, { version: 4n }, 'stale', 'territory_version_changed'],
+    [
+      'stale after a price change',
+      {},
+      { minimumTakeoverAmountMinor: 2_000n },
+      'stale',
+      'pricing_changed',
+    ],
+    [
+      'stale once disabled',
+      {},
+      { availabilityStatus: 'DISABLED' as const },
+      'stale',
+      'territory_disabled',
+    ],
+    ['cancelled', { status: 'CANCELLED' as const }, {}, 'cancelled', undefined],
+  ])('reports a quote as %s without altering the stored row', async (_l, q, t, state, reason) => {
+    const { csrf, service, session, repository } = authorizedHarness();
+    vi.mocked(repository.getTakeoverPreparation).mockResolvedValueOnce({
+      intent: readyIntent,
+      quote: { ...quote, ...q },
+      territory: { ...territory, ...t },
+    });
+
+    const view = await service.getTakeoverPreparation(session, csrf);
+
+    expect(view.quoteState).toBe(state);
+    expect(view.quote?.usable).toBe(false);
+    expect(view.quote?.amount).toEqual({ amountMinor: 1_000, currency: 'USD' });
+    if (reason !== undefined) expect(view.quote?.staleReason).toBe(reason);
+  });
+
+  it('reports pricing as not configured for a zero minimum and shows no quote', async () => {
+    const { csrf, service, session, repository } = authorizedHarness();
+    vi.mocked(repository.getTakeoverPreparation).mockResolvedValueOnce({
+      intent: readyIntent,
+      quote: null,
+      territory: { ...territory, minimumTakeoverAmountMinor: 0n },
+    });
+
+    const view = await service.getTakeoverPreparation(session, csrf);
+
+    expect(view.territory?.pricingConfigured).toBe(false);
+    expect(view.quote).toBeNull();
+    expect(view.quoteState).toBe('none');
+  });
+});
+
+describe('takeover preparation quotes on claimed territories', () => {
+  it('maps a claimed_pricing_not_configured outcome to its own 409 code', async () => {
+    const harness = createHarness();
+    const tokens = createOpaqueTokenService(
+      parseApiConfig({ NODE_ENV: 'test' }).identity.tokenHmacSecret,
+    );
+    const session = tokens.issueSessionToken();
+    const csrf = tokens.issueSessionToken();
+    vi.mocked(harness.repository.resolveManagementSession).mockResolvedValue({
+      company,
+      companyId: company.id,
+      contactId: '22222222-2222-4222-8222-222222222222',
+      csrfDigest: tokens.digestCsrfToken(csrf.rawToken),
+      expiresAt: new Date('2026-08-30T21:00:00.000Z'),
+      grantId: '55555555-5555-4555-8555-555555555555',
+      sessionId: '66666666-6666-4666-8666-666666666666',
+      verificationLevels: ['CONTACT_VERIFIED'],
+    });
+    vi.mocked(harness.repository.generatePreparationQuote).mockResolvedValueOnce({
+      kind: 'claimed_pricing_not_configured',
+    });
+
+    await expect(
+      harness.service.generateTakeoverQuote(session.rawToken, csrf.rawToken, {
+        ipAddress: '203.0.113.20',
+        requestId: 'quote-claimed',
+      }),
+    ).rejects.toMatchObject({
+      code: 'CLAIMED_TERRITORY_PRICING_NOT_CONFIGURED',
+      statusCode: 409,
+    });
   });
 });

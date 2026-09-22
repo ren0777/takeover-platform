@@ -21,18 +21,24 @@ const territory = {
   categoryName: 'AI',
   minimumTakeoverAmount: { amountMinor: 25_000, currency: 'USD' },
   name: 'AI Coding',
+  pricingConfigured: true,
+  quoteAvailability: 'quotable' as const,
   slug: 'ai-coding',
   status: 'unclaimed' as const,
 };
 
-function render(view: TakeoverPreparationView, busy = false): string {
+type PartialView = Omit<TakeoverPreparationView, 'quote' | 'quoteState'> &
+  Partial<Pick<TakeoverPreparationView, 'quote' | 'quoteState'>>;
+
+function render(view: PartialView, busy = false): string {
   return renderToStaticMarkup(
     React.createElement(TakeoverPreparationPanel, {
       busy,
       company,
       onCancel: () => undefined,
+      onQuote: () => undefined,
       onRestart: () => undefined,
-      view,
+      view: { quote: null, quoteState: 'none', ...view },
     }),
   );
 }
@@ -160,7 +166,12 @@ describe('TakeoverPreparationPanel minimum amount', () => {
     const html = render({
       checkoutAvailable: false,
       intent,
-      territory: { ...territory, minimumTakeoverAmount: { amountMinor: 0, currency: 'USD' } },
+      territory: {
+        ...territory,
+        minimumTakeoverAmount: { amountMinor: 0, currency: 'USD' },
+        pricingConfigured: false,
+        quoteAvailability: 'pricing_not_configured' as const,
+      },
       territoryState: 'available',
     });
 
@@ -179,5 +190,164 @@ describe('TakeoverPreparationPanel minimum amount', () => {
     expect(html).toContain('$250.00');
     expect(html).toContain('USD');
     expect(html).not.toContain('Pricing not configured');
+  });
+});
+
+describe('TakeoverPreparationPanel quotes', () => {
+  const quote = {
+    amount: { amountMinor: 1_000, currency: 'USD' },
+    checkoutAvailable: false as const,
+    createdAt: '2026-09-22T10:00:00.000Z',
+    expiresAt: '2026-09-22T10:05:00.000Z',
+    id: '44444444-4444-4444-8444-444444444444',
+    intentId: intent.id,
+    status: 'active' as const,
+    territorySlug: 'ai-coding',
+    territoryVersion: '3',
+    usable: true,
+  };
+
+  it('offers Generate quote for a priced, active preparation with no quote yet', () => {
+    const html = render({
+      checkoutAvailable: false,
+      intent,
+      territory,
+      territoryState: 'available',
+    });
+
+    expect(html).toContain('Generate quote');
+    expect(html).not.toContain('Refresh quote');
+    expect(html).toContain('Checkout is unavailable');
+  });
+
+  it('never offers a quote when pricing is not configured', () => {
+    const html = render({
+      checkoutAvailable: false,
+      intent,
+      territory: {
+        ...territory,
+        minimumTakeoverAmount: { amountMinor: 0, currency: 'USD' },
+        pricingConfigured: false,
+        quoteAvailability: 'pricing_not_configured' as const,
+      },
+      territoryState: 'available',
+    });
+
+    expect(html).toContain('Pricing not configured');
+    expect(html).not.toContain('Generate quote');
+    expect(html).not.toContain('Refresh quote');
+  });
+
+  it('shows an active quote with amount, currency, expiry and status, plus Refresh quote', () => {
+    const html = render({
+      checkoutAvailable: false,
+      intent,
+      quote,
+      quoteState: 'active',
+      territory,
+      territoryState: 'available',
+    });
+
+    expect(html).toContain('$10.00');
+    expect(html).toContain('USD');
+    expect(html).toMatch(/Quote status[\s\S]*Active/);
+    expect(html).toContain('Quote expires');
+    expect(html).toContain('Refresh quote');
+    expect(html).not.toContain('Generate quote');
+    expect(html).toContain('cannot be paid');
+  });
+
+  it.each([
+    ['expired', 'expired', undefined, 'expired'],
+    ['stale', 'stale', 'pricing_changed', 'price changed'],
+    ['stale', 'stale', 'territory_version_changed', 'territory changed'],
+    ['cancelled', 'cancelled', undefined, 'cancelled'],
+  ] as const)(
+    'explains a %s quote and offers a refresh',
+    (status, quoteState, staleReason, wording) => {
+      const html = render({
+        checkoutAvailable: false,
+        intent,
+        quote: {
+          ...quote,
+          status: status === 'stale' ? 'active' : status,
+          usable: false,
+          ...(staleReason === undefined ? {} : { staleReason }),
+        },
+        quoteState,
+        territory,
+        territoryState: 'available',
+      });
+
+      expect(html.toLowerCase()).toContain(wording);
+      expect(html).toContain('Refresh quote');
+      expect(html).toContain('$10.00');
+    },
+  );
+
+  it('hides quote actions once the preparation itself is no longer active', () => {
+    const html = render({
+      checkoutAvailable: false,
+      intent: { ...intent, status: 'cancelled' },
+      quote: { ...quote, status: 'cancelled', usable: false },
+      quoteState: 'cancelled',
+      territory,
+      territoryState: 'available',
+    });
+
+    expect(html).not.toContain('Generate quote');
+    expect(html).not.toContain('Refresh quote');
+  });
+});
+
+describe('TakeoverPreparationPanel on a claimed territory', () => {
+  const claimedTerritory = {
+    ...territory,
+    currentOwner: { name: 'Northwind', slug: 'northwind' },
+    quoteAvailability: 'claimed_pricing_not_configured' as const,
+    status: 'claimed' as const,
+  };
+
+  it('explains that takeover pricing is unavailable, offers no quote, and keeps the territory', () => {
+    const html = render({
+      checkoutAvailable: false,
+      intent,
+      territory: claimedTerritory,
+      territoryState: 'claimed',
+    });
+
+    expect(html).toContain('Northwind');
+    expect(html).toContain('Takeover pricing for this claimed territory is not available');
+    expect(html).not.toContain('Generate quote');
+    expect(html).not.toContain('Refresh quote');
+    expect(html).not.toContain('no longer exists');
+    expect(html).toContain('Checkout is unavailable');
+  });
+
+  it('marks an earlier quote stale with claimed wording and offers no refresh', () => {
+    const html = render({
+      checkoutAvailable: false,
+      intent,
+      quote: {
+        amount: { amountMinor: 1_000, currency: 'USD' },
+        checkoutAvailable: false,
+        createdAt: '2026-09-22T10:00:00.000Z',
+        expiresAt: '2026-09-22T10:05:00.000Z',
+        id: '44444444-4444-4444-8444-444444444444',
+        intentId: intent.id,
+        staleReason: 'territory_claimed',
+        status: 'active',
+        territorySlug: 'ai-coding',
+        territoryVersion: '3',
+        usable: false,
+      },
+      quoteState: 'stale',
+      territory: claimedTerritory,
+      territoryState: 'claimed',
+    });
+
+    expect(html).toContain('claimed by another company');
+    expect(html).not.toContain('Refresh quote');
+    expect(html).toContain('$10.00');
   });
 });

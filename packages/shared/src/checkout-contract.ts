@@ -10,5 +10,11 @@ export const checkoutResponseSchema = z.object({
   checkoutId: uuidSchema,
   statusToken: z.string().regex(/^[A-Za-z0-9_-]{43,}$/), // opaque token for status polling (>=256 bits)
   providerCheckoutUrl: z.string().url().refine(url => url.startsWith('https://'), { message: 'must be HTTPS' }),
+  /**
+   * DEV ONLY. True when a local simulator, not a real provider, produced this
+   * checkout: no money can move, and the browser must not be handed off to the
+   * provider URL. Absent or false on every real checkout.
+   */
+  simulated: z.boolean().default(false),
 }).strict();
 export type CheckoutResponse = z.infer<typeof checkoutResponseSchema>;

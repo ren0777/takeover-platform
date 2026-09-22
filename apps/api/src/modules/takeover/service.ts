@@ -13,6 +13,7 @@ import {
 } from '@takeover/shared';
 import { hashSecurityScope } from '../../security/scope-key.js';
 import { PaymentProviderUnavailableError } from './payment-provider.js';
+import { DEVELOPMENT_PROVIDER_NAME } from './providers/development/DevelopmentPaymentProvider.js';
 import { assertQuotablePrice, quotablePriceMinor } from './quote-state.js';
 
 export type Clock = { now(): Date };
@@ -224,6 +225,7 @@ export interface TakeoverRepository {
   createQuote(input: CreateQuoteInput): Promise<QuoteRecord>;
   findQuoteForCheckout(quoteId: string): Promise<QuoteForCheckoutRecord | null>;
   findCheckoutByQuote(quoteId: string): Promise<CheckoutRecord | null>;
+  findCheckoutById(checkoutId: string): Promise<CheckoutRecord | null>;
   reserveCheckout(input: CreateCheckoutInput): Promise<{
     checkout: CheckoutRecord;
     created: boolean;
@@ -475,7 +477,7 @@ function hasProviderRefundReference(record: StatusAttemptRecord): boolean {
   );
 }
 
-function mapAttempt(record: StatusAttemptRecord, now: Date): AttemptStatus {
+function mapAttempt(record: StatusAttemptRecord, now: Date, simulated = false): AttemptStatus {
   const amountCharged =
     record.payment === null
       ? undefined
@@ -521,6 +523,7 @@ function mapAttempt(record: StatusAttemptRecord, now: Date): AttemptStatus {
     ...(failureReason === undefined ? {} : { failureReason }),
     ...(newOwnerCompanyId === undefined ? {} : { newOwnerCompanyId }),
     pollAfterMs: isTerminal(state, amountCharged) ? undefined : 2_000,
+    simulated,
     state,
     terminal: isTerminal(state, amountCharged),
     updatedAt: record.checkout.updatedAt.toISOString(),
@@ -636,6 +639,7 @@ export class TakeoverService {
           return checkoutResponseSchema.parse({
             checkoutId: checkout.id,
             providerCheckoutUrl: checkout.providerCheckoutUrl,
+            simulated: this.dependencies.provider.name === DEVELOPMENT_PROVIDER_NAME,
             statusToken: token.rawToken,
           });
         } catch (error) {
@@ -655,6 +659,7 @@ export class TakeoverService {
         return checkoutResponseSchema.parse({
           checkoutId: reserved.checkout.id,
           providerCheckoutUrl: reserved.checkout.providerCheckoutUrl,
+          simulated: this.dependencies.provider.name === DEVELOPMENT_PROVIDER_NAME,
           statusToken: token.rawToken,
         });
       }
@@ -664,6 +669,7 @@ export class TakeoverService {
         return checkoutResponseSchema.parse({
           checkoutId: poll.checkout.id,
           providerCheckoutUrl: poll.checkout.providerCheckoutUrl,
+          simulated: this.dependencies.provider.name === DEVELOPMENT_PROVIDER_NAME,
           statusToken: token.rawToken,
         });
       }
@@ -687,6 +693,44 @@ export class TakeoverService {
     return { kind: 'pending' };
   }
 
+  /**
+   * DEV ONLY support: the stored checkout and quote behind a status token.
+   *
+   * Read-only, and the amount it returns is the server's own quote, so a
+   * simulated payment can never be told what to charge by a browser.
+   */
+  async findSimulationTarget(
+    rawToken: string,
+    companyId: string,
+  ): Promise<{
+    amountMinor: bigint;
+    checkoutId: string;
+    currency: string;
+    providerCheckoutId: string;
+    quoteId: string;
+  } | null> {
+    const now = this.dependencies.clock.now();
+    const digest = digestStatusToken(this.dependencies.statusTokenSecret, rawToken);
+    if (digest === null) return null;
+    const attempt = await this.dependencies.repository.findStatusAttemptByTokenDigest(digest, now);
+    if (attempt === null || attempt.token.expiresAt <= now || attempt.token.revokedAt !== null) {
+      return null;
+    }
+    const checkout = await this.dependencies.repository.findCheckoutById(attempt.checkout.id);
+    // A status token is a capability, but simulating mutates: only the company
+    // that owns the attempt may drive it.
+    if (checkout === null || checkout.companyId !== companyId) return null;
+    const quote = await this.dependencies.repository.findQuoteForCheckout(checkout.quoteId);
+    if (quote === null) return null;
+    return {
+      amountMinor: quote.minimumAmountMinor,
+      checkoutId: checkout.id,
+      currency: quote.currency,
+      providerCheckoutId: checkout.providerCheckoutId,
+      quoteId: quote.id,
+    };
+  }
+
   async getStatus(rawToken: string): Promise<AttemptStatus> {
     const now = this.dependencies.clock.now();
     const digest = digestStatusToken(this.dependencies.statusTokenSecret, rawToken);
@@ -695,7 +739,7 @@ export class TakeoverService {
     if (attempt === null || attempt.token.expiresAt <= now || attempt.token.revokedAt !== null) {
       throw new InvalidStatusTokenError();
     }
-    return mapAttempt(attempt, now);
+    return mapAttempt(attempt, now, this.dependencies.provider.name === DEVELOPMENT_PROVIDER_NAME);
   }
 
   async confirmProviderPayment(input: ConfirmProviderPaymentInput): Promise<AttemptStatus> {

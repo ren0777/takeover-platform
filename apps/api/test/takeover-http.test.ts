@@ -43,6 +43,7 @@ function createTakeoverService(): Pick<
     createCheckout: vi.fn(async () => ({
       checkoutId: '44444444-4444-4444-8444-444444444444',
       providerCheckoutUrl: 'https://pay.example/checkout',
+      simulated: false,
       statusToken: 'A'.repeat(43),
     })),
     createQuote: vi.fn(async () => ({
@@ -58,6 +59,7 @@ function createTakeoverService(): Pick<
     getStatus: vi.fn(async () => ({
       amountCharged: { amountMinor: 1500, currency: 'USD' },
       checkoutId: '44444444-4444-4444-8444-444444444444',
+      simulated: false,
       state: 'PENDING_PAYMENT' as const,
       terminal: false,
       updatedAt: '2026-09-03T10:00:00.000Z',

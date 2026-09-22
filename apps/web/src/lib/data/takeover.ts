@@ -34,7 +34,9 @@ export function getTakeoverQuote(territorySlug: string): Promise<QuoteResponse> 
 export async function startTakeoverCheckout(request: CheckoutRequest): Promise<CheckoutResponse> {
   const checkout = await createTakeoverCheckout(request);
 
-  if (!isSafeCheckoutUrl(checkout.providerCheckoutUrl)) {
+  // A simulated checkout is never handed off to, so its URL is not a
+  // handoff target; every real checkout must still be HTTPS.
+  if (!checkout.simulated && !isSafeCheckoutUrl(checkout.providerCheckoutUrl)) {
     throw new Error('Refusing to hand off to a non-HTTPS checkout URL.');
   }
 

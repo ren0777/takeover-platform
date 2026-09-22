@@ -17,7 +17,12 @@ import {
 import type { TakeoverService } from './service.js';
 
 export type TakeoverRoutesOptions = {
-  config: { dodoWebhookSecret?: string; webAppOrigin: string };
+  config: {
+    /** DEV ONLY: present only when the local payment simulator is enabled. */
+    developmentPayments?: { webhookSecret: string };
+    dodoWebhookSecret?: string;
+    webAppOrigin: string;
+  };
   identityService: CompanyIdentityService;
   service: TakeoverService;
 };

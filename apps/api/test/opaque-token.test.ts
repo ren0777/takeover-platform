@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { createOpaqueTokenService } from '../src/security/opaque-token.js';
 import {
   managementSessionCookieOptions,
+  managementCsrfCookieOptions,
+  legacyManagementCsrfCookieOptions,
   MANAGEMENT_SESSION_COOKIE_NAME,
+  MANAGEMENT_CSRF_COOKIE_NAME,
 } from '../src/security/session-cookie.js';
 import { assertTrustedMutationOrigin } from '../src/security/request-origin.js';
 
@@ -73,6 +76,49 @@ describe('management session cookie', () => {
       secure: true,
     });
     expect(managementSessionCookieOptions('production')).not.toHaveProperty('domain');
+  });
+});
+
+describe('management CSRF cookie', () => {
+  it('is readable by page scripts and scoped site-wide, not to /api', () => {
+    expect(MANAGEMENT_CSRF_COOKIE_NAME).toBe('takeover_management_csrf');
+    // The double-submit token is useless unless a script on /manage or
+    // /takeover can read it back, so it must not be HttpOnly and must not be
+    // path-scoped to /api. The session cookie carries the opposite guarantees.
+    expect(managementCsrfCookieOptions('development')).toEqual({
+      httpOnly: false,
+      path: '/',
+      sameSite: 'lax',
+      secure: false,
+    });
+    expect(managementCsrfCookieOptions('production')).toEqual({
+      httpOnly: false,
+      path: '/',
+      sameSite: 'lax',
+      secure: true,
+    });
+    expect(managementCsrfCookieOptions('production')).not.toHaveProperty('domain');
+  });
+
+  it('keeps a clear-only option set pinned to the scope the cookie used to use', () => {
+    // Used solely to expire a pre-migration cookie. It must keep matching the
+    // old scope exactly, or the stale cookie survives and every mutation 401s.
+    expect(legacyManagementCsrfCookieOptions('development')).toEqual({
+      httpOnly: false,
+      path: '/api',
+      sameSite: 'lax',
+      secure: false,
+    });
+    expect(legacyManagementCsrfCookieOptions('production')).toEqual({
+      httpOnly: false,
+      path: '/api',
+      sameSite: 'lax',
+      secure: true,
+    });
+    // It must never collide with the scope the cookie is actually issued at.
+    expect(legacyManagementCsrfCookieOptions('production').path).not.toBe(
+      managementCsrfCookieOptions('production').path,
+    );
   });
 });
 

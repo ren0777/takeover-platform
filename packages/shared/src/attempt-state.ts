@@ -32,6 +32,11 @@ export const attemptStatusSchema = z.object({
   failureReason: z.string().optional(),
   updatedAt: isoDateTimeSchema,
   pollAfterMs: z.number().int().nonnegative().optional(),
+  /**
+   * DEV ONLY. True when a local simulator produced this attempt, so no money
+   * moved and no provider was contacted. Absent or false on every real attempt.
+   */
+  simulated: z.boolean().default(false),
 })
   .refine((data) => {
     // Determine if the state should be considered terminal based on the design.

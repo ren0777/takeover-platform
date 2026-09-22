@@ -414,9 +414,17 @@ describe('company identity HTTP surface', () => {
         }),
         expect.objectContaining({
           name: 'takeover_management_csrf',
-          path: '/api',
+          // Site-wide so page scripts can echo it; see managementCsrfCookieOptions.
+          path: '/',
           sameSite: 'Lax',
           value: 'csrf-secret-for-browser',
+        }),
+        // A browser issued a CSRF cookie before the scope moved would otherwise
+        // keep sending the '/api' one first, and never match the header again.
+        expect.objectContaining({
+          name: 'takeover_management_csrf',
+          path: '/api',
+          value: '',
         }),
       ]),
     );

@@ -16,6 +16,8 @@ import { DodoPaymentProvider } from './modules/takeover/providers/dodo/DodoPayme
 import { PrismaTakeoverRepository } from './modules/takeover/prisma-repository.js';
 import { TakeoverReconciliationDriver } from './modules/takeover/reconciliation-driver.js';
 import { CHECKOUT_UNAVAILABLE_REASON, TakeoverService } from './modules/takeover/service.js';
+import { createDevelopmentWebhookSecret } from './modules/takeover/development-simulation-routes.js';
+import { DevelopmentPaymentProvider } from './modules/takeover/providers/development/DevelopmentPaymentProvider.js';
 import { companyIdentityPlugin } from './plugins/company-identity.js';
 import { databasePlugin } from './plugins/database.js';
 import { emailPlugin } from './plugins/email.js';
@@ -245,14 +247,21 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
         tokens: createOpaqueTokenService(runtimeConfig.identity.tokenHmacSecret),
       });
       // Determine which payment provider to use.
-      const provider =
-        runtimeConfig?.dodo?.apiKey && runtimeConfig?.dodo?.baseUrl
+      // DEV ONLY: a deterministic local simulator, selected only by explicit
+      // configuration that production refuses. Otherwise a real adapter when
+      // Dodo is configured, and failing closed when neither applies.
+      const provider = runtimeConfig.developmentPayments
+        ? new DevelopmentPaymentProvider()
+        : runtimeConfig?.dodo?.apiKey && runtimeConfig?.dodo?.baseUrl
           ? new DodoPaymentProvider({
               apiKey: runtimeConfig.dodo.apiKey,
               baseUrl: runtimeConfig.dodo.baseUrl,
               productIds: runtimeConfig.dodo.productIds ?? {},
             })
           : new UnavailablePaymentProvider();
+      const developmentWebhookSecret = runtimeConfig.developmentPayments
+        ? createDevelopmentWebhookSecret()
+        : undefined;
 
       const repository = new PrismaTakeoverRepository(takeoverApp.database);
       // Checkout is offered only when a real provider is configured AND
@@ -275,6 +284,9 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       });
       await takeoverPlugin(takeoverApp, {
         config: {
+          ...(developmentWebhookSecret === undefined
+            ? {}
+            : { developmentPayments: { webhookSecret: developmentWebhookSecret } }),
           ...(runtimeConfig.dodo?.webhookSecret === undefined
             ? {}
             : { dodoWebhookSecret: runtimeConfig.dodo.webhookSecret }),

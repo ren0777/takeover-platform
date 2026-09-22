@@ -41,6 +41,13 @@ export type DodoWebhookRoutesOptions = {
   webhookSecret?: string;
 };
 
+export type ProviderWebhookRoutesOptions = DodoWebhookRoutesOptions & {
+  /** Provider name recorded on every ingested event. */
+  provider: string;
+  /** Route path this provider posts to. */
+  path: string;
+};
+
 function requiredHeader(value: string | string[] | undefined): string {
   if (typeof value !== 'string' || value.length === 0) throw new DodoWebhookSignatureError();
   return value;
@@ -59,11 +66,30 @@ export async function dodoWebhookRoutes(
   app: FastifyInstance,
   options: DodoWebhookRoutesOptions,
 ): Promise<void> {
+  await providerWebhookRoutes(app, {
+    ...options,
+    path: '/api/payment/webhooks/dodo',
+    provider: DODO_PROVIDER,
+  });
+}
+
+/**
+ * One signed-webhook boundary, shared by every provider.
+ *
+ * Signature verification, replay identity (the webhook id), payload parsing
+ * and the provider-neutral hand-off to the service are identical whichever
+ * provider posts, so a local simulator exercises exactly the code a real
+ * provider does.
+ */
+export async function providerWebhookRoutes(
+  app: FastifyInstance,
+  options: ProviderWebhookRoutesOptions,
+): Promise<void> {
   app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (_request, body, done) => {
     done(null, body);
   });
 
-  app.post('/api/payment/webhooks/dodo', async (request, reply) => {
+  app.post(options.path, async (request, reply) => {
     if (options.webhookSecret === undefined) {
       return reply.status(503).send({ received: false });
     }
@@ -109,7 +135,7 @@ export async function dodoWebhookRoutes(
       eventType: event.type,
       metadata: event.data.metadata,
       payload: parsed,
-      provider: DODO_PROVIDER,
+      provider: options.provider,
       ...(event.data.checkout_session_id === undefined
         ? {}
         : { providerCheckoutId: event.data.checkout_session_id }),

@@ -88,6 +88,13 @@ export function TakeoverPanel({ territorySlug }: { territorySlug: string }) {
       // Handing off. The status token in the URL the server built is the only
       // way back to an authoritative outcome; this navigation proves nothing.
       setState({ status: 'redirecting' });
+      if (checkout.simulated) {
+        // DEV ONLY: a local simulator issued this checkout. There is no
+        // provider page to visit, so go straight to our own status surface,
+        // which carries the simulation controls.
+        window.location.assign(`/takeover/${encodeURIComponent(checkout.statusToken)}`);
+        return;
+      }
       window.location.assign(checkout.providerCheckoutUrl);
     } catch (error: unknown) {
       setState({ status: 'failed', ...failureFrom(error) });

@@ -244,3 +244,60 @@ describe('payment enablement gates', () => {
     ).toThrow('DODO_LIVE_ENABLED');
   });
 });
+
+describe('development payment simulator gates', () => {
+  const devPayments = {
+    DEV_PAYMENT_SIMULATION_ENABLED: 'true',
+    PAYMENT_PROVIDER: 'development',
+    PAYMENTS_ENABLED: 'true',
+  };
+
+  it('is off by default and requires both switches together', () => {
+    expect(parseApiConfig({}).developmentPayments).toBe(false);
+    expect(parseApiConfig(devPayments).developmentPayments).toBe(true);
+    // The refusal names the switch that was set without its partner.
+    expect(() => parseApiConfig({ PAYMENT_PROVIDER: 'development' })).toThrow('PAYMENT_PROVIDER');
+    expect(() => parseApiConfig({ DEV_PAYMENT_SIMULATION_ENABLED: 'true' })).toThrow(
+      'DEV_PAYMENT_SIMULATION_ENABLED',
+    );
+  });
+
+  it('is rejected outright under NODE_ENV=production', () => {
+    const production = {
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/takeover',
+      EMAIL_PROVIDER: 'unavailable',
+      NODE_ENV: 'production',
+      TOKEN_HMAC_SECRET: 'YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODk',
+      WEB_APP_ORIGIN: 'https://takeover.com',
+    };
+    // A production runtime must refuse the simulator on either switch alone
+    // and on both together.
+    expect(() => parseApiConfig({ ...production, ...devPayments })).toThrow(
+      'Invalid API configuration',
+    );
+    expect(() => parseApiConfig({ ...production, PAYMENT_PROVIDER: 'development' })).toThrow(
+      'PAYMENT_PROVIDER',
+    );
+    expect(() => parseApiConfig({ ...production, DEV_PAYMENT_SIMULATION_ENABLED: 'true' })).toThrow(
+      'DEV_PAYMENT_SIMULATION_ENABLED',
+    );
+    // The same production configuration without the simulator still parses.
+    expect(parseApiConfig(production).developmentPayments).toBe(false);
+  });
+
+  it('never builds a real Dodo adapter while the simulator is selected', () => {
+    const config = parseApiConfig({
+      ...devPayments,
+      DODO_API_KEY: 'test-key',
+      DODO_PRODUCT_IDS: '{"USD":"prod_usd"}',
+      DODO_WEBHOOK_SECRET: dodoWebhookSecret,
+    });
+
+    expect(config.developmentPayments).toBe(true);
+    expect(config.dodo).toBeUndefined();
+  });
+
+  it('rejects an unknown payment provider name', () => {
+    expect(() => parseApiConfig({ PAYMENT_PROVIDER: 'stripe' })).toThrow('PAYMENT_PROVIDER');
+  });
+});

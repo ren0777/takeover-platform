@@ -76,6 +76,8 @@ const apiEnvironmentSchema = z
     DODO_API_KEY: z.string().nonempty().optional(),
     DODO_LIVE_ENABLED: booleanString.default(false),
     PAYMENTS_ENABLED: booleanString.default(false),
+    PAYMENT_PROVIDER: z.enum(['dodo', 'development']).default('dodo'),
+    DEV_PAYMENT_SIMULATION_ENABLED: booleanString.default(false),
     DODO_BASE_URL: z.string().url().default('https://test.dodopayments.com/'),
     DODO_PRODUCT_IDS: z.string().optional(),
     DODO_DEFAULT_PRODUCT_ID: z.string().nonempty().optional(),
@@ -158,6 +160,20 @@ const apiEnvironmentSchema = z
           path: ['DEV_EMAIL_CAPTURE_ENABLED'],
         });
       }
+      if (value.PAYMENT_PROVIDER === 'development') {
+        context.addIssue({
+          code: 'custom',
+          message: 'the development payment simulator is forbidden in production',
+          path: ['PAYMENT_PROVIDER'],
+        });
+      }
+      if (value.DEV_PAYMENT_SIMULATION_ENABLED) {
+        context.addIssue({
+          code: 'custom',
+          message: 'development payment simulation is forbidden in production',
+          path: ['DEV_PAYMENT_SIMULATION_ENABLED'],
+        });
+      }
       if (value.DEV_EMAIL_LOG_ENABLED) {
         context.addIssue({
           code: 'custom',
@@ -172,6 +188,20 @@ const apiEnvironmentSchema = z
           path: ['WEB_APP_ORIGIN'],
         });
       }
+    }
+    if (value.PAYMENT_PROVIDER === 'development' && !value.DEV_PAYMENT_SIMULATION_ENABLED) {
+      context.addIssue({
+        code: 'custom',
+        message: 'requires DEV_PAYMENT_SIMULATION_ENABLED=true',
+        path: ['PAYMENT_PROVIDER'],
+      });
+    }
+    if (value.DEV_PAYMENT_SIMULATION_ENABLED && value.PAYMENT_PROVIDER !== 'development') {
+      context.addIssue({
+        code: 'custom',
+        message: 'requires PAYMENT_PROVIDER=development',
+        path: ['DEV_PAYMENT_SIMULATION_ENABLED'],
+      });
     }
     if (
       value.DODO_WEBHOOK_SECRET !== undefined &&
@@ -238,6 +268,12 @@ export type ApiConfig = {
    * independently of DODO_LIVE_ENABLED, which alone guards the live host.
    */
   paymentsEnabled: boolean;
+  /**
+   * The local, deterministic payment simulator. DEV ONLY: it requires
+   * PAYMENT_PROVIDER=development and DEV_PAYMENT_SIMULATION_ENABLED=true
+   * together, and configuration refuses both under NODE_ENV=production.
+   */
+  developmentPayments: boolean;
   operator?: OperatorConfig;
   competition: { seasonDurationDays: number; seasonStartsAt?: Date };
 };
@@ -378,6 +414,10 @@ export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
     identity,
     logLevel: result.data.LOG_LEVEL,
     nodeEnv: result.data.NODE_ENV,
+    developmentPayments:
+      result.data.PAYMENT_PROVIDER === 'development' &&
+      result.data.DEV_PAYMENT_SIMULATION_ENABLED &&
+      result.data.NODE_ENV !== 'production',
     paymentsEnabled: result.data.PAYMENTS_ENABLED,
     port: result.data.API_PORT,
     takeoverReconciliation: Object.freeze({
@@ -395,7 +435,7 @@ export function parseApiConfig(source: NodeJS.ProcessEnv): ApiConfig {
     };
   }
 
-  if (result.data.DODO_API_KEY !== undefined) {
+  if (result.data.DODO_API_KEY !== undefined && result.data.PAYMENT_PROVIDER === 'dodo') {
     const webhookSecret = result.data.DODO_WEBHOOK_SECRET;
     if (webhookSecret === undefined) {
       throw new Error('DODO_WEBHOOK_SECRET must be configured when DODO_API_KEY is configured');

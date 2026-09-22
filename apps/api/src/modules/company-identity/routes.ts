@@ -16,6 +16,7 @@ import type { IdentityConfig } from '../../config/env.js';
 import { ManagementAuthorizationRequiredError } from './authorization.js';
 import type { CompanyIdentityService } from './service.js';
 import {
+  legacyManagementCsrfCookieOptions,
   MANAGEMENT_CSRF_COOKIE_NAME,
   MANAGEMENT_SESSION_COOKIE_NAME,
   managementCsrfCookieOptions,
@@ -96,6 +97,10 @@ export async function companyIdentityRoutes(
         exchanged.csrfToken,
         managementCsrfCookieOptions(options.nodeEnv),
       );
+      reply.clearCookie(
+        MANAGEMENT_CSRF_COOKIE_NAME,
+        legacyManagementCsrfCookieOptions(options.nodeEnv),
+      );
     }
     return reply.send({ data: exchanged.response, meta: { requestId: request.id } });
   });
@@ -118,6 +123,10 @@ export async function companyIdentityRoutes(
       MANAGEMENT_CSRF_COOKIE_NAME,
       exchanged.csrfToken,
       managementCsrfCookieOptions(options.nodeEnv),
+    );
+    reply.clearCookie(
+      MANAGEMENT_CSRF_COOKIE_NAME,
+      legacyManagementCsrfCookieOptions(options.nodeEnv),
     );
     return reply.send({ data: exchanged.context, meta: { requestId: request.id } });
   });
@@ -147,6 +156,10 @@ export async function companyIdentityRoutes(
       managementSessionCookieOptions(options.nodeEnv),
     );
     reply.clearCookie(MANAGEMENT_CSRF_COOKIE_NAME, managementCsrfCookieOptions(options.nodeEnv));
+    reply.clearCookie(
+      MANAGEMENT_CSRF_COOKIE_NAME,
+      legacyManagementCsrfCookieOptions(options.nodeEnv),
+    );
     return reply.status(204).send();
   });
 

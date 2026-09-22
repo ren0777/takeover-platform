@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { type AttemptStatus } from '@takeover/shared';
+import { DevelopmentPaymentSimulator } from '@/components/territory/development-payment-simulator';
 import { TakeoverStatusView } from '@/components/territory/takeover-status-view';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -71,6 +72,9 @@ export default async function TakeoverStatusPage({ params }: PageProps) {
   return (
     <div className="mx-auto max-w-2xl px-4 py-10 sm:px-6">
       <TakeoverStatusView statusToken={statusToken} initialStatus={status} />
+      {/* DEV ONLY, and only because the server itself reported this attempt
+          as simulated. A real attempt never renders payment controls here. */}
+      {status.simulated && <DevelopmentPaymentSimulator statusToken={statusToken} />}
     </div>
   );
 }

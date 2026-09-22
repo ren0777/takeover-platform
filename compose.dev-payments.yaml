@@ -1,0 +1,25 @@
+# DEV ONLY — local simulated payments. Never auto-loaded: pass it explicitly,
+# on top of the normal local overlay.
+#
+#   docker compose -f compose.yaml -f compose.local.yaml -f compose.dev-payments.yaml up -d --build
+#
+# It turns on a deterministic local payment simulator so the whole checkout ->
+# confirmed payment -> capture -> ownership -> next price flow can be run
+# without provider credentials. No card, no money, and no request to anything
+# outside this machine: every outcome is a locally signed webhook replayed
+# through the normal webhook route.
+#
+# parseApiConfig refuses PAYMENT_PROVIDER=development and
+# DEV_PAYMENT_SIMULATION_ENABLED=true under NODE_ENV=production, and refuses
+# either switch without the other, so this overlay cannot enable payments on a
+# production stack. DODO_LIVE_ENABLED stays false and no provider is contacted.
+#
+# The standard local overlay (compose.local.yaml alone) keeps payments
+# disabled; nothing here changes ports, exposure or secrets.
+services:
+  api:
+    environment:
+      PAYMENTS_ENABLED: 'true'
+      PAYMENT_PROVIDER: development
+      DEV_PAYMENT_SIMULATION_ENABLED: 'true'
+      DODO_LIVE_ENABLED: 'false'

@@ -88,6 +88,7 @@ function createRepository(): TakeoverRepository {
       territoryVersion: 7n,
     })),
     findActiveQuote: vi.fn(async () => null),
+    findCheckoutById: vi.fn(async () => null),
     findCheckoutByQuote: vi.fn(async () => null),
     findQuoteForCheckout: vi.fn(async () => ({
       companyId,

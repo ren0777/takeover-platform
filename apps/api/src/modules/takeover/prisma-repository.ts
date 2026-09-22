@@ -276,6 +276,11 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
     };
   }
 
+  async findCheckoutById(checkoutId: string): Promise<CheckoutRecord | null> {
+    const checkout = await this.prisma.checkoutSession.findUnique({ where: { id: checkoutId } });
+    return checkout === null ? null : mapCheckout(checkout);
+  }
+
   async findCheckoutByQuote(quoteId: string): Promise<CheckoutRecord | null> {
     const checkout = await this.prisma.checkoutSession.findFirst({
       orderBy: { createdAt: 'asc' },

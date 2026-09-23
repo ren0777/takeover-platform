@@ -5,6 +5,7 @@ import {
   quotablePriceForSettledCapture,
   type SettledCapturePriceClient,
 } from './settled-capture-price.js';
+import { planRefundReversal } from './refund-reversal.js';
 import {
   createTerritoryOwnershipTransactionClient,
   PrismaTerritoryOwnershipRepository,
@@ -647,6 +648,365 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
     );
   }
 
+  /**
+   * Reigns still standing on money that was given back.
+   *
+   * Nothing this phase writes can create one: a successful refund now unwinds
+   * ownership in the same transaction that records it. The query exists for
+   * rows that predate the reversal, or that some future path leaves behind,
+   * so an operator can find them instead of discovering them through a
+   * territory that will not quote.
+   */
+  async listRefundOwnershipInconsistencies(): Promise<
+    Array<{
+      captureId: string;
+      captureStatus: string;
+      companyId: string;
+      ownershipId: string;
+      paymentId: string;
+      paymentStatus: string;
+      territoryId: string;
+      territorySlug: string;
+    }>
+  > {
+    return this.prisma.$queryRaw(Prisma.sql`
+      SELECT
+        capture_id      AS "captureId",
+        capture_status  AS "captureStatus",
+        company_id      AS "companyId",
+        ownership_id    AS "ownershipId",
+        payment_id      AS "paymentId",
+        payment_status  AS "paymentStatus",
+        territory_id    AS "territoryId",
+        territory_slug  AS "territorySlug"
+      FROM "refund_ownership_inconsistencies"
+      ORDER BY territory_slug
+    `);
+  }
+
+  /**
+   * Applies the ownership reversal to a capture that was refunded without one.
+   *
+   * Idempotent by construction: once the reign is unwound the capture no longer
+   * backs an open reign, so a second run plans the same refund as history and
+   * changes nothing. Returns whether this call was the one that moved anything.
+   */
+  async repairRefundOwnershipInconsistency(captureId: string): Promise<{ repaired: boolean }> {
+    return this.prisma.$transaction(
+      async (transaction) => {
+        const capture = await transaction.ownershipCapture.findUnique({
+          where: { id: captureId },
+        });
+        if (capture === null) return { repaired: false };
+        const payment = await transaction.payment.findUnique({
+          where: { id: capture.paymentId },
+        });
+        if (payment === null) return { repaired: false };
+        // Only rows where the money really did go back qualify for repair.
+        if (capture.status !== 'REFUNDED' && payment.status !== 'REFUNDED') {
+          return { repaired: false };
+        }
+
+        const before = await transaction.territoryOwnership.findFirst({
+          select: { id: true },
+          where: { endedAt: null, territoryId: capture.territoryId },
+        });
+        await this.reverseCapturedOwnership(transaction, {
+          capture: {
+            expectedTerritoryVersion: capture.expectedTerritoryVersion,
+            id: capture.id,
+            newOwnerCompanyId: capture.newOwnerCompanyId,
+            paymentId: capture.paymentId,
+            territoryId: capture.territoryId,
+          },
+          refundAt: new Date(),
+        });
+        const after = await transaction.territoryOwnership.findFirst({
+          select: { id: true },
+          where: { endedAt: null, territoryId: capture.territoryId },
+        });
+        return { repaired: (before?.id ?? null) !== (after?.id ?? null) };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  /**
+   * Takes a territory back off the buyer whose payment was refunded.
+   *
+   * Locks in the same order a capture does — the activity/season advisory lock
+   * first, then the territory row — so a refund and a capture racing the same
+   * territory queue behind one another instead of interleaving.
+   *
+   * The reign being undone is closed, never edited away, and a restored
+   * predecessor gets a brand new reign. Versions only ever move forward, so
+   * every quote and checkout taken against the old version goes stale on its
+   * own; they are cancelled explicitly as well so nothing can be presented as
+   * still usable.
+   */
+  private async reverseCapturedOwnership(
+    transaction: TakeoverTransactionClient,
+    input: {
+      capture: {
+        expectedTerritoryVersion: bigint;
+        id: string;
+        newOwnerCompanyId: string;
+        paymentId: string;
+        territoryId: string;
+      };
+      refundAt: Date;
+    },
+  ): Promise<void> {
+    const { capture, refundAt } = input;
+    await transaction.$queryRaw`SELECT pg_advisory_xact_lock(724260920)::text`;
+    const [territory] = await transaction.$queryRaw<
+      Array<{ currency: string; id: string; version: bigint }>
+    >(Prisma.sql`
+      SELECT "id", "currency", "version"
+      FROM "territories"
+      WHERE "id" = ${capture.territoryId}::uuid
+      FOR UPDATE
+    `);
+    if (territory === undefined) return;
+
+    const openReign = await transaction.territoryOwnership.findFirst({
+      select: { capturedAt: true, companyId: true, id: true, source: true, territoryVersion: true },
+      where: { endedAt: null, territoryId: capture.territoryId },
+    });
+    // Ownership history refuses a reign that ends at or before it began. A
+    // refund landing in the same instant as the capture is still a later
+    // event, so it is recorded a millisecond after rather than rejected.
+    const transitionAt =
+      openReign !== null && refundAt <= openReign.capturedAt
+        ? new Date(openReign.capturedAt.getTime() + 1)
+        : refundAt;
+
+    const plan = await planRefundReversal(transaction as never, {
+      capture: {
+        expectedTerritoryVersion: capture.expectedTerritoryVersion,
+        newOwnerCompanyId: capture.newOwnerCompanyId,
+        paymentId: capture.paymentId,
+      },
+      openReign,
+      territoryCurrency: territory.currency,
+      territoryId: capture.territoryId,
+    });
+
+    if (plan.kind === 'historical') {
+      // Somebody else has bought it since. Their ownership stands: this refund
+      // only settles the older payment.
+      await this.recordReversalReconciliation(transaction, {
+        paymentId: capture.paymentId,
+        reason: 'HISTORICAL_REFUND_NO_OWNERSHIP_CHANGE',
+      });
+      await this.recordReversalAudit(transaction, {
+        action: 'takeover.refund.historical_no_ownership_change',
+        companyId: capture.newOwnerCompanyId,
+        metadata: {
+          captureId: capture.id,
+          currentOwnerCompanyId: openReign?.companyId ?? null,
+          paymentId: capture.paymentId,
+        },
+        targetId: capture.territoryId,
+      });
+      return;
+    }
+
+    // The public feed keeps the capture row and gains a removal beside it.
+    await this.appendActivity(transaction, {
+      eventType: 'REFUND_REMOVAL',
+      occurredAt: transitionAt,
+      ownershipId: plan.openReign.id,
+      territoryId: capture.territoryId,
+    });
+
+    const ownership = new PrismaTerritoryOwnershipRepository(
+      createTerritoryOwnershipTransactionClient(transaction),
+    );
+
+    if (plan.kind === 'release') {
+      await ownership.releaseActiveOwnership({
+        expectedTerritoryVersion: territory.version,
+        territoryId: capture.territoryId,
+        transitionAt,
+      });
+      // Unclaimed again, so the stored minimum is what a quote will use.
+      await transaction.territory.update({
+        data: { minimumTakeoverAmountMinor: plan.priceMinor },
+        where: { id: capture.territoryId },
+      });
+      await this.recordReversalAudit(transaction, {
+        action: 'takeover.refund.territory_released',
+        companyId: capture.newOwnerCompanyId,
+        metadata: {
+          captureId: capture.id,
+          paymentId: capture.paymentId,
+          priceMinor: plan.priceMinor.toString(),
+        },
+        targetId: capture.territoryId,
+      });
+    } else {
+      await ownership.replaceActiveOwnership({
+        // A refund is a correction, so it lands even if the territory has been
+        // disabled since; refusing here would roll the whole refund back.
+        allowDisabledTerritory: true,
+        expectedTerritoryVersion: territory.version,
+        newOwnerCompanyId: plan.predecessor.companyId,
+        reason: 'refund_restoration',
+        source: 'REFUND_RESTORATION',
+        territoryId: capture.territoryId,
+        transitionAt,
+      });
+
+      if (plan.kind === 'restore') {
+        await transaction.territory.update({
+          data: {
+            currency: plan.currency,
+            minimumTakeoverAmountMinor: plan.priceMinor,
+          },
+          where: { id: capture.territoryId },
+        });
+      } else {
+        // Ownership is still corrected, but the only price left to copy came
+        // from the refunded payment, so nothing is written and an operator is
+        // asked to settle it. Quoting fails closed meanwhile.
+        await this.recordReversalReconciliation(transaction, {
+          paymentId: capture.paymentId,
+          reason: `REFUND_RESTORATION_PRICE_UNPROVABLE:${plan.reason}`,
+        });
+      }
+
+      await this.recordReversalAudit(transaction, {
+        action:
+          plan.kind === 'restore'
+            ? 'takeover.refund.previous_owner_restored'
+            : 'takeover.refund.previous_owner_restored_without_price',
+        companyId: capture.newOwnerCompanyId,
+        metadata: {
+          captureId: capture.id,
+          paymentId: capture.paymentId,
+          ...(plan.kind === 'restore'
+            ? { priceMinor: plan.priceMinor.toString() }
+            : { unprovableReason: plan.reason }),
+          restoredCompanyId: plan.predecessor.companyId,
+        },
+        targetId: capture.territoryId,
+      });
+    }
+
+    await this.invalidateTerritoryReservations(transaction, capture.territoryId, transitionAt);
+  }
+
+  /** Appends a public activity row. The table only ever gains rows. */
+  private async appendActivity(
+    transaction: TakeoverTransactionClient,
+    input: {
+      eventType: 'REFUND_REMOVAL';
+      occurredAt: Date;
+      ownershipId: string;
+      territoryId: string;
+    },
+  ): Promise<void> {
+    const reign = await transaction.territoryOwnership.findUnique({
+      select: {
+        company: { select: { name: true, slug: true } },
+        territory: { select: { name: true, slug: true } },
+      },
+      where: { id: input.ownershipId },
+    });
+    if (reign === null) return;
+    await transaction.captureActivity.createMany({
+      data: [
+        {
+          capturedAt: input.occurredAt,
+          companyName: reign.company.name,
+          companySlug: reign.company.slug,
+          eventType: input.eventType,
+          ownershipId: input.ownershipId,
+          territoryName: reign.territory.name,
+          territorySlug: reign.territory.slug,
+        },
+      ],
+      skipDuplicates: true,
+    });
+  }
+
+  /**
+   * Cancels what the old version made unusable. The version bump alone already
+   * makes these stale, but leaving them ACTIVE would let a browser keep showing
+   * a price nobody will honour.
+   */
+  private async invalidateTerritoryReservations(
+    transaction: TakeoverTransactionClient,
+    territoryId: string,
+    at: Date,
+  ): Promise<void> {
+    await transaction.takeoverQuote.updateMany({
+      data: { status: 'CANCELLED' },
+      where: { status: 'ACTIVE', territoryId },
+    });
+    const territoryQuotes = await transaction.takeoverQuote.findMany({
+      select: { id: true },
+      where: { territoryId },
+    });
+    if (territoryQuotes.length === 0) return;
+    const openCheckouts = await transaction.checkoutSession.findMany({
+      select: { id: true },
+      where: {
+        quoteId: { in: territoryQuotes.map((row) => row.id) },
+        status: { in: ['CREATED', 'PENDING'] },
+      },
+    });
+    if (openCheckouts.length === 0) return;
+    const ids = openCheckouts.map((row) => row.id);
+    await transaction.checkoutSession.updateMany({
+      data: { status: 'CANCELLED' },
+      where: { id: { in: ids } },
+    });
+    await transaction.checkoutStatusToken.updateMany({
+      data: { revokedAt: at },
+      where: { checkoutId: { in: ids }, revokedAt: null },
+    });
+  }
+
+  private async recordReversalReconciliation(
+    transaction: TakeoverTransactionClient,
+    input: { paymentId: string; reason: string },
+  ): Promise<void> {
+    await transaction.paymentReconciliationAction.upsert({
+      create: {
+        action: 'OWNERSHIP_REVERSAL',
+        paymentId: input.paymentId,
+        reason: input.reason,
+        requestedByActorType: 'SYSTEM',
+        status: 'PENDING',
+      },
+      update: {},
+      where: { paymentId_action: { action: 'OWNERSHIP_REVERSAL', paymentId: input.paymentId } },
+    });
+  }
+
+  private async recordReversalAudit(
+    transaction: TakeoverTransactionClient,
+    input: {
+      action: string;
+      companyId: string;
+      metadata: Record<string, unknown>;
+      targetId: string;
+    },
+  ): Promise<void> {
+    await transaction.auditLog.create({
+      data: {
+        action: input.action,
+        actorType: 'SYSTEM',
+        companyId: input.companyId,
+        metadata: input.metadata as Prisma.InputJsonValue,
+        targetId: input.targetId,
+        targetType: 'territory',
+      },
+    });
+  }
+
   private async ingestVerifiedRefundWebhookInTransaction(
     transaction: TakeoverTransactionClient,
     eventId: string,
@@ -677,7 +1037,10 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
     const capture = await transaction.ownershipCapture.findUnique({
       where: { paymentId: payment.id },
     });
-    if (capture?.status === 'COMPLETED') {
+    // A refund that succeeded against a completed capture is handled below,
+    // where it unwinds the ownership that capture created. Every other refund
+    // event on captured money stays a reconciliation matter.
+    if (capture?.status === 'COMPLETED' && input.eventType !== 'refund.succeeded') {
       await transaction.paymentWebhookEvent.update({
         data: {
           errorCode: 'REFUND_FOR_CAPTURED_PAYMENT',
@@ -741,6 +1104,20 @@ export class PrismaTakeoverRepository implements TakeoverRepository {
         await transaction.ownershipCapture.update({
           data: { status: 'REFUNDED' },
           where: { id: capture.id },
+        });
+      }
+      if (capture?.status === 'COMPLETED') {
+        // The money that bought this territory has gone back, so whoever holds
+        // it on the strength of that payment cannot keep it.
+        await this.reverseCapturedOwnership(transaction, {
+          capture: {
+            expectedTerritoryVersion: capture.expectedTerritoryVersion,
+            id: capture.id,
+            newOwnerCompanyId: capture.newOwnerCompanyId,
+            paymentId: payment.id,
+            territoryId: capture.territoryId,
+          },
+          refundAt: new Date(),
         });
       }
       await transaction.paymentReconciliationAction.upsert({

@@ -7,6 +7,8 @@ const SOURCE_LABEL: Record<TerritoryHistoryEntry['source'], string> = {
   // A seeded owner is a real owner and is never styled as provisional.
   initial_seed: 'Seeded',
   paid_capture: 'Captured',
+  // Held again because the takeover that displaced them was refunded.
+  refund_restoration: 'Restored after refund',
 };
 
 export function OwnershipHistory({ entries }: { entries: readonly TerritoryHistoryEntry[] }) {

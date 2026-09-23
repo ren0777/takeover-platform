@@ -13,6 +13,8 @@ import type {
   CursorQuery,
   HistoryCursor,
   OwnershipRecord,
+  ReleaseActiveOwnershipInput,
+  ReleaseActiveOwnershipResult,
   ReplaceActiveOwnershipInput,
   ReplaceActiveOwnershipResult,
   TerritoryCursor,
@@ -287,7 +289,9 @@ export class PrismaTerritoryOwnershipRepository implements TerritoryOwnershipRep
       FOR UPDATE
     `);
     if (territory === undefined) throw new TerritoryOwnershipTerritoryNotFoundError();
-    if (territory.availabilityStatus === 'DISABLED') throw new TerritoryDisabledError();
+    if (territory.availabilityStatus === 'DISABLED' && input.allowDisabledTerritory !== true) {
+      throw new TerritoryDisabledError();
+    }
     if (territory.version !== input.expectedTerritoryVersion) {
       throw new StaleTerritoryVersionError();
     }
@@ -333,6 +337,63 @@ export class PrismaTerritoryOwnershipRepository implements TerritoryOwnershipRep
         previousOwnershipId: activeOwnership?.id ?? null,
         territoryId: territory.id,
         territoryVersion,
+      };
+    } catch (error) {
+      if (error instanceof OwnershipConflictError || error instanceof StaleTerritoryVersionError) {
+        throw error;
+      }
+      if (isOwnershipConstraintError(error)) throw new OwnershipConflictError();
+      throw error;
+    }
+  }
+
+  /**
+   * Ends the open reign without starting another, leaving the territory
+   * unclaimed. The version still moves forward: a reign that existed and then
+   * did not is a change in the territory's history, and every quote taken
+   * against the old version has to go stale.
+   */
+  async releaseActiveOwnership(
+    input: ReleaseActiveOwnershipInput,
+  ): Promise<ReleaseActiveOwnershipResult> {
+    const [territory] = await this.transaction.$queryRaw<LockedTerritoryRow[]>(Prisma.sql`
+      SELECT
+        "id",
+        "availability_status" AS "availabilityStatus",
+        "version"
+      FROM "territories"
+      WHERE "id" = ${input.territoryId}::uuid
+      FOR UPDATE
+    `);
+    if (territory === undefined) throw new TerritoryOwnershipTerritoryNotFoundError();
+    if (territory.version !== input.expectedTerritoryVersion) {
+      throw new StaleTerritoryVersionError();
+    }
+
+    const activeOwnership = await this.transaction.territoryOwnership.findFirst({
+      select: { id: true },
+      where: { endedAt: null, territoryId: territory.id },
+    });
+
+    try {
+      if (activeOwnership !== null) {
+        const ended = await this.transaction.territoryOwnership.updateMany({
+          data: { endedAt: input.transitionAt },
+          where: { endedAt: null, id: activeOwnership.id },
+        });
+        if (ended.count !== 1) throw new OwnershipConflictError();
+      }
+
+      const incremented = await this.transaction.territory.updateMany({
+        data: { version: { increment: 1 } },
+        where: { id: territory.id, version: input.expectedTerritoryVersion },
+      });
+      if (incremented.count !== 1) throw new StaleTerritoryVersionError();
+
+      return {
+        endedOwnershipId: activeOwnership?.id ?? null,
+        territoryId: territory.id,
+        territoryVersion: input.expectedTerritoryVersion + 1n,
       };
     } catch (error) {
       if (error instanceof OwnershipConflictError || error instanceof StaleTerritoryVersionError) {

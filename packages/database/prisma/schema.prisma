@@ -87,6 +87,18 @@ enum TakeoverIntentStatus {
   CANCELLED
 }
 
+/**
+ * What a public activity row records. CAPTURE is the original paid takeover.
+ * REFUND_REMOVAL says a refund took the territory back off its holder, and
+ * REFUND_RESTORATION says it returned to the holder before them. Rows are only
+ * ever appended, so a reversal reads as further history rather than an edit.
+ */
+enum CaptureActivityEventType {
+  CAPTURE
+  REFUND_REMOVAL
+  REFUND_RESTORATION
+}
+
 enum TerritoryAvailabilityStatus {
   ACTIVE
   DISABLED
@@ -95,6 +107,7 @@ enum TerritoryAvailabilityStatus {
 enum TerritoryOwnershipSource {
   INITIAL_SEED
   PAID_CAPTURE
+  REFUND_RESTORATION
 }
 
 enum AuditActorType {
@@ -534,11 +547,13 @@ model CompetitionSeason {
 
 model CaptureActivity {
   id BigInt @id @default(autoincrement())
-  ownershipId String @unique @map("ownership_id") @db.Uuid
+  ownershipId String @map("ownership_id") @db.Uuid
+  eventType CaptureActivityEventType @default(CAPTURE) @map("event_type")
   companyName String @map("company_name")
   companySlug String? @map("company_slug")
   territoryName String @map("territory_name")
   territorySlug String @map("territory_slug")
   capturedAt DateTime @map("captured_at") @db.Timestamptz(3)
+  @@unique([ownershipId, eventType])
   @@map("capture_activity")
 }

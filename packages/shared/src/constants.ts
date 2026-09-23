@@ -35,4 +35,9 @@ export const TERRITORY_PUBLIC_STATUSES = ['unclaimed', 'claimed', 'disabled'] as
 
 export const TERRITORY_AVAILABILITY_STATUSES = ['active', 'disabled'] as const;
 
-export const OWNERSHIP_SOURCES = ['initial_seed', 'paid_capture'] as const;
+export const OWNERSHIP_SOURCES = [
+  'initial_seed',
+  'paid_capture',
+  // A refund handed the territory back to the holder before the refunded one.
+  'refund_restoration',
+] as const;

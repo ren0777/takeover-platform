@@ -77,7 +77,10 @@ export class CompetitionService {
 
   async activity(cursor = '0', limit = 50, latest = false): Promise<ActivityPage> {
     const rows = await this.prisma.captureActivity.findMany({
-      where: { id: { gt: BigInt(cursor) } },
+      // Removals and restorations are recorded beside captures in the same
+      // table, but this feed means "territories just taken" and would read as
+      // a capture for each of them. Territory history carries the full story.
+      where: { eventType: 'CAPTURE', id: { gt: BigInt(cursor) } },
       orderBy: { id: latest ? 'desc' : 'asc' },
       take: latest ? limit : limit + 1,
     });

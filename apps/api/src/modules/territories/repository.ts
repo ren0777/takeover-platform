@@ -40,7 +40,7 @@ export type OwnershipRecord = {
   endedAt: Date | null;
   id: string;
   previousCompany?: PublicCompanyRecord;
-  source: 'INITIAL_SEED' | 'PAID_CAPTURE';
+  source: 'INITIAL_SEED' | 'PAID_CAPTURE' | 'REFUND_RESTORATION';
   territoryVersion: bigint;
 };
 
@@ -65,8 +65,27 @@ export type ReplaceActiveOwnershipInput = {
   newOwnerCompanyId: string;
   expectedTerritoryVersion: bigint;
   transitionAt: Date;
-  source: 'INITIAL_SEED' | 'PAID_CAPTURE';
+  source: 'INITIAL_SEED' | 'PAID_CAPTURE' | 'REFUND_RESTORATION';
   reason?: string;
+  /**
+   * Allows the transition on a disabled territory. Only a correction may set
+   * this: a refund has to be recorded whatever an operator has since done to
+   * the territory, whereas nobody may buy their way onto a disabled one.
+   */
+  allowDisabledTerritory?: boolean;
+};
+
+/** Ends the open reign and leaves the territory unclaimed. */
+export type ReleaseActiveOwnershipInput = {
+  territoryId: string;
+  expectedTerritoryVersion: bigint;
+  transitionAt: Date;
+};
+
+export type ReleaseActiveOwnershipResult = {
+  territoryId: string;
+  endedOwnershipId: string | null;
+  territoryVersion: bigint;
 };
 
 export type ReplaceActiveOwnershipResult = {
@@ -78,6 +97,7 @@ export type ReplaceActiveOwnershipResult = {
 
 export interface TerritoryOwnershipRepository {
   replaceActiveOwnership(input: ReplaceActiveOwnershipInput): Promise<ReplaceActiveOwnershipResult>;
+  releaseActiveOwnership(input: ReleaseActiveOwnershipInput): Promise<ReleaseActiveOwnershipResult>;
 }
 
 export interface TerritoryRepository {

@@ -19,10 +19,16 @@ import { nextTakeoverPriceMinor, TAKEOVER_BASE_PRICE_MINOR } from '@takeover/sha
 /** Minimal Prisma surface this resolver needs; a transaction client satisfies it. */
 export type SettledCapturePriceClient = {
   territoryOwnership: {
-    findFirst(args: unknown): Promise<{ territoryVersion: bigint } | null>;
+    findFirst(args: unknown): Promise<{
+      companyId: string;
+      source: string;
+      territoryVersion: bigint;
+    } | null>;
   };
   ownershipCapture: {
-    findMany(args: unknown): Promise<Array<{ id: string; paymentId: string }>>;
+    findMany(
+      args: unknown,
+    ): Promise<Array<{ expectedTerritoryVersion?: bigint; id: string; paymentId: string }>>;
   };
   payment: {
     findMany(args: unknown): Promise<Array<{ amountMinor: bigint; currency: string }>>;
@@ -42,21 +48,37 @@ export async function findSettledCapturePrice(
   territoryId: string,
 ): Promise<SettledCapturePrice> {
   const reign = await client.territoryOwnership.findFirst({
-    select: { territoryVersion: true },
+    select: { companyId: true, source: true, territoryVersion: true },
     where: { endedAt: null, territoryId },
   });
   if (reign === null) return { kind: 'unclaimed' };
 
-  // The capture that produced this reign observed the version before it.
-  const captures = await client.ownershipCapture.findMany({
-    select: { id: true, paymentId: true },
-    take: 2,
-    where: {
-      expectedTerritoryVersion: reign.territoryVersion - 1n,
-      status: 'COMPLETED',
-      territoryId,
-    },
-  });
+  // A restored holder did not buy this reign - a refund handed it back to
+  // them - so the version below it belongs to the reign that was undone. What
+  // they are owed a price from is their own most recent purchase of this
+  // territory, whichever version that happened at.
+  const captures =
+    reign.source === 'REFUND_RESTORATION'
+      ? await client.ownershipCapture.findMany({
+          orderBy: { expectedTerritoryVersion: 'desc' },
+          select: { expectedTerritoryVersion: true, id: true, paymentId: true },
+          take: 1,
+          where: {
+            newOwnerCompanyId: reign.companyId,
+            status: 'COMPLETED',
+            territoryId,
+          },
+        })
+      : // The capture that produced this reign observed the version before it.
+        await client.ownershipCapture.findMany({
+          select: { id: true, paymentId: true },
+          take: 2,
+          where: {
+            expectedTerritoryVersion: reign.territoryVersion - 1n,
+            status: 'COMPLETED',
+            territoryId,
+          },
+        });
   if (captures.length === 0) return { kind: 'unprovable', reason: 'no_completed_capture' };
   // Two completed captures for one reign would make the price ambiguous.
   if (captures.length > 1) return { kind: 'unprovable', reason: 'ambiguous_history' };

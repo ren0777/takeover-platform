@@ -10,12 +10,20 @@ const TERRITORY_ID = '21000000-0000-4000-8000-000000000001';
 function createClient(options: {
   captures?: Array<{ id: string; paymentId: string }>;
   payments?: Array<{ amountMinor: bigint; currency: string }>;
-  reign?: { territoryVersion: bigint } | null;
+  reign?: { companyId?: string; source?: string; territoryVersion: bigint } | null;
 }): SettledCapturePriceClient {
+  const reign =
+    options.reign === undefined || options.reign === null
+      ? null
+      : {
+          companyId: options.reign.companyId ?? 'company-1',
+          source: options.reign.source ?? 'PAID_CAPTURE',
+          territoryVersion: options.reign.territoryVersion,
+        };
   return {
     ownershipCapture: { findMany: vi.fn(async () => options.captures ?? []) },
     payment: { findMany: vi.fn(async () => options.payments ?? []) },
-    territoryOwnership: { findFirst: vi.fn(async () => options.reign ?? null) },
+    territoryOwnership: { findFirst: vi.fn(async () => reign) },
   };
 }
 
@@ -84,6 +92,44 @@ describe('findSettledCapturePrice', () => {
     await expect(findSettledCapturePrice(client, TERRITORY_ID)).resolves.toEqual({
       kind: 'unprovable',
       reason,
+    });
+  });
+});
+
+describe('a restored holder', () => {
+  it('is priced from their own most recent purchase, not the version below them', async () => {
+    const client = createClient({
+      captures: [{ id: 'capture-1', paymentId: 'payment-1' }],
+      payments: [{ amountMinor: 1_000n, currency: 'USD' }],
+      // Handed back at version 4; their own capture happened far below that.
+      reign: { companyId: 'company-restored', source: 'REFUND_RESTORATION', territoryVersion: 4n },
+    });
+
+    await expect(findSettledCapturePrice(client, TERRITORY_ID)).resolves.toEqual({
+      amountMinor: 1_000n,
+      currency: 'USD',
+      kind: 'settled',
+    });
+    // Looked up by who holds it, not by an assumed version below the reign.
+    expect(client.ownershipCapture.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          newOwnerCompanyId: 'company-restored',
+          status: 'COMPLETED',
+        }),
+      }),
+    );
+  });
+
+  it('still fails closed when their capture no longer proves anything', async () => {
+    const client = createClient({
+      captures: [],
+      reign: { companyId: 'company-restored', source: 'REFUND_RESTORATION', territoryVersion: 4n },
+    });
+
+    await expect(findSettledCapturePrice(client, TERRITORY_ID)).resolves.toEqual({
+      kind: 'unprovable',
+      reason: 'no_completed_capture',
     });
   });
 });

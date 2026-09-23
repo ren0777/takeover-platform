@@ -131,7 +131,7 @@ describe('territory contracts', () => {
   it('publishes only the approved territory vocabularies', () => {
     expect(TERRITORY_PUBLIC_STATUSES).toEqual(['unclaimed', 'claimed', 'disabled']);
     expect(TERRITORY_AVAILABILITY_STATUSES).toEqual(['active', 'disabled']);
-    expect(OWNERSHIP_SOURCES).toEqual(['initial_seed', 'paid_capture']);
+    expect(OWNERSHIP_SOURCES).toEqual(['initial_seed', 'paid_capture', 'refund_restoration']);
     expect(() => territoryStatusSchema.parse('contested')).toThrow();
     expect(() => ownershipSourceSchema.parse('controlled_correction')).toThrow();
   });
